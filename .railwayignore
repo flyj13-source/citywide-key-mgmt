@@ -9,4 +9,3 @@ backend/.env
 frontend/.env
 .env
 frontend/dist/
-backend/dist/
