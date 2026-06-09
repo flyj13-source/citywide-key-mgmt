@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 import path from 'path';
 import fs from 'fs';
@@ -8,9 +8,9 @@ import { encrypt } from '../src/lib/crypto';
 const DB_PATH = path.join(__dirname, 'citywide.db');
 if (fs.existsSync(DB_PATH)) fs.unlinkSync(DB_PATH);
 
-const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode = WAL');
-db.exec('PRAGMA foreign_keys = ON');
+const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 db.exec(schema);
