@@ -27,4 +27,4 @@ ENV NODE_ENV=production
 EXPOSE 3001
 
 # Seed on first run if DB doesn't exist, then start
-CMD ["sh", "-c", "[ ! -f database/citywide.db ] && node -e \"require('child_process').execSync('npx ts-node database/seed.ts', {stdio:'inherit'})\" || true; node dist/src/index.js"]
+CMD ["sh", "-c", "[ ! -f database/citywide.db ] && node -e \"require('child_process').execSync('npx ts-node database/seed.ts', {stdio:'inherit'})\" || true; node dist/index.js"]
