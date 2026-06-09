@@ -1,6 +1,9 @@
 import { getToken } from './auth';
 
-const BASE = '/api';
+// In local dev, VITE_API_URL is unset so the Vite proxy handles /api/*
+// In production (Railway), VITE_API_URL = https://citywide-backend.up.railway.app
+const API_ORIGIN = import.meta.env.VITE_API_URL ?? '';
+const BASE = `${API_ORIGIN}/api`;
 
 async function req<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
@@ -72,7 +75,7 @@ export const sendTeamsAlert = () =>
 
 export const downloadExcel = async () => {
   const token = getToken();
-  const res = await fetch('/api/reports/excel', {
+  const res = await fetch(`${API_ORIGIN}/api/reports/excel`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
@@ -96,9 +99,9 @@ export const getContractors = () => req<any[]>('/contractors');
 export const inviteContractor = (data: any) =>
   req<any>('/contractors/invite', { method: 'POST', body: JSON.stringify(data) });
 export const getContractorByToken = (token: string) =>
-  fetch(`/api/contractor/${token}`).then((r) => r.json());
+  fetch(`${API_ORIGIN}/api/contractor/${token}`).then((r) => r.json());
 export const signContractor = (token: string, signature_data: string) =>
-  fetch(`/api/contractor/${token}/sign`, {
+  fetch(`${API_ORIGIN}/api/contractor/${token}/sign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ signature_data }),

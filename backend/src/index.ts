@@ -17,7 +17,12 @@ import contractorsRouter from './routes/contractors';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:5174'], credentials: true }));
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+];
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use(morgan('dev'));
 
@@ -35,7 +40,7 @@ app.use('/api/contractors', contractorsRouter);
 // Public contractor routes (no JWT)
 app.use('/api/contractor', contractorsRouter);
 
-app.get('/api/health', (_req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
+app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date() }));
 
 app.listen(PORT, () => {
   console.log(`\n🔑 City Wide Boston Key Management API`);

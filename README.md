@@ -39,6 +39,42 @@ Open http://localhost:5173
 9. **Contractor Portal** — magic link table, PDF download; public `/contractor/:token` route
 10. **Settings** — M365 config reference
 
+## Deploy to Railway
+
+### One-time setup
+1. Go to [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**
+2. Select `flyj13-source/citywide-key-mgmt`
+3. Add **backend service** → set Root Directory to `/backend`
+4. Add **frontend service** → set Root Directory to `/frontend`
+
+### Backend environment variables (Railway → Variables tab)
+```
+JWT_SECRET=           # openssl rand -hex 32
+ENCRYPTION_KEY=       # openssl rand -hex 32  (must be different from JWT_SECRET)
+ANTHROPIC_API_KEY=    # from console.anthropic.com
+SMTP_USER=            # cara@citywideboston.com
+SMTP_PASS=            # Microsoft app password → account.microsoft.com/security → App passwords
+TEAMS_WEBHOOK_URL=    # Teams Facilities channel → ··· → Connectors → Incoming Webhook
+FRONTEND_URL=         # Railway frontend URL, e.g. https://citywide-frontend.up.railway.app
+NODE_ENV=production
+PORT=3001
+```
+
+### Frontend environment variables
+```
+VITE_API_URL=         # Railway backend URL, e.g. https://citywide-backend.up.railway.app
+```
+
+### After deploy
+```bash
+# Reset the demo password to something secure
+npm run reset-password -- --email cara@citywideboston.com --password [newpassword]
+```
+- Share the Railway frontend URL with Cara Angeloni
+- Add a custom domain in Railway → Settings → Domains (e.g. `keys.citywideboston.com`)
+
+---
+
 ## Configure M365
 
 1. Copy `.env.example` to `backend/.env`
