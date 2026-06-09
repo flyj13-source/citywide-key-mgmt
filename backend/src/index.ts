@@ -1,0 +1,46 @@
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import morgan from 'morgan';
+import path from 'path';
+
+import authRouter from './routes/auth';
+import accountsRouter from './routes/accounts';
+import assignmentsRouter from './routes/assignments';
+import vaultRouter from './routes/vault';
+import auditRouter from './routes/audit';
+import staffRouter from './routes/staff';
+import reportsRouter from './routes/reports';
+import claudeRouter from './routes/claude';
+import contractorsRouter from './routes/contractors';
+
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:5174'], credentials: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(morgan('dev'));
+
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+app.use('/api/auth', authRouter);
+app.use('/api/accounts', accountsRouter);
+app.use('/api/assignments', assignmentsRouter);
+app.use('/api/vault', vaultRouter);
+app.use('/api/audit', auditRouter);
+app.use('/api/staff', staffRouter);
+app.use('/api/reports', reportsRouter);
+app.use('/api/claude', claudeRouter);
+app.use('/api/contractors', contractorsRouter);
+// Public contractor routes (no JWT)
+app.use('/api/contractor', contractorsRouter);
+
+app.get('/api/health', (_req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
+
+app.listen(PORT, () => {
+  console.log(`\n🔑 City Wide Boston Key Management API`);
+  console.log(`   Running on http://localhost:${PORT}`);
+  console.log(`   Login: cara@citywideboston.com / demo1234\n`);
+});
+
+export default app;

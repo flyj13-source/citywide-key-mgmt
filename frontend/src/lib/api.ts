@@ -1,0 +1,105 @@
+import { getToken } from './auth';
+
+const BASE = '/api';
+
+async function req<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const token = getToken();
+  const res = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || 'Request failed');
+  }
+  return res.json();
+}
+
+// Auth
+export const login = (email: string, password: string) =>
+  req<{ token: string; manager: any }>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+
+// Accounts
+export const getAccounts = (params?: Record<string, string>) => {
+  const q = params ? '?' + new URLSearchParams(params).toString() : '';
+  return req<{ accounts: any[]; total: number }>(`/accounts${q}`);
+};
+export const getAccount = (id: number) => req<any>(`/accounts/${id}`);
+export const createAccount = (data: any) =>
+  req<any>('/accounts', { method: 'POST', body: JSON.stringify(data) });
+export const updateAccount = (id: number, data: any) =>
+  req<any>(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+
+// Assignments
+export const getAssignments = (params?: Record<string, string>) => {
+  const q = params ? '?' + new URLSearchParams(params).toString() : '';
+  return req<{ assignments: any[]; total: number }>(`/assignments${q}`);
+};
+export const checkout = (data: any) =>
+  req<any>('/assignments/checkout', { method: 'POST', body: JSON.stringify(data) });
+export const checkin = (data: any) =>
+  req<any>('/assignments/checkin', { method: 'POST', body: JSON.stringify(data) });
+
+// Vault
+export const getVault = () => req<any[]>('/vault');
+export const revealCode = (id: number, type: 'door' | 'alarm') =>
+  req<{ code: string }>(`/vault/reveal/${id}`, { method: 'POST', body: JSON.stringify({ type }) });
+export const addVaultCode = (data: any) =>
+  req<any>('/vault', { method: 'POST', body: JSON.stringify(data) });
+
+// Audit
+export const getAudit = (params?: Record<string, string>) => {
+  const q = params ? '?' + new URLSearchParams(params).toString() : '';
+  return req<{ logs: any[]; total: number }>(`/audit${q}`);
+};
+
+// Staff
+export const getStaff = () => req<any[]>('/staff');
+
+// Reports
+export const getOverdue = () => req<any[]>('/reports/overdue');
+export const sendOutlookAlert = (to?: string) =>
+  req<any>('/reports/outlook', { method: 'POST', body: JSON.stringify({ to }) });
+export const sendTeamsAlert = () =>
+  req<any>('/reports/teams', { method: 'POST', body: JSON.stringify({}) });
+
+export const downloadExcel = async () => {
+  const token = getToken();
+  const res = await fetch('/api/reports/excel', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error('Export failed');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `CityWide_KeyReport_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+// Claude
+export const askClaude = (message: string, history: any[]) =>
+  req<{ response: string }>('/claude', { method: 'POST', body: JSON.stringify({ message, history }) });
+
+// Contractors
+export const getContractors = () => req<any[]>('/contractors');
+export const inviteContractor = (data: any) =>
+  req<any>('/contractors/invite', { method: 'POST', body: JSON.stringify(data) });
+export const getContractorByToken = (token: string) =>
+  fetch(`/api/contractor/${token}`).then((r) => r.json());
+export const signContractor = (token: string, signature_data: string) =>
+  fetch(`/api/contractor/${token}/sign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ signature_data }),
+  }).then((r) => r.json());

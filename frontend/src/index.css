@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --cw-red: #C0272D;
+  --cw-black: #1a1a1a;
+  --cw-bg: #f4f4f2;
+  --cw-card: #ffffff;
+  --cw-border: #e0e0dd;
+  --cw-text: #1a1a1a;
+  --cw-muted: #6b6b68;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: system-ui, sans-serif;
+  background: var(--cw-bg);
+  color: var(--cw-text);
+  margin: 0;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d0d0cc; border-radius: 3px; }
+
+.btn-primary {
+  @apply bg-cw-red text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+.btn-secondary {
+  @apply bg-white text-cw-text border border-cw-border px-4 py-2 rounded text-sm font-medium hover:bg-gray-50 transition-colors;
+}
+.card {
+  @apply bg-white border border-cw-border rounded-lg;
+}
+.input {
+  @apply border border-cw-border rounded px-3 py-2 text-sm w-full focus:outline-none focus:ring-1 focus:ring-cw-red;
+}
+.badge-red { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800; }
+.badge-green { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800; }
+.badge-gray { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700; }
+.badge-yellow { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800; }
