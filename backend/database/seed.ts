@@ -18,7 +18,7 @@ db.exec(schema);
 // ─── Manager ───────────────────────────────────────────────
 const hash = bcrypt.hashSync('demo1234', 10);
 db.prepare('INSERT INTO managers (name, email, password_hash, role) VALUES (?, ?, ?, ?)').run(
-  'Cara Ferraro', 'cara@citywideboston.com', hash, 'admin'
+  'Cara Angeloni', 'cara@citywideboston.com', hash, 'admin'
 );
 console.log('✓ Manager seeded: cara@citywideboston.com / demo1234');
 
