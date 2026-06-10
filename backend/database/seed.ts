@@ -16,11 +16,12 @@ const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 db.exec(schema);
 
 // ─── Manager ───────────────────────────────────────────────
-const hash = bcrypt.hashSync('demo1234', 10);
+const seedPassword = process.env.SEED_PASSWORD || 'demo1234';
+const hash = bcrypt.hashSync(seedPassword, 10);
 db.prepare('INSERT INTO managers (name, email, password_hash, role) VALUES (?, ?, ?, ?)').run(
   'Cara Angeloni', 'cara@citywideboston.com', hash, 'admin'
 );
-console.log('✓ Manager seeded: cara@citywideboston.com / demo1234');
+console.log(`✓ Manager seeded: cara@citywideboston.com / ${seedPassword}`);
 
 // ─── Accounts ──────────────────────────────────────────────
 interface AccountSeed {
