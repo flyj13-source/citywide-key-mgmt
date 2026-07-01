@@ -35,6 +35,8 @@ export const getAccounts = (params?: Record<string, string>) => {
   return req<{ accounts: any[]; total: number }>(`/accounts${q}`);
 };
 export const getAccount = (id: number) => req<any>(`/accounts/${id}`);
+export const getAccountByCustomerId = (customerId: string) =>
+  req<any>(`/accounts/by-customer-id/${encodeURIComponent(customerId)}`);
 export const createAccount = (data: any) =>
   req<any>('/accounts', { method: 'POST', body: JSON.stringify(data) });
 export const updateAccount = (id: number, data: any) =>
@@ -52,7 +54,7 @@ export const checkin = (data: any) =>
 
 // Vault
 export const getVault = () => req<any[]>('/vault');
-export const revealCode = (id: number, type: 'door' | 'alarm') =>
+export const revealCode = (id: number, type: 'door' | 'alarm' | 'door_access') =>
   req<{ code: string }>(`/vault/reveal/${id}`, { method: 'POST', body: JSON.stringify({ type }) });
 export const addVaultCode = (data: any) =>
   req<any>('/vault', { method: 'POST', body: JSON.stringify(data) });

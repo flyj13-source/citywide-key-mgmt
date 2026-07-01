@@ -25,4 +25,20 @@ if (fs.existsSync(schemaPath)) {
   db.exec(schema);
 }
 
+// Safe column migrations for accounts table
+const columns = db.prepare('PRAGMA table_info(accounts)').all();
+const colNames = (columns as any[]).map((c: any) => c.name);
+if (!colNames.includes('ic_name'))
+  db.exec('ALTER TABLE accounts ADD COLUMN ic_name TEXT');
+if (!colNames.includes('ic_id_number'))
+  db.exec('ALTER TABLE accounts ADD COLUMN ic_id_number TEXT');
+if (!colNames.includes('dispenser_keys'))
+  db.exec('ALTER TABLE accounts ADD COLUMN dispenser_keys INTEGER DEFAULT 0');
+if (!colNames.includes('customer_id'))
+  db.exec('ALTER TABLE accounts ADD COLUMN customer_id TEXT');
+if (!colNames.includes('door_access_code_encrypted'))
+  db.exec('ALTER TABLE accounts ADD COLUMN door_access_code_encrypted TEXT');
+if (!colNames.includes('door_access_code_iv'))
+  db.exec('ALTER TABLE accounts ADD COLUMN door_access_code_iv TEXT');
+
 export default db;

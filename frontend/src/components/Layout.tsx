@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { clearAuth, getManager } from '../lib/auth';
 import { CWLogoSidebar } from './CWLogo';
 
-const navItems = [
+const mainNavItems = [
   { path: '/dashboard', label: 'Dashboard', icon: '⊞' },
   { path: '/registry', label: 'Key Registry', icon: '🔑' },
   { path: '/checkout', label: 'Check Out / In', icon: '↕' },
@@ -13,6 +13,29 @@ const navItems = [
   { path: '/contractors', label: 'Contractors', icon: '📝' },
   { path: '/settings', label: 'Settings', icon: '⚙' },
 ];
+
+const formsNavItems = [
+  { path: '/ic-change', label: 'IC Change', icon: '✎' },
+];
+
+function NavItem({ path, label, icon }: { path: string; label: string; icon: string }) {
+  return (
+    <NavLink
+      to={path}
+      end={path === '/registry'}
+      className={({ isActive }) =>
+        `flex items-center gap-3 px-4 py-2.5 text-sm transition-colors relative ${
+          isActive
+            ? 'text-white bg-white/10 border-l-[3px] border-cw-red pl-[13px]'
+            : 'text-gray-400 hover:text-white hover:bg-white/5 border-l-[3px] border-transparent pl-[13px]'
+        }`
+      }
+    >
+      <span className="text-base w-5 text-center flex-shrink-0">{icon}</span>
+      <span>{label}</span>
+    </NavLink>
+  );
+}
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
@@ -34,21 +57,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 py-3 overflow-y-auto">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-2.5 text-sm transition-colors relative ${
-                  isActive
-                    ? 'text-white bg-white/10 border-l-[3px] border-cw-red pl-[13px]'
-                    : 'text-gray-400 hover:text-white hover:bg-white/5 border-l-[3px] border-transparent pl-[13px]'
-                }`
-              }
-            >
-              <span className="text-base w-5 text-center flex-shrink-0">{item.icon}</span>
-              <span>{item.label}</span>
-            </NavLink>
+          {mainNavItems.map((item) => (
+            <NavItem key={item.path} {...item} />
+          ))}
+
+          <div className="px-4 pt-4 pb-1">
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Forms</div>
+          </div>
+          {formsNavItems.map((item) => (
+            <NavItem key={item.path} {...item} />
           ))}
         </nav>
 

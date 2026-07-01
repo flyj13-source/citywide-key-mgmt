@@ -3,6 +3,7 @@ import { isAuthenticated } from './lib/auth';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Registry from './pages/Registry';
+import AccountDetail from './pages/AccountDetail';
 import Checkout from './pages/Checkout';
 import CodeVault from './pages/CodeVault';
 import ClaudeAssistant from './pages/ClaudeAssistant';
@@ -11,6 +12,7 @@ import Reports from './pages/Reports';
 import Contractors from './pages/Contractors';
 import Settings from './pages/Settings';
 import ContractorPortal from './pages/ContractorPortal';
+import ICChange from './pages/ICChange';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   return isAuthenticated() ? <>{children}</> : <Navigate to="/login" replace />;
@@ -24,6 +26,7 @@ export default function App() {
         <Route path="/contractor/:token" element={<ContractorPortal />} />
         <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
         <Route path="/registry" element={<RequireAuth><Registry /></RequireAuth>} />
+        <Route path="/registry/:accountId" element={<RequireAuth><AccountDetail /></RequireAuth>} />
         <Route path="/checkout" element={<RequireAuth><Checkout /></RequireAuth>} />
         <Route path="/vault" element={<RequireAuth><CodeVault /></RequireAuth>} />
         <Route path="/assistant" element={<RequireAuth><ClaudeAssistant /></RequireAuth>} />
@@ -31,6 +34,7 @@ export default function App() {
         <Route path="/reports" element={<RequireAuth><Reports /></RequireAuth>} />
         <Route path="/contractors" element={<RequireAuth><Contractors /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
+        <Route path="/ic-change" element={<RequireAuth><ICChange /></RequireAuth>} />
         <Route path="*" element={<Navigate to={isAuthenticated() ? '/dashboard' : '/login'} replace />} />
       </Routes>
     </BrowserRouter>

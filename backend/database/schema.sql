@@ -14,7 +14,13 @@ CREATE TABLE IF NOT EXISTS accounts (
   has_fob INTEGER DEFAULT 0,
   notes TEXT,
   status TEXT DEFAULT 'active',
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  ic_name TEXT,
+  ic_id_number TEXT,
+  dispenser_keys INTEGER DEFAULT 0,
+  customer_id TEXT UNIQUE,
+  door_access_code_encrypted TEXT,
+  door_access_code_iv TEXT
 );
 
 CREATE TABLE IF NOT EXISTS key_assignments (

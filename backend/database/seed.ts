@@ -30,12 +30,14 @@ interface AccountSeed {
   am_keys?: number;
   ccm_keys?: number;
   contractor_keys?: number;
+  dispenser_keys?: number;
   key_code?: string;
   lockbox?: string | number;
   alarm_code?: string;
   door_code?: string;
   has_fob?: number;
   notes?: string;
+  customer_id?: string;
 }
 
 const accounts: AccountSeed[] = [
@@ -61,7 +63,7 @@ const accounts: AccountSeed[] = [
   { name: 'DaVita Woburn Dialysis', total_keys: 2, contractor_keys: 2, door_code: '3243' },
   { name: 'Greentown Labs', total_keys: 10, am_keys: 1, ccm_keys: 1, contractor_keys: 8, has_fob: 1, notes: 'IC has 6 key fobs + 2 sets of closet keys' },
   { name: 'RK Centers Marlborough', total_keys: 6, am_keys: 2, ccm_keys: 2, contractor_keys: 2, notes: 'Each has entry key and supply key' },
-  { name: 'Mill No. 5', total_keys: 10, am_keys: 4, ccm_keys: 4, contractor_keys: 10, has_fob: 1, notes: '2 elevator keys, 4 dispenser keys, 1 dumpster key, 2 fobs, 2 stair keys, 2 supply closet keys' },
+  { name: 'Mill No. 5', total_keys: 10, am_keys: 4, ccm_keys: 4, contractor_keys: 10, dispenser_keys: 4, has_fob: 1, notes: '2 elevator keys, 4 dispenser keys, 1 dumpster key, 2 fobs, 2 stair keys, 2 supply closet keys' },
   { name: 'Qinetiq Waltham', total_keys: 4, am_keys: 1, contractor_keys: 3, alarm_code: '65534', has_fob: 1, notes: 'Contractor has 3 key cards, AM has one' },
   { name: 'Ferguson Burlington', total_keys: 4, contractor_keys: 4, notes: 'Lanyard: front door, janitor closet, dumpster, dispenser key' },
   { name: 'Spectrum Health Systems Weymouth', total_keys: 3, contractor_keys: 1 },
@@ -200,12 +202,13 @@ const accounts: AccountSeed[] = [
 ];
 
 const insertAccount = db.prepare(`
-  INSERT INTO accounts (name, total_keys, am_keys, ccm_keys, contractor_keys, key_code, lockbox, alarm_code_encrypted, alarm_code_iv, door_code_encrypted, door_code_iv, has_fob, notes, status)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+  INSERT INTO accounts (name, total_keys, am_keys, ccm_keys, contractor_keys, dispenser_keys, key_code, lockbox, alarm_code_encrypted, alarm_code_iv, door_code_encrypted, door_code_iv, has_fob, notes, status, customer_id)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
 `);
 
 const seenNames = new Set<string>();
 let inserted = 0;
+let customerIdCounter = 1001;
 for (const a of accounts) {
   if (seenNames.has(a.name)) continue;
   seenNames.add(a.name);
@@ -222,11 +225,14 @@ for (const a of accounts) {
     door_enc = encrypted; door_iv = iv;
   }
 
+  const customer_id = `CW-${customerIdCounter++}`;
+
   insertAccount.run(
     a.name, a.total_keys ?? 0, a.am_keys ?? 0, a.ccm_keys ?? 0, a.contractor_keys ?? 0,
+    a.dispenser_keys ?? 0,
     a.key_code ?? null, a.lockbox ? String(a.lockbox) : null,
     alarm_enc, alarm_iv, door_enc, door_iv,
-    a.has_fob ?? 0, a.notes ?? null
+    a.has_fob ?? 0, a.notes ?? null, customer_id
   );
   inserted++;
 }
