@@ -73,7 +73,7 @@ export default function Dashboard() {
 
         {/* Metrics */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard label="Total Accounts" value={accountTotal} sub="in key registry" />
+          <MetricCard label="Total ICs" value={accountTotal} sub="in key registry" />
           <MetricCard label="Active Check-Outs" value={activeAssignments} sub="keys currently out" />
           <MetricCard
             label="Overdue"

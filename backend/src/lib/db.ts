@@ -2,19 +2,15 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import fs from 'fs';
 
-// Use process.cwd() (always the backend/ root) rather than __dirname so the
-// path is correct whether running via ts-node (src/lib/) or node dist/index.js.
 const dbDir = path.join(process.cwd(), 'database');
 const DB_PATH = path.join(dbDir, 'citywide.db');
 
-// Ensure the database directory exists (Render cold starts from a clean image)
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
 const db = new DatabaseSync(DB_PATH);
 
-// Apply WAL mode and foreign keys
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
 
@@ -25,20 +21,37 @@ if (fs.existsSync(schemaPath)) {
   db.exec(schema);
 }
 
-// Safe column migrations for accounts table
-const columns = db.prepare('PRAGMA table_info(accounts)').all();
-const colNames = (columns as any[]).map((c: any) => c.name);
-if (!colNames.includes('ic_name'))
-  db.exec('ALTER TABLE accounts ADD COLUMN ic_name TEXT');
-if (!colNames.includes('ic_id_number'))
-  db.exec('ALTER TABLE accounts ADD COLUMN ic_id_number TEXT');
-if (!colNames.includes('dispenser_keys'))
-  db.exec('ALTER TABLE accounts ADD COLUMN dispenser_keys INTEGER DEFAULT 0');
-if (!colNames.includes('customer_id'))
-  db.exec('ALTER TABLE accounts ADD COLUMN customer_id TEXT');
-if (!colNames.includes('door_access_code_encrypted'))
-  db.exec('ALTER TABLE accounts ADD COLUMN door_access_code_encrypted TEXT');
-if (!colNames.includes('door_access_code_iv'))
-  db.exec('ALTER TABLE accounts ADD COLUMN door_access_code_iv TEXT');
+// Safe migrations — run after schema so columns exist on fresh DBs
+function cols(): string[] {
+  return (db.prepare('PRAGMA table_info(accounts)').all() as any[]).map((c) => c.name);
+}
+
+// Rename name → ic_company_name (SQLite 3.25+)
+if (cols().includes('name') && !cols().includes('ic_company_name'))
+  db.exec('ALTER TABLE accounts RENAME COLUMN name TO ic_company_name');
+
+// New columns
+const needed: [string, string][] = [
+  ['ic_company_name', 'TEXT'],
+  ['bc_vendor_number', 'TEXT'],
+  ['keys_yn', 'INTEGER DEFAULT 0'],
+  ['security_app_yn', 'INTEGER DEFAULT 0'],
+  ['metal_keys', 'INTEGER DEFAULT 0'],
+  ['key_cards', 'INTEGER DEFAULT 0'],
+  ['dispenser_keys', 'INTEGER DEFAULT 0'],
+  ['lockbox_code', 'TEXT'],
+  ['door_access_code_encrypted', 'TEXT'],
+  ['door_access_code_iv', 'TEXT'],
+  // legacy kept for compat
+  ['ic_name', 'TEXT'],
+  ['ic_id_number', 'TEXT'],
+  ['customer_id', 'TEXT'],
+];
+
+const existing = cols();
+for (const [col, def] of needed) {
+  if (!existing.includes(col))
+    db.exec(`ALTER TABLE accounts ADD COLUMN ${col} ${def}`);
+}
 
 export default db;

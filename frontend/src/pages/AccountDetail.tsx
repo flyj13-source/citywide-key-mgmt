@@ -7,7 +7,7 @@ import { getAccount, revealCode } from '../lib/api';
 function MetricCard({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="card p-4 text-center">
-      <div className="text-2xl font-bold text-cw-text">{value}</div>
+      <div className="text-2xl font-bold text-[#1a1a1a]">{value}</div>
       <div className="text-xs text-cw-muted mt-1">{label}</div>
     </div>
   );
@@ -17,17 +17,7 @@ function CodeReveal({ accountId, type, hasCode }: { accountId: number; type: 'do
   const [revealed, setRevealed] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  if (!hasCode) return <span className="text-cw-muted">–</span>;
-
-  const reveal = async () => {
-    setLoading(true);
-    try {
-      const data = await revealCode(accountId, type as any);
-      setRevealed(data.code);
-    } finally {
-      setLoading(false);
-    }
-  };
+  if (!hasCode) return <span className="text-cw-muted">—</span>;
 
   if (revealed) {
     return (
@@ -39,7 +29,11 @@ function CodeReveal({ accountId, type, hasCode }: { accountId: number; type: 'do
   }
 
   return (
-    <button onClick={reveal} disabled={loading} className="text-xs text-cw-red hover:underline">
+    <button
+      onClick={async () => { setLoading(true); try { const d = await revealCode(accountId, type); setRevealed(d.code); } finally { setLoading(false); } }}
+      disabled={loading}
+      className="text-xs border border-[#C0272D] text-[#C0272D] rounded px-2 py-0.5 hover:bg-[#C0272D] hover:text-white transition-colors"
+    >
       {loading ? 'Revealing…' : 'Reveal'}
     </button>
   );
@@ -72,61 +66,47 @@ export default function AccountDetail() {
         {/* Header */}
         <div className="flex items-start justify-between">
           <div>
-            <button onClick={() => navigate('/registry')} className="text-xs text-cw-muted hover:text-cw-text mb-2">← Key Registry</button>
-            <h1 className="text-xl font-bold">{account.name}</h1>
+            <button onClick={() => navigate('/registry')} className="text-xs text-cw-muted hover:text-cw-text mb-2 block">← Key Registry</button>
+            <h1 className="text-xl font-bold text-[#1a1a1a]">{account.ic_company_name}</h1>
             <div className="flex items-center gap-3 mt-1">
-              {account.customer_id && (
-                <span className="font-mono text-sm text-cw-muted">{account.customer_id}</span>
+              {account.bc_vendor_number && (
+                <span className="font-mono text-sm text-cw-muted">{account.bc_vendor_number}</span>
               )}
-              <Badge variant={account.status === 'active' ? 'green' : 'gray'}>
-                {account.status}
-              </Badge>
+              <Badge variant={account.status === 'active' ? 'green' : 'gray'}>{account.status}</Badge>
             </div>
           </div>
         </div>
 
-        {/* Key Counts */}
+        {/* Key Inventory */}
         <div>
-          <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">Key Counts</h2>
+          <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">Key Inventory</h2>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <MetricCard label="Total Keys" value={account.total_keys} />
-            <MetricCard label="AM Keys" value={account.am_keys} />
-            <MetricCard label="CCM Keys" value={account.ccm_keys} />
-            <MetricCard label="IC Keys" value={account.contractor_keys} />
+            <MetricCard label="Keys Y/N" value={account.keys_yn ? 'Yes' : 'No'} />
+            <MetricCard label="Security App" value={account.security_app_yn ? 'Yes' : 'No'} />
+            <MetricCard label="Metal Keys" value={account.metal_keys ?? 0} />
+            <MetricCard label="Key Cards" value={account.key_cards ?? 0} />
+            <MetricCard label="Key Fobs" value={account.has_fob ?? 0} />
             <MetricCard label="Dispenser Keys" value={account.dispenser_keys ?? 0} />
-            {account.has_fob ? <MetricCard label="Key Fob" value="Yes" /> : null}
-            {account.lockbox ? <MetricCard label="Lockbox #" value={account.lockbox} /> : null}
-          </div>
-        </div>
-
-        {/* IC Assignment */}
-        <div className="card p-4">
-          <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">IC Assignment</h2>
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <div className="text-xs text-cw-muted mb-1">IC Name</div>
-              <div className="font-medium">{account.ic_name || <span className="text-cw-muted italic">Not assigned</span>}</div>
-            </div>
-            <div>
-              <div className="text-xs text-cw-muted mb-1">IC ID Number</div>
-              <div className="font-medium">{account.ic_id_number || <span className="text-cw-muted">—</span>}</div>
-            </div>
           </div>
         </div>
 
         {/* Access Codes */}
         <div className="card p-4">
           <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">Access Codes</h2>
-          <div className="grid grid-cols-1 gap-3 text-sm">
-            <div className="flex items-center justify-between">
+          <div className="divide-y divide-gray-100 text-sm">
+            <div className="flex items-center justify-between py-2">
+              <span className="text-cw-muted">Lockbox Code</span>
+              <span className="font-mono text-sm">{account.lockbox_code || '—'}</span>
+            </div>
+            <div className="flex items-center justify-between py-2">
               <span className="text-cw-muted">Door Code</span>
               <CodeReveal accountId={account.id} type="door" hasCode={!!account.door_code_encrypted} />
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between py-2">
               <span className="text-cw-muted">Alarm Code</span>
               <CodeReveal accountId={account.id} type="alarm" hasCode={!!account.alarm_code_encrypted} />
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between py-2">
               <span className="text-cw-muted">Door Access Code</span>
               <CodeReveal accountId={account.id} type="door_access" hasCode={!!account.door_access_code_encrypted} />
             </div>
@@ -138,7 +118,7 @@ export default function AccountDetail() {
           <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">
             Current Key Holders
             {activeAssignments.length > 0 && (
-              <Badge variant="yellow" >{activeAssignments.length} out</Badge>
+              <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 text-xs">{activeAssignments.length} out</span>
             )}
           </h2>
           {activeAssignments.length === 0 ? (

@@ -31,25 +31,25 @@ export default function ICChange() {
       <div className="p-6 max-w-2xl mx-auto space-y-6">
         <div>
           <h1 className="text-xl font-bold">IC Change Lookup</h1>
-          <p className="text-sm text-cw-muted mt-1">Search by Customer ID to view current IC assignment</p>
+          <p className="text-sm text-cw-muted mt-1">Search by BC Vendor Number to view current IC assignment</p>
         </div>
 
         <div className="flex gap-2">
           <input
             className="input flex-1"
-            placeholder="Enter Customer ID (e.g. CW-1001)"
+            placeholder="e.g. 02014100020"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && search()}
           />
-          <button onClick={search} disabled={loading} className="btn-primary">
+          <button onClick={search} disabled={loading} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors">
             {loading ? 'Searching…' : 'Search'}
           </button>
         </div>
 
         {notFound && (
           <div className="card p-4 text-sm text-red-600">
-            No account found with Customer ID <span className="font-mono font-medium">{query}</span>
+            No account found with BC Vendor Number <span className="font-mono font-medium">{query}</span>
           </div>
         )}
 
@@ -57,24 +57,32 @@ export default function ICChange() {
           <div className="card p-5 space-y-4">
             <div className="flex items-start justify-between">
               <div>
-                <h2 className="text-lg font-bold">{result.name}</h2>
-                <span className="font-mono text-sm text-cw-muted">{result.customer_id}</span>
+                <h2 className="text-lg font-bold text-[#1a1a1a]">{result.ic_company_name}</h2>
+                <span className="font-mono text-sm text-cw-muted">{result.bc_vendor_number}</span>
               </div>
               <Badge variant={result.status === 'active' ? 'green' : 'gray'}>{result.status}</Badge>
             </div>
 
             <div className="grid grid-cols-2 gap-4 text-sm border-t border-cw-border pt-4">
               <div>
-                <div className="text-xs text-cw-muted mb-1">IC Name</div>
-                <div className="font-medium">{result.ic_name || <span className="italic text-cw-muted">Not assigned</span>}</div>
+                <div className="text-xs text-cw-muted mb-1">Keys Y/N</div>
+                <div className="font-medium">{result.keys_yn ? <span className="text-[#2d7a3a]">✓ Yes</span> : '—'}</div>
               </div>
               <div>
-                <div className="text-xs text-cw-muted mb-1">IC ID Number</div>
-                <div className="font-medium">{result.ic_id_number || <span className="text-cw-muted">—</span>}</div>
+                <div className="text-xs text-cw-muted mb-1">Security App Y/N</div>
+                <div className="font-medium">{result.security_app_yn ? <span className="text-[#2d7a3a]">✓ Yes</span> : '—'}</div>
               </div>
               <div>
-                <div className="text-xs text-cw-muted mb-1">Total Keys</div>
-                <div className="font-medium">{result.total_keys}</div>
+                <div className="text-xs text-cw-muted mb-1">Metal Keys</div>
+                <div className="font-medium">{result.metal_keys ?? 0}</div>
+              </div>
+              <div>
+                <div className="text-xs text-cw-muted mb-1">Key Cards</div>
+                <div className="font-medium">{result.key_cards ?? 0}</div>
+              </div>
+              <div>
+                <div className="text-xs text-cw-muted mb-1">Key Fobs</div>
+                <div className="font-medium">{result.has_fob ?? 0}</div>
               </div>
               <div>
                 <div className="text-xs text-cw-muted mb-1">Dispenser Keys</div>
@@ -102,7 +110,7 @@ export default function ICChange() {
         )}
 
         <p className="text-xs text-cw-muted border-t border-cw-border pt-4">
-          To update IC assignment, use the <strong>Key Registry → Edit Account</strong>. Full IC reassignment workflow coming soon.
+          To update IC assignment, use the <strong>Key Registry → Edit</strong>. Full IC reassignment workflow coming soon.
         </p>
       </div>
     </Layout>

@@ -1,41 +1,92 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
-import Badge from '../components/Badge';
 import Modal from '../components/Modal';
-import { getAccounts, getAccount, createAccount, updateAccount } from '../lib/api';
+import { getAccounts, getAccount, createAccount, updateAccount, revealCode } from '../lib/api';
 
 const emptyForm = {
-  name: '', total_keys: 0, am_keys: 0, ccm_keys: 0, contractor_keys: 0, dispenser_keys: 0,
-  key_code: '', lockbox: '', has_fob: false, notes: '', status: 'active',
-  ic_name: '', ic_id_number: '', customer_id: '',
-  door_code: '', alarm_code: '', door_access_code: '',
+  ic_company_name: '',
+  bc_vendor_number: '',
+  keys_yn: false,
+  security_app_yn: false,
+  metal_keys: 0,
+  key_cards: 0,
+  has_fob: 0,
+  dispenser_keys: 0,
+  lockbox_code: '',
+  door_code: '',
+  alarm_code: '',
+  notes: '',
+  status: 'active',
 };
 
-function FieldGroup({ title, children }: { title: string; children: React.ReactNode }) {
+// ── Small helpers ──────────────────────────────────────────
+
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[#C0272D] focus:ring-offset-1 ${checked ? 'bg-[#C0272D]' : 'bg-gray-300'}`}
+    >
+      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-6' : 'translate-x-1'}`} />
+    </button>
+  );
+}
+
+function Check({ value }: { value: number | boolean }) {
+  return value ? (
+    <span className="text-[#2d7a3a] font-bold text-base">✓</span>
+  ) : (
+    <span className="text-gray-300">—</span>
+  );
+}
+
+function CountBadge({ value }: { value: number }) {
+  if (!value) return <span className="text-gray-300">—</span>;
+  return (
+    <span className="inline-flex items-center justify-center min-w-[1.5rem] h-6 px-1.5 rounded-full bg-[#1a1a1a] text-white text-xs font-semibold">
+      {value}
+    </span>
+  );
+}
+
+function RevealCell({ accountId, type, hasCode }: { accountId: number; type: 'door' | 'alarm'; hasCode: boolean }) {
+  const [code, setCode] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  if (!hasCode) return <span className="text-gray-300">—</span>;
+  if (code) return (
+    <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded select-all">
+      {code}
+      <button onClick={() => setCode(null)} className="ml-1 text-[10px] text-gray-400 hover:text-gray-700">×</button>
+    </span>
+  );
+  return (
+    <button
+      onClick={async (e) => { e.stopPropagation(); setLoading(true); try { const r = await revealCode(accountId, type); setCode(r.code); } finally { setLoading(false); } }}
+      className="text-xs border border-[#C0272D] text-[#C0272D] rounded px-2 py-0.5 hover:bg-[#C0272D] hover:text-white transition-colors"
+    >
+      {loading ? '…' : '••••'}
+    </button>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <div className="text-[10px] font-bold uppercase tracking-widest text-[#1a1a1a] border-b border-gray-200 pb-1 mb-3">{children}</div>;
+}
+
+function FormField({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-xs font-semibold text-cw-muted uppercase tracking-wide mb-2 border-b border-cw-border pb-1">{title}</div>
-      <div className="space-y-2">{children}</div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">
+        {label}{hint && <span className="ml-1 text-gray-400 font-normal">— {hint}</span>}
+      </label>
+      {children}
     </div>
   );
 }
 
-function Field({ label, fieldKey, type = 'text', form, setForm, hint }: {
-  label: string; fieldKey: string; type?: string; form: any; setForm: (f: any) => void; hint?: string;
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-medium text-cw-muted mb-1">{label}{hint && <span className="ml-1 text-gray-400 font-normal">— {hint}</span>}</label>
-      <input
-        type={type}
-        className="input"
-        value={form[fieldKey] ?? ''}
-        onChange={(e) => setForm({ ...form, [fieldKey]: type === 'number' ? Number(e.target.value) : e.target.value })}
-      />
-    </div>
-  );
-}
+// ── Main component ─────────────────────────────────────────
 
 export default function Registry() {
   const navigate = useNavigate();
@@ -44,9 +95,9 @@ export default function Registry() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<any>(null);
-  const [showEdit, setShowEdit] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState({ ...emptyForm });
   const [saving, setSaving] = useState(false);
   const LIMIT = 50;
@@ -64,116 +115,187 @@ export default function Registry() {
 
   useEffect(() => { load(); }, [load]);
 
-  const openDetail = async (id: number) => {
+  const openEdit = async (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
     const data = await getAccount(id);
-    setSelected(data);
-  };
-
-  const openEdit = (account: any) => {
-    setForm({ ...emptyForm, ...account, has_fob: !!account.has_fob });
+    setForm({
+      ...emptyForm,
+      ...data,
+      keys_yn: !!data.keys_yn,
+      security_app_yn: !!data.security_app_yn,
+    });
+    setEditId(id);
     setShowEdit(true);
   };
 
-  const saveEdit = async () => {
-    setSaving(true);
-    try {
-      await updateAccount(selected?.id || form.name, form);
-      setShowEdit(false);
-      load();
-    } finally {
-      setSaving(false);
-    }
-  };
+  const f = (key: string, val: any) => setForm(prev => ({ ...prev, [key]: val }));
+  const numF = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) => f(key, Math.max(0, Number(e.target.value)));
+  const textF = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => f(key, e.target.value);
 
   const saveNew = async () => {
+    if (!form.ic_company_name.trim()) return;
     setSaving(true);
     try {
-      await createAccount(form);
+      await createAccount({ ...form, keys_yn: form.keys_yn ? 1 : 0, security_app_yn: form.security_app_yn ? 1 : 0 });
       setShowAdd(false);
       setForm({ ...emptyForm });
       load();
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   };
+
+  const saveEdit = async () => {
+    if (!editId) return;
+    setSaving(true);
+    try {
+      await updateAccount(editId, { ...form, keys_yn: form.keys_yn ? 1 : 0, security_app_yn: form.security_app_yn ? 1 : 0 });
+      setShowEdit(false);
+      load();
+    } finally { setSaving(false); }
+  };
+
+  const FormBody = () => (
+    <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
+      <div>
+        <SectionLabel>Contractor Info</SectionLabel>
+        <div className="space-y-3">
+          <FormField label="Independent Contractor *">
+            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.ic_company_name} onChange={textF('ic_company_name')} placeholder="COMPANY NAME INC" />
+          </FormField>
+          <FormField label="BC Vendor Number *" hint="02014100XXX">
+            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.bc_vendor_number} onChange={textF('bc_vendor_number')} placeholder="02014100XXX" />
+          </FormField>
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Access Toggles</SectionLabel>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-gray-700">Keys Y/N</span>
+            <Toggle checked={!!form.keys_yn} onChange={(v) => f('keys_yn', v)} />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-gray-700">Security App Y/N</span>
+            <Toggle checked={!!form.security_app_yn} onChange={(v) => f('security_app_yn', v)} />
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Key Inventory</SectionLabel>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { label: 'Metal Keys', key: 'metal_keys' },
+            { label: 'Key Cards', key: 'key_cards' },
+            { label: 'Key Fobs', key: 'has_fob' },
+            { label: 'Dispenser Key', key: 'dispenser_keys' },
+          ].map(({ label, key }) => (
+            <FormField key={key} label={label}>
+              <input type="number" min={0} className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={(form as any)[key] ?? 0} onChange={numF(key)} />
+            </FormField>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Access Codes</SectionLabel>
+        <div className="space-y-3">
+          <FormField label="Lockbox Code">
+            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.lockbox_code} onChange={textF('lockbox_code')} placeholder="Plain text" />
+          </FormField>
+          <FormField label="Door Code" hint="stored encrypted">
+            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.door_code} onChange={textF('door_code')} placeholder="Leave blank to keep existing" />
+          </FormField>
+          <FormField label="Alarm Code" hint="stored encrypted">
+            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.alarm_code} onChange={textF('alarm_code')} placeholder="Leave blank to keep existing" />
+          </FormField>
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Notes</SectionLabel>
+        <textarea className="input h-20 resize-none focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.notes} onChange={textF('notes')} />
+      </div>
+    </div>
+  );
 
   return (
     <Layout>
-      <div className="p-6 max-w-7xl mx-auto space-y-4">
+      <div className="p-6 max-w-full mx-auto space-y-4">
+        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold">Key Registry</h1>
-            <p className="text-sm text-cw-muted">{total} accounts</p>
+            <h1 className="text-xl font-bold text-[#1a1a1a]">Key Registry</h1>
+            <p className="text-sm text-cw-muted">{total} IC vendor{total !== 1 ? 's' : ''}</p>
           </div>
-          <button onClick={() => { setForm({ ...emptyForm }); setShowAdd(true); }} className="btn-primary">
-            + Add Account
+          <button
+            onClick={() => { setForm({ ...emptyForm }); setShowAdd(true); }}
+            className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors"
+          >
+            + Add IC Vendor
           </button>
         </div>
 
-        <div className="flex gap-3">
-          <input
-            className="input max-w-xs"
-            placeholder="Search accounts…"
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-          />
-        </div>
+        {/* Search */}
+        <input
+          className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
+          placeholder="Search by name or vendor number…"
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+        />
 
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
+        {/* Table */}
+        <div className="card overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
             <thead>
-              <tr className="bg-cw-black text-white text-xs">
-                <th className="text-left px-4 py-3 font-medium">Account</th>
-                <th className="text-left px-3 py-3 font-medium">Customer ID</th>
-                <th className="text-center px-3 py-3 font-medium">Total</th>
-                <th className="text-center px-3 py-3 font-medium">AM</th>
-                <th className="text-center px-3 py-3 font-medium">CCM</th>
-                <th className="text-center px-3 py-3 font-medium">IC</th>
-                <th className="text-center px-3 py-3 font-medium">Disp.</th>
-                <th className="text-left px-3 py-3 font-medium">IC Name</th>
-                <th className="text-center px-3 py-3 font-medium">Fob</th>
-                <th className="text-center px-3 py-3 font-medium">Codes</th>
+              <tr className="bg-[#1a1a1a] text-white text-xs">
+                <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Independent Contractor</th>
+                <th className="text-left px-3 py-3 font-medium whitespace-nowrap">BC Vendor Number</th>
+                <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Keys Y/N</th>
+                <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Security App Y/N</th>
+                <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Metal Keys</th>
+                <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Cards</th>
+                <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Fobs</th>
+                <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Dispenser Key</th>
+                <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Lockbox Code</th>
+                <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Door Code</th>
+                <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Alarm Code</th>
+                <th className="text-left px-3 py-3 font-medium">Notes</th>
                 <th className="px-3 py-3"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-cw-border">
+            <tbody>
               {loading ? (
-                <tr><td colSpan={11} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+                <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
               ) : accounts.length === 0 ? (
-                <tr><td colSpan={11} className="px-4 py-8 text-center text-cw-muted">No accounts found</td></tr>
-              ) : (
-                accounts.map((a) => (
-                  <tr
-                    key={a.id}
-                    className="hover:bg-gray-50 cursor-pointer"
-                    onClick={() => navigate(`/registry/${a.id}`)}
-                  >
-                    <td className="px-4 py-3 font-medium text-cw-text max-w-[180px] truncate">{a.name}</td>
-                    <td className="px-3 py-3 text-cw-muted text-xs font-mono">{a.customer_id || '–'}</td>
-                    <td className="px-3 py-3 text-center"><span className="font-semibold">{a.total_keys}</span></td>
-                    <td className="px-3 py-3 text-center text-cw-muted">{a.am_keys || '–'}</td>
-                    <td className="px-3 py-3 text-center text-cw-muted">{a.ccm_keys || '–'}</td>
-                    <td className="px-3 py-3 text-center text-cw-muted">{a.contractor_keys || '–'}</td>
-                    <td className="px-3 py-3 text-center text-cw-muted">{a.dispenser_keys || '–'}</td>
-                    <td className="px-3 py-3 text-xs text-cw-muted max-w-[120px] truncate">{a.ic_name || '–'}</td>
-                    <td className="px-3 py-3 text-center">{a.has_fob ? <Badge variant="blue">FOB</Badge> : '–'}</td>
-                    <td className="px-3 py-3 text-center">
-                      <div className="flex gap-1 justify-center flex-wrap">
-                        {a.alarm_code_encrypted && <Badge variant="yellow">Alarm</Badge>}
-                        {a.door_code_encrypted && <Badge variant="gray">Door</Badge>}
-                        {a.door_access_code_encrypted && <Badge variant="gray">Access</Badge>}
-                        {!a.alarm_code_encrypted && !a.door_code_encrypted && !a.door_access_code_encrypted && <span className="text-cw-muted">–</span>}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        onClick={() => { openDetail(a.id).then(() => openEdit(a)); }}
-                        className="text-xs text-cw-red hover:underline"
-                      >Edit</button>
-                    </td>
-                  </tr>
-                ))
-              )}
+                <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">No records found</td></tr>
+              ) : accounts.map((a, i) => (
+                <tr
+                  key={a.id}
+                  className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'}`}
+                  onClick={() => navigate(`/registry/${a.id}`)}
+                >
+                  <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[220px] truncate">{a.ic_company_name}</td>
+                  <td className="px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap">{a.bc_vendor_number || '—'}</td>
+                  <td className="px-3 py-3 text-center"><Check value={a.keys_yn} /></td>
+                  <td className="px-3 py-3 text-center"><Check value={a.security_app_yn} /></td>
+                  <td className="px-3 py-3 text-center"><CountBadge value={a.metal_keys} /></td>
+                  <td className="px-3 py-3 text-center"><CountBadge value={a.key_cards} /></td>
+                  <td className="px-3 py-3 text-center"><CountBadge value={a.has_fob} /></td>
+                  <td className="px-3 py-3 text-center"><CountBadge value={a.dispenser_keys} /></td>
+                  <td className="px-3 py-3 text-center text-xs font-mono text-gray-600">{a.lockbox_code || '—'}</td>
+                  <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                    <RevealCell accountId={a.id} type="door" hasCode={!!a.door_code_encrypted} />
+                  </td>
+                  <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                    <RevealCell accountId={a.id} type="alarm" hasCode={!!a.alarm_code_encrypted} />
+                  </td>
+                  <td className="px-3 py-3 text-xs text-gray-500 max-w-[160px] truncate">{a.notes ? a.notes.slice(0, 40) + (a.notes.length > 40 ? '…' : '') : '—'}</td>
+                  <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                    <button onClick={(e) => openEdit(e, a.id)} className="text-xs text-[#C0272D] hover:underline whitespace-nowrap">Edit</button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -188,139 +310,28 @@ export default function Registry() {
         )}
       </div>
 
-      {/* Detail Modal (quick view, not full detail page) */}
-      {selected && !showEdit && (
-        <Modal title={selected.name} onClose={() => setSelected(null)} width="max-w-2xl">
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-4 text-sm">
-              <div><div className="text-xs text-cw-muted">Customer ID</div><div className="font-mono text-sm">{selected.customer_id || '–'}</div></div>
-              <div><div className="text-xs text-cw-muted">Total Keys</div><div className="font-semibold">{selected.total_keys}</div></div>
-              <div><div className="text-xs text-cw-muted">AM Keys</div><div className="font-semibold">{selected.am_keys}</div></div>
-              <div><div className="text-xs text-cw-muted">CCM Keys</div><div className="font-semibold">{selected.ccm_keys}</div></div>
-              <div><div className="text-xs text-cw-muted">IC Keys</div><div className="font-semibold">{selected.contractor_keys}</div></div>
-              <div><div className="text-xs text-cw-muted">Dispenser Keys</div><div className="font-semibold">{selected.dispenser_keys || 0}</div></div>
-              <div><div className="text-xs text-cw-muted">IC Name</div><div className="font-semibold">{selected.ic_name || '–'}</div></div>
-              <div><div className="text-xs text-cw-muted">IC ID #</div><div className="font-semibold">{selected.ic_id_number || '–'}</div></div>
-              <div><div className="text-xs text-cw-muted">Fob</div><div>{selected.has_fob ? <Badge variant="blue">Yes</Badge> : '–'}</div></div>
-              <div><div className="text-xs text-cw-muted">Lockbox #</div><div className="font-semibold">{selected.lockbox || '–'}</div></div>
-            </div>
-            {selected.notes && (
-              <div className="bg-yellow-50 border border-yellow-200 rounded p-3 text-sm text-yellow-800">
-                <span className="font-medium">Notes: </span>{selected.notes}
-              </div>
-            )}
-            <div className="flex gap-2 flex-wrap">
-              {selected.alarm_code_encrypted && <Badge variant="yellow">Has Alarm Code (see Vault)</Badge>}
-              {selected.door_code_encrypted && <Badge variant="gray">Has Door Code (see Vault)</Badge>}
-              {selected.door_access_code_encrypted && <Badge variant="gray">Has Door Access Code (see Vault)</Badge>}
-            </div>
-
-            {selected.assignments?.length > 0 && (
-              <div>
-                <div className="text-xs font-medium text-cw-muted uppercase mb-2">Assignment History</div>
-                <div className="space-y-2">
-                  {selected.assignments.map((a: any) => (
-                    <div key={a.id} className="flex items-center justify-between text-sm border border-cw-border rounded px-3 py-2">
-                      <div>
-                        <span className="font-medium">{a.assignee}</span>
-                        {a.keys_held && <span className="text-cw-muted ml-2 text-xs">({a.keys_held})</span>}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={a.status === 'checked_out' ? 'yellow' : 'green'}>
-                          {a.status === 'checked_out' ? 'Out' : 'Returned'}
-                        </Badge>
-                        <span className="text-xs text-cw-muted">{new Date(a.checked_out_at).toLocaleDateString()}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="flex gap-2 pt-2">
-              <button onClick={() => navigate(`/registry/${selected.id}`)} className="btn-primary">Full Detail →</button>
-              <button onClick={() => openEdit(selected)} className="btn-secondary">Edit Account</button>
-              <button onClick={() => setSelected(null)} className="btn-secondary">Close</button>
-            </div>
+      {/* Add Modal */}
+      {showAdd && (
+        <Modal title="Add IC Vendor" onClose={() => setShowAdd(false)} width="max-w-lg">
+          <FormBody />
+          <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
+            <button onClick={saveNew} disabled={saving || !form.ic_company_name.trim()} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors">
+              {saving ? 'Saving…' : 'Add Vendor'}
+            </button>
+            <button onClick={() => setShowAdd(false)} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
           </div>
         </Modal>
       )}
 
-      {/* Edit/Add Modal */}
-      {(showEdit || showAdd) && (
-        <Modal
-          title={showAdd ? 'Add Account' : `Edit: ${form.name}`}
-          onClose={() => { setShowEdit(false); setShowAdd(false); }}
-          width="max-w-2xl"
-        >
-          <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
-            <FieldGroup title="Account Info">
-              <Field label="Account Name" fieldKey="name" form={form} setForm={setForm} />
-              <div>
-                <label className="block text-xs font-medium text-cw-muted mb-1">Status</label>
-                <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                  <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
-                </select>
-              </div>
-            </FieldGroup>
-
-            <FieldGroup title="Key Counts">
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { label: 'Total Keys', fieldKey: 'total_keys' },
-                  { label: 'AM Keys', fieldKey: 'am_keys' },
-                  { label: 'CCM Keys', fieldKey: 'ccm_keys' },
-                  { label: 'IC Keys', fieldKey: 'contractor_keys' },
-                  { label: 'Dispenser Keys', fieldKey: 'dispenser_keys' },
-                ].map(({ label, fieldKey }) => (
-                  <Field key={fieldKey} label={label} fieldKey={fieldKey} type="number" form={form} setForm={setForm} />
-                ))}
-              </div>
-            </FieldGroup>
-
-            <FieldGroup title="IC Assignment">
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="IC Name" fieldKey="ic_name" form={form} setForm={setForm} />
-                <Field label="IC ID Number" fieldKey="ic_id_number" form={form} setForm={setForm} />
-              </div>
-            </FieldGroup>
-
-            <FieldGroup title="Customer Info">
-              <Field label="Customer ID" fieldKey="customer_id" form={form} setForm={setForm} hint="Unique billing / QuickBooks account number" />
-            </FieldGroup>
-
-            <FieldGroup title="Access Codes">
-              <div className="grid grid-cols-1 gap-2">
-                <Field label="Door Code" fieldKey="door_code" form={form} setForm={setForm} />
-                <Field label="Alarm Code" fieldKey="alarm_code" form={form} setForm={setForm} />
-                <Field label="Door Access Code" fieldKey="door_access_code" form={form} setForm={setForm} />
-              </div>
-              <p className="text-xs text-cw-muted">Codes are encrypted at rest. Leave blank to keep existing value.</p>
-            </FieldGroup>
-
-            <FieldGroup title="Other">
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Key Code" fieldKey="key_code" form={form} setForm={setForm} />
-                <Field label="Lockbox #" fieldKey="lockbox" form={form} setForm={setForm} />
-              </div>
-              <div>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={!!form.has_fob} onChange={(e) => setForm({ ...form, has_fob: e.target.checked })} />
-                  Has Key Fob
-                </label>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-cw-muted mb-1">Notes</label>
-                <textarea className="input h-20 resize-none" value={form.notes ?? ''} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-              </div>
-            </FieldGroup>
-          </div>
-          <div className="flex gap-2 pt-4 border-t border-cw-border mt-4">
-            <button onClick={showAdd ? saveNew : saveEdit} disabled={saving} className="btn-primary">
-              {saving ? 'Saving…' : 'Save'}
+      {/* Edit Modal */}
+      {showEdit && (
+        <Modal title={`Edit: ${form.ic_company_name}`} onClose={() => setShowEdit(false)} width="max-w-lg">
+          <FormBody />
+          <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
+            <button onClick={saveEdit} disabled={saving} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors">
+              {saving ? 'Saving…' : 'Save Changes'}
             </button>
-            <button onClick={() => { setShowEdit(false); setShowAdd(false); }} className="btn-secondary">Cancel</button>
+            <button onClick={() => setShowEdit(false)} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
           </div>
         </Modal>
       )}
