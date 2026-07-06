@@ -16,6 +16,7 @@ desktop/build/
 # Environment files
 .env
 backend/.env
+.env.render
 
 # Database (runtime data)
 backend/database/*.db
