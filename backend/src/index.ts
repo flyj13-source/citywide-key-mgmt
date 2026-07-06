@@ -37,6 +37,15 @@ app.use(morgan('dev'));
 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
+// ── Desktop offline sync: capture successful local mutations ────────────────
+// When running inside Electron, every write that succeeds locally is appended
+// to sync_queue so the sync engine can replay it against Render on reconnect.
+if (process.env.CITYWIDE_DESKTOP === '1') {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { enqueueMiddleware } = require('./lib/syncQueue');
+  app.use('/api', enqueueMiddleware);
+}
+
 // ── Health check — registered first so Railway can reach it immediately ──────
 app.get('/api/health', (_req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });

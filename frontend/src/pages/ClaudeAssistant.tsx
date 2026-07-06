@@ -1,8 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import Layout from '../components/Layout';
-import { askClaude } from '../lib/api';
+import { askClaude, getAiQueue } from '../lib/api';
 
-interface Message { role: 'user' | 'assistant'; content: string; }
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+  status?: 'queued' | 'answered'; // set on assistant turns answered offline
+  queueId?: number;               // ai_queue row id while pending
+}
 
 const SUGGESTIONS = [
   'Which accounts have alarm codes?',
@@ -19,9 +24,40 @@ export default function ClaudeAssistant() {
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  const queuedCount = messages.filter((m) => m.status === 'queued').length;
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // While any question is queued (offline), poll the AI queue so pills flip
+  // Queued → Answered once the sync engine flushes them on reconnect.
+  useEffect(() => {
+    if (queuedCount === 0) return;
+    const poll = setInterval(async () => {
+      try {
+        const { queue } = await getAiQueue();
+        const byId = new Map(queue.map((q) => [q.id, q]));
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.status === 'queued' && m.queueId != null) {
+              const row = byId.get(m.queueId);
+              if (row && row.status === 'answered' && row.answer) {
+                return { ...m, content: row.answer, status: 'answered' };
+              }
+              if (row && row.status === 'failed') {
+                return { ...m, content: 'This question could not be answered.', status: 'answered' };
+              }
+            }
+            return m;
+          })
+        );
+      } catch {
+        /* backend momentarily unreachable — retry next tick */
+      }
+    }, 4000);
+    return () => clearInterval(poll);
+  }, [queuedCount]);
 
   const send = async (text?: string) => {
     const query = text || input.trim();
@@ -33,7 +69,19 @@ export default function ClaudeAssistant() {
     setLoading(true);
     try {
       const data = await askClaude(query, messages);
-      setMessages([...newMessages, { role: 'assistant', content: data.response }]);
+      if ('queued' in data) {
+        setMessages([
+          ...newMessages,
+          {
+            role: 'assistant',
+            content: 'This question will be answered when the connection is restored.',
+            status: 'queued',
+            queueId: data.id,
+          },
+        ]);
+      } else {
+        setMessages([...newMessages, { role: 'assistant', content: data.response }]);
+      }
     } catch (e: any) {
       setMessages([...newMessages, { role: 'assistant', content: `Error: ${e.message}` }]);
     } finally {
@@ -44,11 +92,22 @@ export default function ClaudeAssistant() {
   return (
     <Layout>
       <div className="flex flex-col h-full p-6 max-w-4xl mx-auto">
-        <div className="mb-4">
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <span className="text-cw-red">✦</span> AI Assistant
-          </h1>
-          <p className="text-sm text-cw-muted">Ask questions about keys, codes, staff assignments, and more</p>
+        <div className="mb-4 flex items-start justify-between">
+          <div>
+            <h1 className="text-xl font-bold flex items-center gap-2">
+              <span className="text-cw-red">✦</span> AI Assistant
+            </h1>
+            <p className="text-sm text-cw-muted">Ask questions about keys, codes, staff assignments, and more</p>
+          </div>
+          {queuedCount > 0 && (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium"
+              style={{ background: '#fdf3d8', color: '#8a5c00', border: '1px solid #efd18a' }}
+            >
+              <span style={{ fontSize: 8 }}>●</span>
+              {queuedCount} question{queuedCount === 1 ? '' : 's'} queued
+            </span>
+          )}
         </div>
 
         {/* Chat area */}
@@ -85,7 +144,18 @@ export default function ClaudeAssistant() {
                   }`}
                 >
                   {msg.role === 'assistant' && (
-                    <div className="text-xs text-cw-muted mb-1 font-medium">✦ Assistant</div>
+                    <div className="text-xs text-cw-muted mb-1 font-medium flex items-center gap-2">
+                      <span>✦ Assistant</span>
+                      {msg.status === 'queued' && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5"
+                          style={{ background: '#fdf3d8', color: '#8a5c00', border: '1px solid #efd18a', fontSize: 10 }}
+                        >
+                          <span style={{ fontSize: 7 }}>●</span>
+                          Queued — will answer when back online
+                        </span>
+                      )}
+                    </div>
                   )}
                   {msg.content}
                 </div>

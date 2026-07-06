@@ -1,5 +1,9 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { isAuthenticated } from './lib/auth';
+
+// Under Electron the app is loaded via file:// — HashRouter avoids broken deep
+// links. The web build keeps clean BrowserRouter URLs.
+const Router = import.meta.env.VITE_DESKTOP === '1' ? HashRouter : BrowserRouter;
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Registry from './pages/Registry';
@@ -20,7 +24,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/contractor/:token" element={<ContractorPortal />} />
@@ -37,6 +41,6 @@ export default function App() {
         <Route path="/ic-change" element={<RequireAuth><ICChange /></RequireAuth>} />
         <Route path="*" element={<Navigate to={isAuthenticated() ? '/dashboard' : '/login'} replace />} />
       </Routes>
-    </BrowserRouter>
+    </Router>
   );
 }

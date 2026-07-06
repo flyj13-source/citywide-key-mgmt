@@ -1,0 +1,15 @@
+{
+  "name": "citywide-key-mgmt",
+  "version": "1.0.0",
+  "private": true,
+  "description": "City Wide Boston Key Management System — web + offline Windows desktop",
+  "scripts": {
+    "build:backend": "npm --prefix backend run build",
+    "build:frontend": "npm --prefix frontend run build",
+    "build:frontend:desktop": "VITE_DESKTOP=1 VITE_API_URL=http://localhost:3001 npm --prefix frontend run build -- --base=./",
+    "build:desktop": "npm --prefix desktop run icon && npm --prefix desktop run build:ts",
+    "desktop:build:all": "npm run build:backend && npm run build:frontend:desktop && npm run build:desktop",
+    "desktop:dev": "npm run desktop:build:all && npm --prefix desktop start",
+    "desktop:build": "npm run desktop:build:all && npm --prefix desktop run pack"
+  }
+}

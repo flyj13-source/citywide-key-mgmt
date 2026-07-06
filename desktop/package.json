@@ -1,0 +1,21 @@
+{
+  "name": "citywide-kms-desktop",
+  "version": "1.0.0",
+  "description": "City Wide Boston KMS — offline Windows desktop app (Electron)",
+  "author": "City Wide Facility Solutions Boston",
+  "license": "UNLICENSED",
+  "main": "dist/main.js",
+  "scripts": {
+    "build:ts": "tsc -p tsconfig.json",
+    "icon": "node scripts/make-icon.mjs",
+    "start": "electron --experimental-sqlite .",
+    "pack": "electron-builder --win --x64",
+    "clean": "rm -rf dist release"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^38.0.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.4.3"
+  }
+}

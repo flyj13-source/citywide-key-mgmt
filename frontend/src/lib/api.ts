@@ -93,8 +93,25 @@ export const downloadExcel = async () => {
 };
 
 // Claude
+export interface AiQueueItem {
+  id: number;
+  question: string;
+  status: 'pending' | 'answered' | 'failed';
+  answer: string | null;
+  created_at: string;
+  answered_at: string | null;
+}
+export type AskResult =
+  | { response: string }
+  | { queued: true; id: number; question: string; status: 'pending' };
+
+// Online → { response }. Offline (desktop) → { queued, id } (HTTP 202).
 export const askClaude = (message: string, history: any[]) =>
-  req<{ response: string }>('/claude', { method: 'POST', body: JSON.stringify({ message, history }) });
+  req<AskResult>('/claude', { method: 'POST', body: JSON.stringify({ message, history }) });
+
+// Desktop-only: current AI question queue (used to flip Queued → Answered pills).
+export const getAiQueue = () =>
+  req<{ queue: AiQueueItem[]; pending: number }>('/claude/queue');
 
 // Contractors
 export const getContractors = () => req<any[]>('/contractors');

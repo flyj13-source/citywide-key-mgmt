@@ -7,6 +7,12 @@ frontend/node_modules/
 backend/dist/
 frontend/dist/
 
+# Desktop (Electron) build artifacts
+desktop/node_modules/
+desktop/dist/
+desktop/release/
+desktop/build/
+
 # Environment files
 .env
 backend/.env

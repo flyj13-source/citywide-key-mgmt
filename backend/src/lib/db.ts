@@ -2,7 +2,10 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import fs from 'fs';
 
-const dbDir = path.join(process.cwd(), 'database');
+// Desktop builds override the data directory (→ %APPDATA%/CityWideKMS) and the
+// schema location (→ packaged resources) via env vars. On Render/local dev these
+// are unset and we fall back to the repo-relative ./database folder.
+const dbDir = process.env.CITYWIDE_DB_DIR || path.join(process.cwd(), 'database');
 const DB_PATH = path.join(dbDir, 'citywide.db');
 
 if (!fs.existsSync(dbDir)) {
@@ -15,9 +18,12 @@ db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
 
 // Apply schema (CREATE TABLE IF NOT EXISTS — safe to run every startup)
-const schemaPath = path.join(process.cwd(), 'database', 'schema.sql');
-if (fs.existsSync(schemaPath)) {
-  const schema = fs.readFileSync(schemaPath, 'utf8');
+const schemaPath =
+  process.env.CITYWIDE_SCHEMA_PATH || path.join(dbDir, 'schema.sql') ;
+const fallbackSchema = path.join(process.cwd(), 'database', 'schema.sql');
+const resolvedSchema = fs.existsSync(schemaPath) ? schemaPath : fallbackSchema;
+if (fs.existsSync(resolvedSchema)) {
+  const schema = fs.readFileSync(resolvedSchema, 'utf8');
   db.exec(schema);
 }
 
@@ -54,4 +60,34 @@ for (const [col, def] of needed) {
     db.exec(`ALTER TABLE accounts ADD COLUMN ${col} ${def}`);
 }
 
+// ── Desktop-only local tables (offline sync + queued AI) ────────────────────
+// Created only in the Electron build so the Render schema stays untouched.
+if (process.env.CITYWIDE_DESKTOP === '1') {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sync_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      method TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      payload TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      synced_at DATETIME
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      question TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      answer TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      answered_at DATETIME
+    );
+  `);
+}
+
+export const DATABASE_FILE = DB_PATH;
 export default db;

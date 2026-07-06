@@ -1,6 +1,60 @@
+import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { clearAuth, getManager } from '../lib/auth';
 import { CWLogoSidebar } from './CWLogo';
+import type { CwSyncStatus } from '../cwSync';
+
+function relativeTime(iso: string | null): string {
+  if (!iso) return 'not yet';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60_000) return 'just now';
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hr ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/**
+ * Sidebar sync footer (desktop only). Reads window.cwSync from the Electron
+ * preload; renders nothing in the plain web build.
+ *   ● Online — synced 2 min ago     (green)
+ *   ● Offline — 4 changes queued    (amber)
+ */
+function SyncStatusFooter() {
+  const [status, setStatus] = useState<CwSyncStatus | null>(null);
+
+  useEffect(() => {
+    if (!window.cwSync) return;
+    window.cwSync.getStatus().then(setStatus);
+    const off = window.cwSync.onStatus(setStatus);
+    // Re-render "synced N min ago" every 30s even without a status push.
+    const tick = setInterval(() => setStatus((s) => (s ? { ...s } : s)), 30_000);
+    return () => { off?.(); clearInterval(tick); };
+  }, []);
+
+  if (!window.cwSync || !status) return null;
+
+  const online = status.online;
+  const color = online ? '#2d7a3a' : '#8a5c00';
+  const queued = status.queuedWrites + status.queuedAi;
+
+  let label: string;
+  if (online) {
+    label = status.syncing ? 'Online — syncing…' : `Online — synced ${relativeTime(status.lastPullAt)}`;
+  } else {
+    label = queued > 0
+      ? `Offline — ${queued} change${queued === 1 ? '' : 's'} queued`
+      : 'Offline';
+  }
+
+  return (
+    <div className="px-4 py-2 border-t border-white/10 flex items-center gap-2" style={{ fontSize: 11 }}>
+      <span style={{ color, fontSize: 9, lineHeight: 1 }}>●</span>
+      <span style={{ color: online ? '#8fb89a' : '#c9a24a' }}>{label}</span>
+    </div>
+  );
+}
 
 const mainNavItems = [
   { path: '/dashboard', label: 'Dashboard', icon: '⊞' },
@@ -68,6 +122,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <NavItem key={item.path} {...item} />
           ))}
         </nav>
+
+        <SyncStatusFooter />
 
         <div className="px-4 py-4 border-t border-white/10">
           <div className="text-xs text-gray-500 mb-1">{manager?.name}</div>

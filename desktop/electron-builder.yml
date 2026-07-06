@@ -1,0 +1,46 @@
+appId: com.citywideboston.kms
+productName: City Wide KMS
+copyright: © City Wide Facility Solutions Boston
+
+directories:
+  output: release
+  buildResources: build
+
+# Only the compiled Electron code lives in the asar; the backend + frontend are
+# shipped verbatim as resources so Node module resolution and the embedded
+# Express server work unchanged.
+files:
+  - dist/**/*
+  - package.json
+
+extraResources:
+  - from: ../backend/dist
+    to: backend/dist
+  - from: ../backend/node_modules
+    to: backend/node_modules
+  - from: ../backend/database/schema.sql
+    to: backend/database/schema.sql
+  # First-run seed template → copied into %APPDATA%/CityWideKMS/citywide.db
+  - from: ../backend/database/citywide.db
+    to: backend/seed/citywide.db
+  - from: ../frontend/dist
+    to: frontend/dist
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: CityWideKMS-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: City Wide KMS
+
+# Building an unsigned Windows installer from macOS is supported by
+# electron-builder (no certificate configured → no code signing).
