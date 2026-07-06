@@ -33,8 +33,11 @@ Produces an unsigned NSIS x64 installer. Building the Windows `.exe` from macOS
 requires Rosetta 2 on Apple Silicon (`softwareupdate --install-rosetta`) because
 electron-builder stamps the exe via an x86 `wine`/`rcedit`.
 
-The packaged seed template is `backend/database/citywide.db` (generate it with
-`npm --prefix backend run seed` if missing — it is git-ignored runtime data).
+The packaged seed template is `backend/database/citywide.db` (git-ignored
+runtime data). The `desktop:build`/`desktop:dev` pipeline runs `ensure:seed`
+first, which auto-generates it via `npm --prefix backend run seed` **only if
+missing** — so a clean clone builds without manual steps, and an existing local
+DB with real data is never clobbered.
 
 ## Configuration (env)
 
