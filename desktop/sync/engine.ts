@@ -106,7 +106,12 @@ export class SyncEngine {
       }
       await flushAi(this.opts.backendDir);                        // answer queued AI
     } catch (e: any) {
-      this.status.lastError = e?.message ?? String(e);
+      const msg = e?.message ?? String(e);
+      const firstFailure = !this.status.lastError; // audit once per failure streak
+      this.status.lastError = msg;
+      if (firstFailure) {
+        try { this.helpers.auditSyncError(msg); } catch { /* db may be busy */ }
+      }
     } finally {
       this.status.syncing = false;
       this.refreshCounts();

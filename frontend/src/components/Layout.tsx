@@ -21,8 +21,26 @@ function relativeTime(iso: string | null): string {
  *   ● Online — synced 2 min ago     (green)
  *   ● Offline — 4 changes queued    (amber)
  */
+/** ti-refresh icon (inline SVG — no icon font is bundled). Spins while syncing. */
+function RefreshIcon({ spinning }: { spinning: boolean }) {
+  return (
+    <svg
+      className={`ti-refresh${spinning ? ' cw-spin' : ''}`}
+      width="12" height="12" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M3 21v-5h5" />
+    </svg>
+  );
+}
+
 function SyncStatusFooter() {
   const [status, setStatus] = useState<CwSyncStatus | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!window.cwSync) return;
@@ -36,22 +54,51 @@ function SyncStatusFooter() {
   if (!window.cwSync || !status) return null;
 
   const online = status.online;
-  const color = online ? '#2d7a3a' : '#8a5c00';
+  const syncing = status.syncing || busy;
   const queued = status.queuedWrites + status.queuedAi;
 
+  // Status line: green when healthy online, amber when offline or failed.
+  let dotColor = '#2d7a3a';
+  let textColor = '#8fb89a';
   let label: string;
-  if (online) {
-    label = status.syncing ? 'Online — syncing…' : `Online — synced ${relativeTime(status.lastPullAt)}`;
+  if (!online) {
+    dotColor = '#8a5c00';
+    textColor = '#c9a24a';
+    label = queued > 0 ? `Offline — ${queued} change${queued === 1 ? '' : 's'} queued` : 'Offline';
+  } else if (syncing) {
+    label = 'Online — syncing…';
+  } else if (status.lastError) {
+    dotColor = '#8a5c00';
+    textColor = '#c9a24a';
+    label = 'Sync failed — retrying in 30s';
   } else {
-    label = queued > 0
-      ? `Offline — ${queued} change${queued === 1 ? '' : 's'} queued`
-      : 'Offline';
+    label = `Online — synced ${relativeTime(status.lastPullAt)}`;
   }
 
+  const handleSync = async () => {
+    if (!online || syncing) return;
+    setBusy(true);
+    try { await window.cwSync?.syncNow(); } finally { setBusy(false); }
+  };
+
+  const disabled = !online || syncing;
+
   return (
-    <div className="px-4 py-2 border-t border-white/10 flex items-center gap-2" style={{ fontSize: 11 }}>
-      <span style={{ color, fontSize: 9, lineHeight: 1 }}>●</span>
-      <span style={{ color: online ? '#8fb89a' : '#c9a24a' }}>{label}</span>
+    <div className="px-4 py-2 border-t border-white/10" style={{ fontSize: 11 }}>
+      <div className="flex items-center gap-2">
+        <span style={{ color: dotColor, fontSize: 9, lineHeight: 1 }}>●</span>
+        <span style={{ color: textColor }}>{label}</span>
+      </div>
+      <button
+        onClick={handleSync}
+        disabled={disabled}
+        title={!online ? 'Unavailable offline — changes are queued automatically' : undefined}
+        className="mt-1.5 -ml-1 flex items-center gap-1.5 rounded px-1.5 py-1 bg-transparent transition-colors disabled:cursor-not-allowed enabled:hover:bg-[#fdf2f2]"
+        style={{ fontSize: 11, color: disabled ? '#6b6b68' : '#C0272D', opacity: !online ? 0.5 : 1 }}
+      >
+        <RefreshIcon spinning={syncing} />
+        <span>{syncing ? 'Syncing…' : 'Sync now'}</span>
+      </button>
     </div>
   );
 }

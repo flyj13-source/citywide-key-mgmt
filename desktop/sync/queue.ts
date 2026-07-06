@@ -15,6 +15,7 @@ export interface SyncHelpers {
   markSynced(id: number): void;
   upsertRows(table: string, rows: any[]): void;
   auditConflict(endpoint: string, detail: string): void;
+  auditSyncError(detail: string): void;
 }
 
 export function loadSyncHelpers(backendDir: string): SyncHelpers {
@@ -56,6 +57,12 @@ export function loadSyncHelpers(backendDir: string): SyncHelpers {
     ).run('sync_conflict', null, null, 'Sync', JSON.stringify({ endpoint, detail: detail.slice(0, 300) }));
   }
 
+  function auditSyncError(detail: string) {
+    db.prepare(
+      'INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)'
+    ).run('sync_failed', null, null, 'Sync', JSON.stringify({ detail: detail.slice(0, 300) }));
+  }
+
   return {
     getMeta: sq.getMeta,
     setMeta: sq.setMeta,
@@ -64,6 +71,7 @@ export function loadSyncHelpers(backendDir: string): SyncHelpers {
     markSynced: sq.markSynced,
     upsertRows,
     auditConflict,
+    auditSyncError,
   };
 }
 
