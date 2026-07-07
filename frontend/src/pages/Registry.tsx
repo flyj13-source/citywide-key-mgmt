@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
+import ImportModal from '../components/ImportModal';
 import { getAccounts, getAccount, createAccount, updateAccount, revealCode } from '../lib/api';
 
 const emptyForm = {
@@ -96,6 +97,7 @@ export default function Registry() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState({ ...emptyForm });
@@ -228,12 +230,20 @@ export default function Registry() {
             <h1 className="text-xl font-bold text-[#1a1a1a]">Key Registry</h1>
             <p className="text-sm text-cw-muted">{total} IC vendor{total !== 1 ? 's' : ''}</p>
           </div>
-          <button
-            onClick={() => { setForm({ ...emptyForm }); setShowAdd(true); }}
-            className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors"
-          >
-            + Add IC Vendor
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowImport(true)}
+              className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors"
+            >
+              ↑ Import from Excel
+            </button>
+            <button
+              onClick={() => { setForm({ ...emptyForm }); setShowAdd(true); }}
+              className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors"
+            >
+              + Add IC Vendor
+            </button>
+          </div>
         </div>
 
         {/* Search */}
@@ -334,6 +344,9 @@ export default function Registry() {
             <button onClick={() => setShowEdit(false)} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
           </div>
         </Modal>
+      )}
+      {showImport && (
+        <ImportModal onClose={() => setShowImport(false)} onDone={() => load()} />
       )}
     </Layout>
   );

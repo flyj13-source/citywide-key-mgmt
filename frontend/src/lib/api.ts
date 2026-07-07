@@ -113,6 +113,38 @@ export const askClaude = (message: string, history: any[]) =>
 export const getAiQueue = () =>
   req<{ queue: AiQueueItem[]; pending: number }>('/claude/queue');
 
+// Import
+export const previewImport = (file: File) => {
+  const token = getToken();
+  const fd = new FormData();
+  fd.append('file', file);
+  return fetch(`${BASE}/accounts/import`, {
+    method: 'POST',
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: fd,
+  }).then(async (r) => {
+    if (!r.ok) { const e = await r.json().catch(() => ({ error: r.statusText })); throw new Error(e.error); }
+    return r.json() as Promise<{ valid: any[]; warnings: any[]; errors: any[]; total: number }>;
+  });
+};
+export const confirmImport = (rows: any[]) =>
+  req<{ inserted: number; skipped: number }>('/accounts/import/confirm', {
+    method: 'POST', body: JSON.stringify({ rows }),
+  });
+export const downloadImportTemplate = () => {
+  const token = getToken();
+  return fetch(`${BASE}/accounts/import/template`, {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  }).then(async (r) => {
+    if (!r.ok) throw new Error('Template download failed');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'CityWide_IC_Import_Template.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+  });
+};
+
 // Contractors
 export const getContractors = () => req<any[]>('/contractors');
 export const inviteContractor = (data: any) =>

@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import path from 'path';
 
 import authRouter from './routes/auth';
+import importRouter from './routes/import';
 import accountsRouter from './routes/accounts';
 import assignmentsRouter from './routes/assignments';
 import vaultRouter from './routes/vault';
@@ -53,6 +54,7 @@ app.get('/api/health', (_req, res) => {
 
 // ── API routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRouter);
+app.use('/api/accounts/import', importRouter);
 app.use('/api/accounts', accountsRouter);
 app.use('/api/assignments', assignmentsRouter);
 app.use('/api/vault', vaultRouter);
