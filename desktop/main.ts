@@ -2,8 +2,20 @@ import { app, BrowserWindow, ipcMain, shell, net } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import http from 'http';
+import { autoUpdater } from 'electron-updater';
 
 import { SyncEngine, SyncStatus } from './sync/engine';
+
+// ── Auto-updater (silent: installs on next quit, no prompts) ─────────────────
+autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.autoDownload = true;
+autoUpdater.logger = null; // suppress file logging; we use console below
+
+autoUpdater.on('checking-for-update', () => console.log('[updater] checking for update'));
+autoUpdater.on('update-available', (info) => console.log('[updater] update available:', info.version));
+autoUpdater.on('update-not-available', () => console.log('[updater] up to date'));
+autoUpdater.on('update-downloaded', (info) => console.log('[updater] downloaded', info.version, '— will install on next quit'));
+autoUpdater.on('error', (err) => console.error('[updater] error:', err.message));
 
 const PORT = 3001;
 const REMOTE = 'https://citywide-backend-0xuj.onrender.com';
@@ -144,6 +156,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('cw-sync:sync-now', async () => { await engine?.syncNow(); return engine?.status; });
 
   createWindow();
+
+  // Check for updates on launch (packaged only) then every 4 hours.
+  if (app.isPackaged) {
+    autoUpdater.checkForUpdates().catch((e) => console.error('[updater]', e.message));
+    setInterval(() => {
+      autoUpdater.checkForUpdates().catch((e) => console.error('[updater]', e.message));
+    }, 4 * 60 * 60 * 1000);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
