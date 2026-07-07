@@ -1,12 +1,100 @@
+import { useState } from 'react';
 import Layout from '../components/Layout';
+import { changePassword } from '../lib/api';
 
 export default function Settings() {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwError, setPwError] = useState('');
+  const [pwLoading, setPwLoading] = useState(false);
+  const [pwToast, setPwToast] = useState(false);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwError('');
+
+    if (newPassword.length < 8) {
+      setPwError('New password must be at least 8 characters'); return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwError('New passwords do not match'); return;
+    }
+
+    setPwLoading(true);
+    try {
+      await changePassword(currentPassword, newPassword);
+      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
+      setPwToast(true);
+      setTimeout(() => setPwToast(false), 3000);
+    } catch (err: any) {
+      setPwError(err.message || 'Password update failed');
+    } finally {
+      setPwLoading(false);
+    }
+  };
+
   return (
     <Layout>
       <div className="p-6 max-w-2xl mx-auto space-y-6">
         <div>
           <h1 className="text-xl font-bold">Settings</h1>
           <p className="text-sm text-cw-muted">M365 integrations and system configuration</p>
+        </div>
+
+        {/* Change Password */}
+        <div className="card overflow-hidden">
+          <div className="px-5 py-3 bg-cw-black">
+            <h2 className="text-white font-semibold text-sm">Change Password</h2>
+          </div>
+          <form onSubmit={handleChangePassword} className="px-5 py-4 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-cw-text mb-1">Current password</label>
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                required
+                className="input w-full"
+                autoComplete="current-password"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-cw-text mb-1">New password</label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                required
+                minLength={8}
+                className="input w-full"
+                autoComplete="new-password"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-cw-text mb-1">Confirm new password</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                className="input w-full"
+                autoComplete="new-password"
+              />
+            </div>
+
+            {pwError && <div className="text-sm text-red-600">{pwError}</div>}
+
+            {pwToast && (
+              <div className="text-sm font-medium text-white bg-[#C0272D] px-4 py-2 rounded">
+                Password updated
+              </div>
+            )}
+
+            <button type="submit" disabled={pwLoading} className="btn-primary">
+              {pwLoading ? 'Updating…' : 'Update password'}
+            </button>
+          </form>
         </div>
 
         {[

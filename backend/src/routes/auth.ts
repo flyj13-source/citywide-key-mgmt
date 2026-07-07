@@ -24,6 +24,38 @@ router.post('/login', (req: Request, res: Response) => {
   return res.json({ token, manager: { id: manager.id, name: manager.name, email: manager.email, role: manager.role } });
 });
 
+// JWT-protected password change
+router.post('/change-password', async (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+
+  let payload: any;
+  try {
+    payload = jwt.verify(authHeader.slice(7), process.env.JWT_SECRET || 'dev-secret');
+  } catch {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { currentPassword, newPassword } = req.body as { currentPassword: string; newPassword: string };
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'currentPassword and newPassword required' });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters' });
+  }
+
+  const manager = db.prepare('SELECT * FROM managers WHERE id = ?').get(payload.id) as any;
+  if (!manager) return res.status(401).json({ error: 'Unauthorized' });
+
+  const match = await bcrypt.compare(currentPassword, manager.password_hash);
+  if (!match) return res.status(401).json({ error: 'Current password incorrect' });
+
+  const hash = await bcrypt.hash(newPassword, 12);
+  db.prepare('UPDATE managers SET password_hash = ? WHERE id = ?').run(hash, manager.id);
+
+  return res.json({ success: true });
+});
+
 // ONE-TIME emergency reset — inert unless RESET_SECRET env var is set
 router.post('/admin-reset', async (req: Request, res: Response) => {
   const secret = process.env.RESET_SECRET;

@@ -29,6 +29,13 @@ export const login = (email: string, password: string) =>
     body: JSON.stringify({ email, password }),
   });
 
+// Auth
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  req<{ success: true }>('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+
 // Accounts
 export const getAccounts = (params?: Record<string, string>) => {
   const q = params ? '?' + new URLSearchParams(params).toString() : '';
