@@ -26,5 +26,8 @@ backend/database/*.db-shm
 # Uploads (runtime data)
 backend/uploads/
 
+# Handoff credentials (never commit)
+handoff/CREDENTIALS.md
+
 # OS
 .DS_Store
