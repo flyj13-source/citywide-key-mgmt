@@ -6,7 +6,6 @@ import fs from 'fs';
 import { encrypt } from '../src/lib/crypto';
 
 const DB_PATH = path.join(__dirname, 'citywide.db');
-if (fs.existsSync(DB_PATH)) fs.unlinkSync(DB_PATH);
 
 const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL');
@@ -15,13 +14,18 @@ db.exec('PRAGMA foreign_keys = ON');
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 db.exec(schema);
 
-// ─── Manager ───────────────────────────────────────────────
+// ─── Manager (idempotent — never overwrite an existing password) ────────────
 const seedPassword = process.env.SEED_PASSWORD || 'demo1234';
-const hash = bcrypt.hashSync(seedPassword, 10);
-db.prepare('INSERT INTO managers (name, email, password_hash, role) VALUES (?, ?, ?, ?)').run(
-  'Cara Angeloni', 'cara@citywideboston.com', hash, 'admin'
-);
-console.log(`✓ Manager seeded: cara@citywideboston.com / ${seedPassword}`);
+const existingManager = db.prepare('SELECT id FROM managers WHERE email = ?').get('cara@citywideboston.com');
+if (!existingManager) {
+  const hash = bcrypt.hashSync(seedPassword, 10);
+  db.prepare('INSERT INTO managers (name, email, password_hash, role) VALUES (?, ?, ?, ?)').run(
+    'Cara Angeloni', 'cara@citywideboston.com', hash, 'admin'
+  );
+  console.log(`✓ Manager created: cara@citywideboston.com / ${seedPassword}`);
+} else {
+  console.log('✓ Manager cara@citywideboston.com already exists — password unchanged');
+}
 
 // ─── Accounts (IC Vendor format) ───────────────────────────
 interface AccountSeed {
@@ -88,7 +92,7 @@ const accounts: AccountSeed[] = [
 ];
 
 const insertAccount = db.prepare(`
-  INSERT INTO accounts (
+  INSERT OR IGNORE INTO accounts (
     ic_company_name, bc_vendor_number,
     keys_yn, security_app_yn,
     metal_keys, key_cards, has_fob, dispenser_keys,
@@ -117,11 +121,13 @@ for (const a of accounts) {
   );
   inserted++;
 }
-console.log(`✓ Seeded ${inserted} IC vendor accounts`);
+console.log(`✓ Seeded ${inserted} IC vendor accounts (skipped existing)`);
 
-db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-  'system_seed', null, null, 'System', JSON.stringify({ accounts: inserted, version: '2.0' })
-);
+if (inserted > 0) {
+  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
+    'system_seed', null, null, 'System', JSON.stringify({ accounts: inserted, version: '2.0' })
+  );
+}
 
 console.log('\n✅ Database seeded successfully!');
 console.log(`   Login: cara@citywideboston.com / ${seedPassword}\n`);
