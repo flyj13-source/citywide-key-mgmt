@@ -67,7 +67,7 @@ The desktop app keeps a full local copy of the registry. If you lose Wi-Fi or go
 
 For technical support or questions about this system, contact:
 
-**Tye Jordan** — [phone / email — to be added]
+**Tye Jordan** — 978-493-9118 · tye.jordan@cinchit.com
 
 ---
 
