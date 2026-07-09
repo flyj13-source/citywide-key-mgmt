@@ -13,8 +13,8 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   const params: any[] = [];
 
   if (search) {
-    whereClauses += ' AND (ic_company_name LIKE ? OR notes LIKE ? OR bc_vendor_number LIKE ?)';
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    whereClauses += ' AND (ic_company_name LIKE ? OR notes LIKE ? OR bc_vendor_number LIKE ? OR bc_client_number LIKE ? OR ic_name LIKE ? OR account_manager LIKE ?)';
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
   if (status) {
     whereClauses += ' AND status = ?';
@@ -38,9 +38,11 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
 
 router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
   const {
-    ic_company_name, bc_vendor_number,
+    ic_company_name, bc_vendor_number, bc_client_number,
+    ic_name, account_manager, ccm_manager,
     keys_yn, security_app_yn,
     metal_keys, key_cards, has_fob, dispenser_keys,
+    am_keys, ccm_keys, contractor_keys,
     lockbox_code, door_code, alarm_code, door_access_code,
     notes, status, record_type,
   } = req.body;
@@ -56,19 +58,23 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
 
   const result = db.prepare(`
     INSERT INTO accounts (
-      ic_company_name, bc_vendor_number,
+      ic_company_name, bc_vendor_number, bc_client_number,
+      ic_name, account_manager, ccm_manager,
       keys_yn, security_app_yn,
       metal_keys, key_cards, has_fob, dispenser_keys,
+      am_keys, ccm_keys, contractor_keys,
       lockbox_code,
       door_code_encrypted, door_code_iv,
       alarm_code_encrypted, alarm_code_iv,
       door_access_code_encrypted, door_access_code_iv,
       notes, status, record_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    ic_company_name, bc_vendor_number || null,
+    ic_company_name, bc_vendor_number || null, bc_client_number || null,
+    ic_name || null, account_manager || null, ccm_manager || null,
     keys_yn ? 1 : 0, security_app_yn ? 1 : 0,
     metal_keys || 0, key_cards || 0, has_fob ? 1 : 0, dispenser_keys || 0,
+    am_keys || 0, ccm_keys || 0, contractor_keys || 0,
     lockbox_code || null,
     door_enc, door_iv,
     alarm_enc, alarm_iv,
@@ -94,10 +100,10 @@ router.get('/by-customer-id/:vendorNumber', requireAuth, (req: AuthRequest, res:
   res.json({ ...Object.assign({}, account), assignments: assignments.map((a) => Object.assign({}, a)) });
 });
 
-// Customer-only lookup
+// Customer-only lookup — search by bc_client_number (primary customer ID)
 router.get('/customer-lookup/:bcNumber', requireAuth, (req: AuthRequest, res: Response) => {
   const account = db.prepare(
-    "SELECT * FROM accounts WHERE bc_vendor_number = ? AND record_type = 'customer'"
+    "SELECT * FROM accounts WHERE bc_client_number = ? AND record_type = 'customer'"
   ).get(req.params.bcNumber) as any;
   if (!account) return res.status(404).json({ error: 'No customer found' });
   const assignments = db.prepare(
@@ -117,24 +123,30 @@ router.get('/:id', requireAuth, (req: AuthRequest, res: Response) => {
 
 router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   const {
-    ic_company_name, bc_vendor_number,
+    ic_company_name, bc_vendor_number, bc_client_number,
+    ic_name, account_manager, ccm_manager,
     keys_yn, security_app_yn,
     metal_keys, key_cards, has_fob, dispenser_keys,
+    am_keys, ccm_keys, contractor_keys,
     lockbox_code, door_code, alarm_code, door_access_code,
     notes, status,
   } = req.body;
 
   db.prepare(`
     UPDATE accounts SET
-      ic_company_name=?, bc_vendor_number=?,
+      ic_company_name=?, bc_vendor_number=?, bc_client_number=?,
+      ic_name=?, account_manager=?, ccm_manager=?,
       keys_yn=?, security_app_yn=?,
       metal_keys=?, key_cards=?, has_fob=?, dispenser_keys=?,
+      am_keys=?, ccm_keys=?, contractor_keys=?,
       lockbox_code=?, notes=?, status=?
     WHERE id=?
   `).run(
-    ic_company_name, bc_vendor_number || null,
+    ic_company_name, bc_vendor_number || null, bc_client_number || null,
+    ic_name || null, account_manager || null, ccm_manager || null,
     keys_yn ? 1 : 0, security_app_yn ? 1 : 0,
     metal_keys ?? 0, key_cards ?? 0, has_fob ? 1 : 0, dispenser_keys ?? 0,
+    am_keys ?? 0, ccm_keys ?? 0, contractor_keys ?? 0,
     lockbox_code || null, notes || null, status || 'active',
     req.params.id,
   );

@@ -55,6 +55,9 @@ const needed: [string, string][] = [
   ['am_keys', 'INTEGER DEFAULT 0'],
   ['ccm_keys', 'INTEGER DEFAULT 0'],
   ['contractor_keys', 'INTEGER DEFAULT 0'],
+  ['bc_client_number', 'TEXT'],
+  ['account_manager', 'TEXT'],
+  ['ccm_manager', 'TEXT'],
 ];
 
 const existing = cols();

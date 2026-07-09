@@ -31,13 +31,13 @@ export default function CustomerLookup() {
       <div className="p-6 max-w-2xl mx-auto space-y-6">
         <div>
           <h1 className="text-xl font-bold">Customer Lookup</h1>
-          <p className="text-sm text-cw-muted mt-1">Search by Customer BC# to view key assignment details</p>
+          <p className="text-sm text-cw-muted mt-1">Search by BC Client Number to view key assignment details</p>
         </div>
 
         <div className="flex gap-2">
           <input
             className="input flex-1"
-            placeholder="e.g. 02014200001"
+            placeholder="e.g. 01014200001"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && search()}
@@ -49,7 +49,7 @@ export default function CustomerLookup() {
 
         {notFound && (
           <div className="card p-4 text-sm text-red-600">
-            No customer found with BC# <span className="font-mono font-medium">{query}</span>
+            No customer found with BC Client # <span className="font-mono font-medium">{query}</span>
           </div>
         )}
 
@@ -58,13 +58,40 @@ export default function CustomerLookup() {
             <div className="flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-bold text-[#1a1a1a]">{result.ic_company_name}</h2>
-                <span className="font-mono text-sm text-cw-muted">{result.bc_vendor_number}</span>
+                {result.bc_client_number && (
+                  <div className="font-mono text-sm text-cw-muted">BC Client #: {result.bc_client_number}</div>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant={result.status === 'active' ? 'green' : 'gray'}>{result.status}</Badge>
                 <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[#1a1a1a] text-white">Customer</span>
               </div>
             </div>
+
+            {/* Relationship info */}
+            {(result.ic_name || result.bc_vendor_number || result.account_manager || result.ccm_manager) && (
+              <div className="grid grid-cols-2 gap-3 border-t border-cw-border pt-4 text-sm">
+                {result.ic_name && (
+                  <div>
+                    <div className="text-xs text-cw-muted mb-1">Independent Contractor</div>
+                    <div className="font-medium">{result.ic_name}</div>
+                    {result.bc_vendor_number && <div className="font-mono text-xs text-cw-muted">{result.bc_vendor_number}</div>}
+                  </div>
+                )}
+                {result.account_manager && (
+                  <div>
+                    <div className="text-xs text-cw-muted mb-1">Account Manager</div>
+                    <div className="font-medium">{result.account_manager}</div>
+                  </div>
+                )}
+                {result.ccm_manager && (
+                  <div>
+                    <div className="text-xs text-cw-muted mb-1">Contract Compliance Manager</div>
+                    <div className="font-medium">{result.ccm_manager}</div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Key counts */}
             <div className="grid grid-cols-3 gap-3 text-sm border-t border-cw-border pt-4">

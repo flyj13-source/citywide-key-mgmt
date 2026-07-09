@@ -9,7 +9,11 @@ type TabType = 'ic' | 'customer' | 'all';
 
 const emptyForm = {
   ic_company_name: '',
+  bc_client_number: '',
   bc_vendor_number: '',
+  ic_name: '',
+  account_manager: '',
+  ccm_manager: '',
   keys_yn: false,
   security_app_yn: false,
   metal_keys: 0,
@@ -103,7 +107,7 @@ function FormField({ label, hint, children }: { label: string; hint?: string; ch
 
 export default function Registry() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<TabType>('ic');
+  const [tab, setTab] = useState<TabType>('customer');
   const [accounts, setAccounts] = useState<any[]>([]);
   const [counts, setCounts] = useState({ ic: 0, customer: 0, all: 0 });
   const [total, setTotal] = useState(0);
@@ -182,20 +186,58 @@ export default function Registry() {
     } finally { setSaving(false); }
   };
 
-  // Form body — IC form has no role-count section; customer form does
+  // Form body — customer form includes client/IC/manager sections; IC form is simpler
   const FormBody = ({ isCustomer }: { isCustomer: boolean }) => (
     <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
-      <div>
-        <SectionLabel>{isCustomer ? 'Customer Info' : 'Contractor Info'}</SectionLabel>
-        <div className="space-y-3">
-          <FormField label={isCustomer ? 'Customer Name *' : 'Independent Contractor *'}>
-            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.ic_company_name} onChange={textF('ic_company_name')} placeholder={isCustomer ? 'CUSTOMER NAME' : 'COMPANY NAME INC'} />
-          </FormField>
-          <FormField label={isCustomer ? 'Customer BC# *' : 'BC Vendor Number *'} hint="02014XXXXXX">
-            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.bc_vendor_number} onChange={textF('bc_vendor_number')} placeholder="02014XXXXXX" />
-          </FormField>
+      {isCustomer ? (
+        <>
+          <div>
+            <SectionLabel>Client Info</SectionLabel>
+            <div className="space-y-3">
+              <FormField label="Client Name *">
+                <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.ic_company_name} onChange={textF('ic_company_name')} placeholder="CLIENT NAME" />
+              </FormField>
+              <FormField label="BC Client Number *" hint="01014XXXXXX">
+                <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.bc_client_number} onChange={textF('bc_client_number')} placeholder="01014XXXXXX" />
+              </FormField>
+            </div>
+          </div>
+          <div>
+            <SectionLabel>Independent Contractor</SectionLabel>
+            <div className="space-y-3">
+              <FormField label="IC Name">
+                <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.ic_name} onChange={textF('ic_name')} placeholder="CONTRACTOR NAME INC" />
+              </FormField>
+              <FormField label="BC Vendor Number" hint="02014XXXXXX">
+                <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.bc_vendor_number} onChange={textF('bc_vendor_number')} placeholder="02014XXXXXX" />
+              </FormField>
+            </div>
+          </div>
+          <div>
+            <SectionLabel>Account Management</SectionLabel>
+            <div className="space-y-3">
+              <FormField label="Account Manager">
+                <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.account_manager} onChange={textF('account_manager')} placeholder="Full name" />
+              </FormField>
+              <FormField label="Contract Compliance Manager">
+                <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.ccm_manager} onChange={textF('ccm_manager')} placeholder="Full name" />
+              </FormField>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div>
+          <SectionLabel>Contractor Info</SectionLabel>
+          <div className="space-y-3">
+            <FormField label="Independent Contractor *">
+              <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.ic_company_name} onChange={textF('ic_company_name')} placeholder="COMPANY NAME INC" />
+            </FormField>
+            <FormField label="BC Vendor Number *" hint="02014XXXXXX">
+              <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.bc_vendor_number} onChange={textF('bc_vendor_number')} placeholder="02014XXXXXX" />
+            </FormField>
+          </div>
         </div>
-      </div>
+      )}
 
       <div>
         <SectionLabel>Access Toggles</SectionLabel>
@@ -267,12 +309,13 @@ export default function Registry() {
   );
 
   const tabs: { key: TabType; label: string }[] = [
-    { key: 'ic', label: `IC Vendors (${counts.ic})` },
     { key: 'customer', label: `Customers (${counts.customer})` },
+    { key: 'ic', label: `IC Vendors (${counts.ic})` },
     { key: 'all', label: `All (${counts.all})` },
   ];
 
-  const colSpan = tab === 'customer' ? 16 : tab === 'all' ? 14 : 13;
+  // col counts: customer=17 (16 data + edit), ic=14, all=15
+  const colSpan = tab === 'customer' ? 17 : tab === 'all' ? 15 : 14;
 
   return (
     <Layout>
@@ -287,11 +330,11 @@ export default function Registry() {
             <button onClick={() => setShowImport(true)} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
               ↑ Import from Excel
             </button>
-            <button onClick={() => openAdd('ic')} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
-              + Add IC
-            </button>
-            <button onClick={() => openAdd('customer')} className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors">
+            <button onClick={() => openAdd('customer')} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
               + Add Customer
+            </button>
+            <button onClick={() => openAdd('ic')} className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors">
+              + Add IC
             </button>
           </div>
         </div>
@@ -316,34 +359,39 @@ export default function Registry() {
         {/* Search */}
         <input
           className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
-          placeholder="Search by name or number…"
+          placeholder="Search by name, number, or manager…"
           value={search}
           onChange={(e) => { setSearch(e.target.value); setPage(1); }}
         />
 
-        {/* Table — customer tab gets overflow-x-auto + sticky first col */}
-        <div className={`card overflow-x-auto ${tab === 'customer' ? 'max-w-full' : ''}`}>
+        {/* Table */}
+        <div className="card overflow-x-auto max-w-full">
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-[#1a1a1a] text-white text-xs">
-                {/* Sticky name column */}
-                <th className={`text-left px-4 py-3 font-medium whitespace-nowrap ${tab === 'customer' ? 'sticky left-0 z-10 bg-[#1a1a1a]' : ''}`}>
-                  {tab === 'ic' ? 'Independent Contractor' : tab === 'customer' ? 'Customer Name' : 'Name'}
-                </th>
-                <th className="text-left px-3 py-3 font-medium whitespace-nowrap">
-                  {tab === 'customer' ? 'Customer BC#' : 'BC Vendor Number'}
-                </th>
+                {tab === 'customer' ? (
+                  <>
+                    <th className="text-left px-4 py-3 font-medium whitespace-nowrap sticky left-0 z-20 bg-[#1a1a1a] min-w-[200px]">Client Name</th>
+                    <th className="text-left px-3 py-3 font-medium whitespace-nowrap sticky left-[200px] z-20 bg-[#1a1a1a] min-w-[150px]">BC Client #</th>
+                    <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Independent Contractor</th>
+                    <th className="text-left px-3 py-3 font-medium whitespace-nowrap">BC Vendor #</th>
+                    <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Account Manager</th>
+                    <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Contract Compliance Manager</th>
+                  </>
+                ) : (
+                  <>
+                    <th className="text-left px-4 py-3 font-medium whitespace-nowrap">
+                      {tab === 'all' ? 'Name' : 'Independent Contractor'}
+                    </th>
+                    <th className="text-left px-3 py-3 font-medium whitespace-nowrap">BC Vendor Number</th>
+                  </>
+                )}
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Keys Y/N</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Security App Y/N</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Metal Keys</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Cards</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Fobs</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Dispenser Key</th>
-                {tab === 'customer' && <>
-                  <th className="text-center px-3 py-3 font-medium whitespace-nowrap">AM Keys</th>
-                  <th className="text-center px-3 py-3 font-medium whitespace-nowrap">CCM Keys</th>
-                  <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Contractor Keys</th>
-                </>}
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Lockbox Code</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Door Code</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Alarm Code</th>
@@ -357,41 +405,54 @@ export default function Registry() {
                 <tr><td colSpan={colSpan} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
               ) : accounts.length === 0 ? (
                 <tr><td colSpan={colSpan} className="px-4 py-8 text-center text-cw-muted">No records found</td></tr>
-              ) : accounts.map((a, i) => (
-                <tr
-                  key={a.id}
-                  className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'}`}
-                  onClick={() => navigate(`/registry/${a.id}`)}
-                >
-                  <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[220px] truncate ${tab === 'customer' ? `sticky left-0 z-10 ${i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'} hover:bg-[#f0f0ee]` : ''}`}>
-                    {a.ic_company_name}
-                  </td>
-                  <td className="px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap">{a.bc_vendor_number || '—'}</td>
-                  <td className="px-3 py-3 text-center"><Check value={a.keys_yn} /></td>
-                  <td className="px-3 py-3 text-center"><Check value={a.security_app_yn} /></td>
-                  <td className="px-3 py-3 text-center"><CountBadge value={a.metal_keys} /></td>
-                  <td className="px-3 py-3 text-center"><CountBadge value={a.key_cards} /></td>
-                  <td className="px-3 py-3 text-center"><CountBadge value={a.has_fob} /></td>
-                  <td className="px-3 py-3 text-center"><CountBadge value={a.dispenser_keys} /></td>
-                  {tab === 'customer' && <>
-                    <td className="px-3 py-3 text-center"><CountBadge value={a.am_keys} /></td>
-                    <td className="px-3 py-3 text-center"><CountBadge value={a.ccm_keys} /></td>
-                    <td className="px-3 py-3 text-center"><CountBadge value={a.contractor_keys} /></td>
-                  </>}
-                  <td className="px-3 py-3 text-center text-xs font-mono text-gray-600">{a.lockbox_code || '—'}</td>
-                  <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
-                    <RevealCell accountId={a.id} type="door" hasCode={!!a.door_code_encrypted} />
-                  </td>
-                  <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
-                    <RevealCell accountId={a.id} type="alarm" hasCode={!!a.alarm_code_encrypted} />
-                  </td>
-                  <td className="px-3 py-3 text-xs text-gray-500 max-w-[160px] truncate">{a.notes ? a.notes.slice(0, 40) + (a.notes.length > 40 ? '…' : '') : '—'}</td>
-                  {tab === 'all' && <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}><TypeBadge type={a.record_type || 'ic'} /></td>}
-                  <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                    <button onClick={(e) => openEdit(e, a.id)} className="text-xs text-[#C0272D] hover:underline whitespace-nowrap">Edit</button>
-                  </td>
-                </tr>
-              ))}
+              ) : accounts.map((a, i) => {
+                const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
+                return (
+                  <tr
+                    key={a.id}
+                    className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${rowBg}`}
+                    onClick={() => navigate(`/registry/${a.id}`)}
+                  >
+                    {tab === 'customer' ? (
+                      <>
+                        <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[200px] truncate sticky left-0 z-10 ${rowBg}`}>
+                          {a.ic_company_name}
+                        </td>
+                        <td className={`px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap sticky left-[200px] z-10 ${rowBg}`}>
+                          {a.bc_client_number || '—'}
+                        </td>
+                        <td className="px-3 py-3 text-xs text-gray-700 whitespace-nowrap max-w-[180px] truncate">{a.ic_name || '—'}</td>
+                        <td className="px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap">{a.bc_vendor_number || '—'}</td>
+                        <td className="px-3 py-3 text-xs text-gray-700 whitespace-nowrap max-w-[140px] truncate">{a.account_manager || '—'}</td>
+                        <td className="px-3 py-3 text-xs text-gray-700 whitespace-nowrap max-w-[140px] truncate">{a.ccm_manager || '—'}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[220px] truncate">{a.ic_company_name}</td>
+                        <td className="px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap">{a.bc_vendor_number || '—'}</td>
+                      </>
+                    )}
+                    <td className="px-3 py-3 text-center"><Check value={a.keys_yn} /></td>
+                    <td className="px-3 py-3 text-center"><Check value={a.security_app_yn} /></td>
+                    <td className="px-3 py-3 text-center"><CountBadge value={a.metal_keys} /></td>
+                    <td className="px-3 py-3 text-center"><CountBadge value={a.key_cards} /></td>
+                    <td className="px-3 py-3 text-center"><CountBadge value={a.has_fob} /></td>
+                    <td className="px-3 py-3 text-center"><CountBadge value={a.dispenser_keys} /></td>
+                    <td className="px-3 py-3 text-center text-xs font-mono text-gray-600">{a.lockbox_code || '—'}</td>
+                    <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                      <RevealCell accountId={a.id} type="door" hasCode={!!a.door_code_encrypted} />
+                    </td>
+                    <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                      <RevealCell accountId={a.id} type="alarm" hasCode={!!a.alarm_code_encrypted} />
+                    </td>
+                    <td className="px-3 py-3 text-xs text-gray-500 max-w-[160px] truncate">{a.notes ? a.notes.slice(0, 40) + (a.notes.length > 40 ? '…' : '') : '—'}</td>
+                    {tab === 'all' && <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}><TypeBadge type={a.record_type || 'ic'} /></td>}
+                    <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                      <button onClick={(e) => openEdit(e, a.id)} className="text-xs text-[#C0272D] hover:underline whitespace-nowrap">Edit</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

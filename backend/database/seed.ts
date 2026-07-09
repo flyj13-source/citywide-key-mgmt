@@ -14,11 +14,17 @@ db.exec('PRAGMA foreign_keys = ON');
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 db.exec(schema);
 
-// Idempotent migration: add record_type if not present
+// Idempotent migrations
 const hasCols = (db.prepare('PRAGMA table_info(accounts)').all() as any[]).map((c: any) => c.name);
 if (!hasCols.includes('record_type'))
   db.exec("ALTER TABLE accounts ADD COLUMN record_type TEXT DEFAULT 'ic'");
 db.exec("UPDATE accounts SET record_type='ic' WHERE record_type IS NULL");
+if (!hasCols.includes('bc_client_number'))
+  db.exec('ALTER TABLE accounts ADD COLUMN bc_client_number TEXT');
+if (!hasCols.includes('account_manager'))
+  db.exec('ALTER TABLE accounts ADD COLUMN account_manager TEXT');
+if (!hasCols.includes('ccm_manager'))
+  db.exec('ALTER TABLE accounts ADD COLUMN ccm_manager TEXT');
 
 // ─── Manager (idempotent — never overwrite an existing password) ────────────
 const seedPassword = process.env.SEED_PASSWORD || 'demo1234';
@@ -134,11 +140,19 @@ interface CustomerSeed extends AccountSeed {
   am_keys?: number;
   ccm_keys?: number;
   contractor_keys?: number;
+  bc_client_number?: string;
+  ic_name?: string;
+  account_manager?: string;
+  ccm_manager?: string;
 }
 const customers: CustomerSeed[] = [
   {
     ic_company_name: 'DEMO MEDICAL CENTER',
+    bc_client_number: '01014200001',
     bc_vendor_number: '02014200001',
+    ic_name: 'ALVES CLEANING SERVICES INC',
+    account_manager: 'Demo Manager A',
+    ccm_manager: 'Demo Manager B',
     keys_yn: 1, security_app_yn: 1,
     metal_keys: 3, key_cards: 2, has_fob: 1,
     dispenser_keys: 1, lockbox_code: '55',
@@ -149,7 +163,11 @@ const customers: CustomerSeed[] = [
   },
   {
     ic_company_name: 'DEMO BANK BRANCH',
+    bc_client_number: '01014200002',
     bc_vendor_number: '02014200002',
+    ic_name: 'HOWARD CLEANING SERVICES',
+    account_manager: 'Demo Manager A',
+    ccm_manager: 'Demo Manager B',
     keys_yn: 1, security_app_yn: 0,
     metal_keys: 1, key_cards: 0, has_fob: 0,
     dispenser_keys: 0, lockbox_code: null,
@@ -167,10 +185,11 @@ for (const c of customers) {
   if (c.door_code) { const r = encrypt(c.door_code); door_enc = r.encrypted; door_iv = r.iv; }
   if (c.alarm_code) { const r = encrypt(c.alarm_code); alarm_enc = r.encrypted; alarm_iv = r.iv; }
 
-  // Use a dedicated statement that includes am/ccm/contractor keys
+  // Use a dedicated statement that includes am/ccm/contractor keys and new manager fields
   const custStmt = db.prepare(`
     INSERT OR IGNORE INTO accounts (
-      ic_company_name, bc_vendor_number,
+      ic_company_name, bc_client_number, bc_vendor_number,
+      ic_name, account_manager, ccm_manager,
       keys_yn, security_app_yn,
       metal_keys, key_cards, has_fob, dispenser_keys,
       am_keys, ccm_keys, contractor_keys,
@@ -178,10 +197,11 @@ for (const c of customers) {
       door_code_encrypted, door_code_iv,
       alarm_code_encrypted, alarm_code_iv,
       notes, status, record_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
   `);
   const res = custStmt.run(
-    c.ic_company_name, c.bc_vendor_number ?? null,
+    c.ic_company_name, c.bc_client_number ?? null, c.bc_vendor_number ?? null,
+    c.ic_name ?? null, c.account_manager ?? null, c.ccm_manager ?? null,
     c.keys_yn ?? 0, c.security_app_yn ?? 0,
     c.metal_keys ?? 0, c.key_cards ?? 0, c.has_fob ?? 0, c.dispenser_keys ?? 0,
     c.am_keys ?? 0, c.ccm_keys ?? 0, c.contractor_keys ?? 0,
