@@ -7,15 +7,15 @@ const router = Router();
 
 router.get('/', requireAuth, (_req: AuthRequest, res: Response) => {
   const rows = db.prepare(`
-    SELECT a.id, a.name,
+    SELECT a.id, a.ic_company_name as name,
       CASE WHEN a.door_code_encrypted IS NOT NULL THEN 1 ELSE 0 END as has_door_code,
       CASE WHEN a.alarm_code_encrypted IS NOT NULL THEN 1 ELSE 0 END as has_alarm_code,
       CASE WHEN a.door_access_code_encrypted IS NOT NULL THEN 1 ELSE 0 END as has_door_access_code,
-      a.lockbox, a.has_fob, a.notes
+      a.lockbox_code as lockbox, a.has_fob, a.notes
     FROM accounts a
     WHERE a.door_code_encrypted IS NOT NULL OR a.alarm_code_encrypted IS NOT NULL
-      OR a.door_access_code_encrypted IS NOT NULL OR a.lockbox IS NOT NULL
-    ORDER BY a.name ASC
+      OR a.door_access_code_encrypted IS NOT NULL OR a.lockbox_code IS NOT NULL
+    ORDER BY a.ic_company_name ASC
   `).all();
   res.json(rows.map((r) => Object.assign({}, r)));
 });
@@ -38,7 +38,7 @@ router.post('/reveal/:id', requireAuth, (req: AuthRequest, res: Response) => {
   if (!code) return res.status(404).json({ error: 'No code stored' });
 
   db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'vault_revealed', account.name, account.id, req.manager!.name,
+    'vault_revealed', account.ic_company_name, account.id, req.manager!.name,
     JSON.stringify({ type, ip: req.ip })
   );
 
@@ -65,7 +65,7 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
   }
 
   db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'vault_updated', account.name, account_id, req.manager!.name,
+    'vault_updated', account.ic_company_name, account_id, req.manager!.name,
     JSON.stringify({ has_door: !!door_code, has_alarm: !!alarm_code, has_door_access: !!door_access_code })
   );
 

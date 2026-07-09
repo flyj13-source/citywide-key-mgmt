@@ -23,8 +23,11 @@ export default function CodeVault() {
   const [revealing, setRevealing] = useState<string | null>(null);
 
   useEffect(() => {
-    getVault().then((d) => { setEntries(d); setLoading(false); });
-    getAccounts({ limit: '300' }).then((d) => setAccounts(d.accounts));
+    getVault()
+      .then((d) => { setEntries(d); })
+      .catch(() => { /* error handled by global 401 guard; non-auth errors leave table empty */ })
+      .finally(() => setLoading(false));
+    getAccounts({ limit: '300' }).then((d) => setAccounts(d.accounts)).catch(() => {});
   }, []);
 
   // Auto-hide revealed code after 5 seconds
@@ -59,7 +62,7 @@ export default function CodeVault() {
     }
   };
 
-  const filtered = entries.filter((e) => e.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = entries.filter((e) => (e.name ?? '').toLowerCase().includes(search.toLowerCase()));
 
   const isRevealed = (id: number, type: 'door' | 'alarm') =>
     revealed?.id === id && revealed.type === type;
@@ -168,7 +171,7 @@ export default function CodeVault() {
               <label className="block text-xs font-medium text-cw-muted mb-1">Account</label>
               <select className="input" value={addForm.account_id} onChange={(e) => setAddForm({ ...addForm, account_id: e.target.value })}>
                 <option value="">— Select account —</option>
-                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.ic_company_name}</option>)}
               </select>
             </div>
             <div>
