@@ -1,9 +1,20 @@
-import { getToken } from './auth';
+import { getToken, clearAuth } from './auth';
 
 // In local dev, VITE_API_URL is unset so the Vite proxy handles /api/*
-// In production (Railway), VITE_API_URL = https://citywide-backend.up.railway.app
+// In production (Render), VITE_API_URL = https://citywide-backend-0xuj.onrender.com
 const API_ORIGIN = import.meta.env.VITE_API_URL ?? '';
 const BASE = `${API_ORIGIN}/api`;
+
+// ── Global 401/403 handler ────────────────────────────────────────────────────
+// Clears stored credentials and hard-redirects to /login so a stale token
+// never silently renders "0 records" or a dead modal.
+function handleUnauth(): never {
+  clearAuth();
+  const loginUrl = `${window.location.origin}/login`;
+  // Use replace so Back doesn't loop back to the expired session page
+  window.location.replace(loginUrl);
+  throw new Error('Session expired');
+}
 
 async function req<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
@@ -15,11 +26,26 @@ async function req<T>(path: string, options: RequestInit = {}): Promise<T> {
       ...(options.headers || {}),
     },
   });
+  if (res.status === 401 || res.status === 403) handleUnauth();
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || 'Request failed');
   }
   return res.json();
+}
+
+// Raw fetch helper for blob/multipart responses — same auth + 401 guard
+async function reqRaw(path: string, options: RequestInit = {}): Promise<Response> {
+  const token = getToken();
+  const res = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  if (res.status === 401 || res.status === 403) handleUnauth();
+  return res;
 }
 
 // Auth
@@ -29,7 +55,6 @@ export const login = (email: string, password: string) =>
     body: JSON.stringify({ email, password }),
   });
 
-// Auth
 export const changePassword = (currentPassword: string, newPassword: string) =>
   req<{ success: true }>('/auth/change-password', {
     method: 'POST',
@@ -85,10 +110,9 @@ export const sendTeamsAlert = () =>
   req<any>('/reports/teams', { method: 'POST', body: JSON.stringify({}) });
 
 export const downloadExcel = async () => {
-  const token = getToken();
-  const res = await fetch(`${API_ORIGIN}/api/reports/excel`, {
+  const res = await reqRaw('/reports/excel', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
   });
   if (!res.ok) throw new Error('Export failed');
@@ -114,50 +138,46 @@ export type AskResult =
   | { response: string }
   | { queued: true; id: number; question: string; status: 'pending' };
 
-// Online → { response }. Offline (desktop) → { queued, id } (HTTP 202).
 export const askClaude = (message: string, history: any[]) =>
   req<AskResult>('/claude', { method: 'POST', body: JSON.stringify({ message, history }) });
 
-// Desktop-only: current AI question queue (used to flip Queued → Answered pills).
 export const getAiQueue = () =>
   req<{ queue: AiQueueItem[]; pending: number }>('/claude/queue');
 
-// Import
-export const previewImport = (file: File) => {
-  const token = getToken();
+// Import — routed through reqRaw so the 401 guard applies identically
+export const previewImport = async (file: File) => {
   const fd = new FormData();
   fd.append('file', file);
-  return fetch(`${BASE}/accounts/import`, {
-    method: 'POST',
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: fd,
-  }).then(async (r) => {
-    if (!r.ok) { const e = await r.json().catch(() => ({ error: r.statusText })); throw new Error(e.error); }
-    return r.json() as Promise<{ valid: any[]; warnings: any[]; errors: any[]; total: number }>;
-  });
+  const res = await reqRaw('/accounts/import', { method: 'POST', body: fd });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(e.error || 'Import failed');
+  }
+  return res.json() as Promise<{ valid: any[]; warnings: any[]; errors: any[]; total: number }>;
 };
+
 export const confirmImport = (rows: any[]) =>
   req<{ inserted: number; skipped: number }>('/accounts/import/confirm', {
     method: 'POST', body: JSON.stringify({ rows }),
   });
-export const downloadImportTemplate = () => {
-  const token = getToken();
-  return fetch(`${BASE}/accounts/import/template`, {
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-  }).then(async (r) => {
-    if (!r.ok) throw new Error('Template download failed');
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'CityWide_IC_Import_Template.xlsx'; a.click();
-    URL.revokeObjectURL(url);
-  });
+
+export const downloadImportTemplate = async () => {
+  const res = await reqRaw('/accounts/import/template');
+  if (!res.ok) throw new Error('Template download failed');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'CityWide_IC_Import_Template.xlsx';
+  a.click();
+  URL.revokeObjectURL(url);
 };
 
 // Contractors
 export const getContractors = () => req<any[]>('/contractors');
 export const inviteContractor = (data: any) =>
   req<any>('/contractors/invite', { method: 'POST', body: JSON.stringify(data) });
+// These two are public (no JWT) — contractor portal routes
 export const getContractorByToken = (token: string) =>
   fetch(`${API_ORIGIN}/api/contractor/${token}`).then((r) => r.json());
 export const signContractor = (token: string, signature_data: string) =>
