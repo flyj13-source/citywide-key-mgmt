@@ -22,6 +22,7 @@ backend/.env
 backend/database/*.db
 backend/database/*.db-wal
 backend/database/*.db-shm
+frontend/database/
 
 # Uploads (runtime data)
 backend/uploads/
