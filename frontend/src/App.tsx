@@ -17,6 +17,7 @@ import Contractors from './pages/Contractors';
 import Settings from './pages/Settings';
 import ContractorPortal from './pages/ContractorPortal';
 import ICChange from './pages/ICChange';
+import CustomerLookup from './pages/CustomerLookup';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   return isAuthenticated() ? <>{children}</> : <Navigate to="/login" replace />;
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/contractors" element={<RequireAuth><Contractors /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
         <Route path="/ic-change" element={<RequireAuth><ICChange /></RequireAuth>} />
+        <Route path="/customer-lookup" element={<RequireAuth><CustomerLookup /></RequireAuth>} />
         <Route path="*" element={<Navigate to={isAuthenticated() ? '/dashboard' : '/login'} replace />} />
       </Routes>
     </Router>

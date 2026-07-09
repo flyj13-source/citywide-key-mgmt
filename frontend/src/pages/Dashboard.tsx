@@ -17,7 +17,8 @@ function MetricCard({ label, value, sub, color = '' }: Metric) {
 }
 
 export default function Dashboard() {
-  const [accountTotal, setAccountTotal] = useState(0);
+  const [icCount, setIcCount] = useState(0);
+  const [customerCount, setCustomerCount] = useState(0);
   const [activeAssignments, setActiveAssignments] = useState(0);
   const [overdueList, setOverdueList] = useState<any[]>([]);
   const [staffCount, setStaffCount] = useState(0);
@@ -26,14 +27,16 @@ export default function Dashboard() {
 
   useEffect(() => {
     Promise.all([
-      getAccounts({ limit: '1' }),
+      getAccounts({ limit: '1', type: 'ic' }),
+      getAccounts({ limit: '1', type: 'customer' }),
       getAssignments({ status: 'checked_out', limit: '1' }),
       getOverdue(),
       getStaff(),
       getAudit({ limit: '10' }),
-    ]).then(([acc, asgn, overdue, staff, audit]) => {
-      setAccountTotal(acc.total);
-      setActiveAssignments(asgn.total);
+    ]).then(([ic, cust, asgn, overdue, staff, audit]) => {
+      setIcCount(ic.total);
+      setCustomerCount(cust.total);
+      setActiveAssignments((asgn as any).total);
       setOverdueList(overdue);
       setStaffCount(staff.length);
       setRecentLogs(audit.logs);
@@ -72,8 +75,9 @@ export default function Dashboard() {
         </div>
 
         {/* Metrics */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard label="Total ICs" value={accountTotal} sub="in key registry" />
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+          <MetricCard label="IC Vendors" value={icCount} sub="in key registry" />
+          <MetricCard label="Customers" value={customerCount} sub="in key registry" />
           <MetricCard label="Active Check-Outs" value={activeAssignments} sub="keys currently out" />
           <MetricCard
             label="Overdue"

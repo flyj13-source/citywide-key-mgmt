@@ -5,6 +5,8 @@ import Modal from '../components/Modal';
 import ImportModal from '../components/ImportModal';
 import { getAccounts, getAccount, createAccount, updateAccount, revealCode } from '../lib/api';
 
+type TabType = 'ic' | 'customer' | 'all';
+
 const emptyForm = {
   ic_company_name: '',
   bc_vendor_number: '',
@@ -14,6 +16,9 @@ const emptyForm = {
   key_cards: 0,
   has_fob: 0,
   dispenser_keys: 0,
+  am_keys: 0,
+  ccm_keys: 0,
+  contractor_keys: 0,
   lockbox_code: '',
   door_code: '',
   alarm_code: '',
@@ -72,6 +77,13 @@ function RevealCell({ accountId, type, hasCode }: { accountId: number; type: 'do
   );
 }
 
+function TypeBadge({ type }: { type: string }) {
+  if (type === 'customer') {
+    return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[#1a1a1a] text-white">Customer</span>;
+  }
+  return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border border-[#C0272D] text-[#C0272D]">IC</span>;
+}
+
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return <div className="text-[10px] font-bold uppercase tracking-widest text-[#1a1a1a] border-b border-gray-200 pb-1 mb-3">{children}</div>;
 }
@@ -91,12 +103,15 @@ function FormField({ label, hint, children }: { label: string; hint?: string; ch
 
 export default function Registry() {
   const navigate = useNavigate();
+  const [tab, setTab] = useState<TabType>('ic');
   const [accounts, setAccounts] = useState<any[]>([]);
+  const [counts, setCounts] = useState({ ic: 0, customer: 0, all: 0 });
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [addType, setAddType] = useState<'ic' | 'customer'>('ic');
   const [showImport, setShowImport] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
@@ -107,13 +122,19 @@ export default function Registry() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await getAccounts({ search, page: String(page), limit: String(LIMIT) });
-      setAccounts(data.accounts);
-      setTotal(data.total);
+      const [tabData, icData, custData, allData] = await Promise.all([
+        getAccounts({ search, page: String(page), limit: String(LIMIT), type: tab }),
+        getAccounts({ limit: '1', type: 'ic' }),
+        getAccounts({ limit: '1', type: 'customer' }),
+        getAccounts({ limit: '1', type: 'all' }),
+      ]);
+      setAccounts(tabData.accounts);
+      setTotal(tabData.total);
+      setCounts({ ic: icData.total, customer: custData.total, all: allData.total });
     } finally {
       setLoading(false);
     }
-  }, [search, page]);
+  }, [search, page, tab]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -134,11 +155,17 @@ export default function Registry() {
   const numF = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) => f(key, Math.max(0, Number(e.target.value)));
   const textF = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => f(key, e.target.value);
 
+  const openAdd = (type: 'ic' | 'customer') => {
+    setAddType(type);
+    setForm({ ...emptyForm });
+    setShowAdd(true);
+  };
+
   const saveNew = async () => {
     if (!form.ic_company_name.trim()) return;
     setSaving(true);
     try {
-      await createAccount({ ...form, keys_yn: form.keys_yn ? 1 : 0, security_app_yn: form.security_app_yn ? 1 : 0 });
+      await createAccount({ ...form, keys_yn: form.keys_yn ? 1 : 0, security_app_yn: form.security_app_yn ? 1 : 0, record_type: addType });
       setShowAdd(false);
       setForm({ ...emptyForm });
       load();
@@ -155,16 +182,17 @@ export default function Registry() {
     } finally { setSaving(false); }
   };
 
-  const FormBody = () => (
+  // Form body — IC form has no role-count section; customer form does
+  const FormBody = ({ isCustomer }: { isCustomer: boolean }) => (
     <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
       <div>
-        <SectionLabel>Contractor Info</SectionLabel>
+        <SectionLabel>{isCustomer ? 'Customer Info' : 'Contractor Info'}</SectionLabel>
         <div className="space-y-3">
-          <FormField label="Independent Contractor *">
-            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.ic_company_name} onChange={textF('ic_company_name')} placeholder="COMPANY NAME INC" />
+          <FormField label={isCustomer ? 'Customer Name *' : 'Independent Contractor *'}>
+            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.ic_company_name} onChange={textF('ic_company_name')} placeholder={isCustomer ? 'CUSTOMER NAME' : 'COMPANY NAME INC'} />
           </FormField>
-          <FormField label="BC Vendor Number *" hint="02014100XXX">
-            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.bc_vendor_number} onChange={textF('bc_vendor_number')} placeholder="02014100XXX" />
+          <FormField label={isCustomer ? 'Customer BC# *' : 'BC Vendor Number *'} hint="02014XXXXXX">
+            <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.bc_vendor_number} onChange={textF('bc_vendor_number')} placeholder="02014XXXXXX" />
           </FormField>
         </div>
       </div>
@@ -199,6 +227,23 @@ export default function Registry() {
         </div>
       </div>
 
+      {isCustomer && (
+        <div>
+          <SectionLabel>Role Key Counts</SectionLabel>
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { label: 'AM Keys', key: 'am_keys' },
+              { label: 'CCM Keys', key: 'ccm_keys' },
+              { label: 'Contractor Keys', key: 'contractor_keys' },
+            ].map(({ label, key }) => (
+              <FormField key={key} label={label}>
+                <input type="number" min={0} className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={(form as any)[key] ?? 0} onChange={numF(key)} />
+              </FormField>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div>
         <SectionLabel>Access Codes</SectionLabel>
         <div className="space-y-3">
@@ -221,6 +266,14 @@ export default function Registry() {
     </div>
   );
 
+  const tabs: { key: TabType; label: string }[] = [
+    { key: 'ic', label: `IC Vendors (${counts.ic})` },
+    { key: 'customer', label: `Customers (${counts.customer})` },
+    { key: 'all', label: `All (${counts.all})` },
+  ];
+
+  const colSpan = tab === 'customer' ? 16 : tab === 'all' ? 14 : 13;
+
   return (
     <Layout>
       <div className="p-6 max-w-full mx-auto space-y-4">
@@ -228,64 +281,91 @@ export default function Registry() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-[#1a1a1a]">Key Registry</h1>
-            <p className="text-sm text-cw-muted">{total} IC vendor{total !== 1 ? 's' : ''}</p>
+            <p className="text-sm text-cw-muted">{total} record{total !== 1 ? 's' : ''}</p>
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={() => setShowImport(true)}
-              className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors"
-            >
+            <button onClick={() => setShowImport(true)} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
               ↑ Import from Excel
             </button>
-            <button
-              onClick={() => { setForm({ ...emptyForm }); setShowAdd(true); }}
-              className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors"
-            >
-              + Add IC Vendor
+            <button onClick={() => openAdd('ic')} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
+              + Add IC
+            </button>
+            <button onClick={() => openAdd('customer')} className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors">
+              + Add Customer
             </button>
           </div>
+        </div>
+
+        {/* Tab bar */}
+        <div className="flex border-b border-cw-border gap-6">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => { setTab(t.key); setPage(1); }}
+              className={`pb-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                tab === t.key
+                  ? 'border-[#C0272D] text-[#C0272D]'
+                  : 'border-transparent text-[#6b6b68] hover:text-[#1a1a1a]'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
 
         {/* Search */}
         <input
           className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
-          placeholder="Search by name or vendor number…"
+          placeholder="Search by name or number…"
           value={search}
           onChange={(e) => { setSearch(e.target.value); setPage(1); }}
         />
 
-        {/* Table */}
-        <div className="card overflow-x-auto">
+        {/* Table — customer tab gets overflow-x-auto + sticky first col */}
+        <div className={`card overflow-x-auto ${tab === 'customer' ? 'max-w-full' : ''}`}>
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-[#1a1a1a] text-white text-xs">
-                <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Independent Contractor</th>
-                <th className="text-left px-3 py-3 font-medium whitespace-nowrap">BC Vendor Number</th>
+                {/* Sticky name column */}
+                <th className={`text-left px-4 py-3 font-medium whitespace-nowrap ${tab === 'customer' ? 'sticky left-0 z-10 bg-[#1a1a1a]' : ''}`}>
+                  {tab === 'ic' ? 'Independent Contractor' : tab === 'customer' ? 'Customer Name' : 'Name'}
+                </th>
+                <th className="text-left px-3 py-3 font-medium whitespace-nowrap">
+                  {tab === 'customer' ? 'Customer BC#' : 'BC Vendor Number'}
+                </th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Keys Y/N</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Security App Y/N</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Metal Keys</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Cards</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Fobs</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Dispenser Key</th>
+                {tab === 'customer' && <>
+                  <th className="text-center px-3 py-3 font-medium whitespace-nowrap">AM Keys</th>
+                  <th className="text-center px-3 py-3 font-medium whitespace-nowrap">CCM Keys</th>
+                  <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Contractor Keys</th>
+                </>}
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Lockbox Code</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Door Code</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Alarm Code</th>
                 <th className="text-left px-3 py-3 font-medium">Notes</th>
+                {tab === 'all' && <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Type</th>}
                 <th className="px-3 py-3"></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+                <tr><td colSpan={colSpan} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
               ) : accounts.length === 0 ? (
-                <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">No records found</td></tr>
+                <tr><td colSpan={colSpan} className="px-4 py-8 text-center text-cw-muted">No records found</td></tr>
               ) : accounts.map((a, i) => (
                 <tr
                   key={a.id}
                   className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'}`}
                   onClick={() => navigate(`/registry/${a.id}`)}
                 >
-                  <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[220px] truncate">{a.ic_company_name}</td>
+                  <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[220px] truncate ${tab === 'customer' ? `sticky left-0 z-10 ${i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'} hover:bg-[#f0f0ee]` : ''}`}>
+                    {a.ic_company_name}
+                  </td>
                   <td className="px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap">{a.bc_vendor_number || '—'}</td>
                   <td className="px-3 py-3 text-center"><Check value={a.keys_yn} /></td>
                   <td className="px-3 py-3 text-center"><Check value={a.security_app_yn} /></td>
@@ -293,6 +373,11 @@ export default function Registry() {
                   <td className="px-3 py-3 text-center"><CountBadge value={a.key_cards} /></td>
                   <td className="px-3 py-3 text-center"><CountBadge value={a.has_fob} /></td>
                   <td className="px-3 py-3 text-center"><CountBadge value={a.dispenser_keys} /></td>
+                  {tab === 'customer' && <>
+                    <td className="px-3 py-3 text-center"><CountBadge value={a.am_keys} /></td>
+                    <td className="px-3 py-3 text-center"><CountBadge value={a.ccm_keys} /></td>
+                    <td className="px-3 py-3 text-center"><CountBadge value={a.contractor_keys} /></td>
+                  </>}
                   <td className="px-3 py-3 text-center text-xs font-mono text-gray-600">{a.lockbox_code || '—'}</td>
                   <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                     <RevealCell accountId={a.id} type="door" hasCode={!!a.door_code_encrypted} />
@@ -301,6 +386,7 @@ export default function Registry() {
                     <RevealCell accountId={a.id} type="alarm" hasCode={!!a.alarm_code_encrypted} />
                   </td>
                   <td className="px-3 py-3 text-xs text-gray-500 max-w-[160px] truncate">{a.notes ? a.notes.slice(0, 40) + (a.notes.length > 40 ? '…' : '') : '—'}</td>
+                  {tab === 'all' && <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}><TypeBadge type={a.record_type || 'ic'} /></td>}
                   <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                     <button onClick={(e) => openEdit(e, a.id)} className="text-xs text-[#C0272D] hover:underline whitespace-nowrap">Edit</button>
                   </td>
@@ -322,11 +408,11 @@ export default function Registry() {
 
       {/* Add Modal */}
       {showAdd && (
-        <Modal title="Add IC Vendor" onClose={() => setShowAdd(false)} width="max-w-lg">
-          <FormBody />
+        <Modal title={addType === 'customer' ? 'Add Customer' : 'Add IC Vendor'} onClose={() => setShowAdd(false)} width="max-w-lg">
+          <FormBody isCustomer={addType === 'customer'} />
           <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
             <button onClick={saveNew} disabled={saving || !form.ic_company_name.trim()} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors">
-              {saving ? 'Saving…' : 'Add Vendor'}
+              {saving ? 'Saving…' : addType === 'customer' ? 'Add Customer' : 'Add IC Vendor'}
             </button>
             <button onClick={() => setShowAdd(false)} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
           </div>
@@ -336,7 +422,7 @@ export default function Registry() {
       {/* Edit Modal */}
       {showEdit && (
         <Modal title={`Edit: ${form.ic_company_name}`} onClose={() => setShowEdit(false)} width="max-w-lg">
-          <FormBody />
+          <FormBody isCustomer={(form as any).record_type === 'customer'} />
           <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
             <button onClick={saveEdit} disabled={saving} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors">
               {saving ? 'Saving…' : 'Save Changes'}
@@ -345,6 +431,7 @@ export default function Registry() {
           </div>
         </Modal>
       )}
+
       {showImport && (
         <ImportModal onClose={() => setShowImport(false)} onDone={() => load()} />
       )}

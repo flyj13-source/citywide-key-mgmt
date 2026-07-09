@@ -61,6 +61,9 @@ export default function ICChange() {
                 <span className="font-mono text-sm text-cw-muted">{result.bc_vendor_number}</span>
               </div>
               <Badge variant={result.status === 'active' ? 'green' : 'gray'}>{result.status}</Badge>
+              <Badge variant={result.record_type === 'customer' ? 'yellow' : 'gray'}>
+                {result.record_type === 'customer' ? 'Customer' : 'IC Vendor'}
+              </Badge>
             </div>
 
             <div className="grid grid-cols-2 gap-4 text-sm border-t border-cw-border pt-4">

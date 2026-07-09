@@ -52,6 +52,9 @@ const needed: [string, string][] = [
   ['ic_name', 'TEXT'],
   ['ic_id_number', 'TEXT'],
   ['customer_id', 'TEXT'],
+  ['am_keys', 'INTEGER DEFAULT 0'],
+  ['ccm_keys', 'INTEGER DEFAULT 0'],
+  ['contractor_keys', 'INTEGER DEFAULT 0'],
 ];
 
 const existing = cols();
@@ -59,6 +62,11 @@ for (const [col, def] of needed) {
   if (!existing.includes(col))
     db.exec(`ALTER TABLE accounts ADD COLUMN ${col} ${def}`);
 }
+
+// record_type column ('ic' | 'customer')
+if (!cols().includes('record_type'))
+  db.exec("ALTER TABLE accounts ADD COLUMN record_type TEXT DEFAULT 'ic'");
+db.exec("UPDATE accounts SET record_type='ic' WHERE record_type IS NULL");
 
 // ── Desktop-only local tables (offline sync + queued AI) ────────────────────
 // Created only in the Electron build so the Render schema stays untouched.

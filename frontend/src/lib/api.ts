@@ -44,6 +44,8 @@ export const getAccounts = (params?: Record<string, string>) => {
 export const getAccount = (id: number) => req<any>(`/accounts/${id}`);
 export const getAccountByCustomerId = (customerId: string) =>
   req<any>(`/accounts/by-customer-id/${encodeURIComponent(customerId)}`);
+export const getCustomerByBcNumber = (bcNumber: string) =>
+  req<any>(`/accounts/customer-lookup/${encodeURIComponent(bcNumber)}`);
 export const createAccount = (data: any) =>
   req<any>('/accounts', { method: 'POST', body: JSON.stringify(data) });
 export const updateAccount = (id: number, data: any) =>

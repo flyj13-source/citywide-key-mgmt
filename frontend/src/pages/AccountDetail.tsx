@@ -73,6 +73,9 @@ export default function AccountDetail() {
                 <span className="font-mono text-sm text-cw-muted">{account.bc_vendor_number}</span>
               )}
               <Badge variant={account.status === 'active' ? 'green' : 'gray'}>{account.status}</Badge>
+              <Badge variant={account.record_type === 'customer' ? 'yellow' : 'gray'}>
+                {account.record_type === 'customer' ? 'Customer' : 'IC Vendor'}
+              </Badge>
             </div>
           </div>
         </div>
@@ -87,6 +90,11 @@ export default function AccountDetail() {
             <MetricCard label="Key Cards" value={account.key_cards ?? 0} />
             <MetricCard label="Key Fobs" value={account.has_fob ?? 0} />
             <MetricCard label="Dispenser Keys" value={account.dispenser_keys ?? 0} />
+            {account.record_type === 'customer' && <>
+              <MetricCard label="AM Keys" value={account.am_keys ?? 0} />
+              <MetricCard label="CCM Keys" value={account.ccm_keys ?? 0} />
+              <MetricCard label="Contractor Keys" value={account.contractor_keys ?? 0} />
+            </>}
           </div>
         </div>
 

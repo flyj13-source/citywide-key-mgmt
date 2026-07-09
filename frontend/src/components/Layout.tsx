@@ -117,6 +117,7 @@ const mainNavItems = [
 
 const formsNavItems = [
   { path: '/ic-change', label: 'IC Change', icon: '✎' },
+  { path: '/customer-lookup', label: 'Customer Lookup', icon: '⊡' },
 ];
 
 function NavItem({ path, label, icon }: { path: string; label: string; icon: string }) {

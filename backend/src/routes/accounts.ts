@@ -6,7 +6,7 @@ import { encrypt } from '../lib/crypto';
 const router = Router();
 
 router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
-  const { search = '', status = '', page = '1', limit = '50' } = req.query as Record<string, string>;
+  const { search = '', status = '', type = 'all', page = '1', limit = '50' } = req.query as Record<string, string>;
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   let whereClauses = '1=1';
@@ -19,6 +19,11 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   if (status) {
     whereClauses += ' AND status = ?';
     params.push(status);
+  }
+  if (type === 'ic') {
+    whereClauses += " AND (record_type = 'ic' OR record_type IS NULL)";
+  } else if (type === 'customer') {
+    whereClauses += " AND record_type = 'customer'";
   }
 
   const countRow = db.prepare(`SELECT COUNT(*) as c FROM accounts WHERE ${whereClauses}`).get(...params) as any;
@@ -37,7 +42,7 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
     keys_yn, security_app_yn,
     metal_keys, key_cards, has_fob, dispenser_keys,
     lockbox_code, door_code, alarm_code, door_access_code,
-    notes, status,
+    notes, status, record_type,
   } = req.body;
 
   let door_enc: string | null = null, door_iv: string | null = null;
@@ -46,6 +51,8 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
   if (door_code) { const r = encrypt(door_code); door_enc = r.encrypted; door_iv = r.iv; }
   if (alarm_code) { const r = encrypt(alarm_code); alarm_enc = r.encrypted; alarm_iv = r.iv; }
   if (door_access_code) { const r = encrypt(door_access_code); da_enc = r.encrypted; da_iv = r.iv; }
+
+  const rtype = record_type === 'customer' ? 'customer' : 'ic';
 
   const result = db.prepare(`
     INSERT INTO accounts (
@@ -56,8 +63,8 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
       door_code_encrypted, door_code_iv,
       alarm_code_encrypted, alarm_code_iv,
       door_access_code_encrypted, door_access_code_iv,
-      notes, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      notes, status, record_type
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     ic_company_name, bc_vendor_number || null,
     keys_yn ? 1 : 0, security_app_yn ? 1 : 0,
@@ -66,19 +73,33 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
     door_enc, door_iv,
     alarm_enc, alarm_iv,
     da_enc, da_iv,
-    notes || null, status || 'active',
+    notes || null, status || 'active', rtype,
   );
 
   db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'account_created', ic_company_name, result.lastInsertRowid, req.manager!.name, JSON.stringify({ bc_vendor_number })
+    'account_created', ic_company_name, result.lastInsertRowid, req.manager!.name,
+    JSON.stringify({ bc_vendor_number, record_type: rtype })
   );
 
   res.status(201).json({ id: result.lastInsertRowid });
 });
 
+// IC-only lookup (original route — searches all types for backward compat)
 router.get('/by-customer-id/:vendorNumber', requireAuth, (req: AuthRequest, res: Response) => {
   const account = db.prepare('SELECT * FROM accounts WHERE bc_vendor_number = ?').get(req.params.vendorNumber) as any;
   if (!account) return res.status(404).json({ error: 'No account found' });
+  const assignments = db.prepare(
+    'SELECT * FROM key_assignments WHERE account_id = ? ORDER BY checked_out_at DESC LIMIT 20'
+  ).all(account.id);
+  res.json({ ...Object.assign({}, account), assignments: assignments.map((a) => Object.assign({}, a)) });
+});
+
+// Customer-only lookup
+router.get('/customer-lookup/:bcNumber', requireAuth, (req: AuthRequest, res: Response) => {
+  const account = db.prepare(
+    "SELECT * FROM accounts WHERE bc_vendor_number = ? AND record_type = 'customer'"
+  ).get(req.params.bcNumber) as any;
+  if (!account) return res.status(404).json({ error: 'No customer found' });
   const assignments = db.prepare(
     'SELECT * FROM key_assignments WHERE account_id = ? ORDER BY checked_out_at DESC LIMIT 20'
   ).all(account.id);

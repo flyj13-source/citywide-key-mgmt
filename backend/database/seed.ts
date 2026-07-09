@@ -14,6 +14,12 @@ db.exec('PRAGMA foreign_keys = ON');
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 db.exec(schema);
 
+// Idempotent migration: add record_type if not present
+const hasCols = (db.prepare('PRAGMA table_info(accounts)').all() as any[]).map((c: any) => c.name);
+if (!hasCols.includes('record_type'))
+  db.exec("ALTER TABLE accounts ADD COLUMN record_type TEXT DEFAULT 'ic'");
+db.exec("UPDATE accounts SET record_type='ic' WHERE record_type IS NULL");
+
 // ─── Manager (idempotent — never overwrite an existing password) ────────────
 const seedPassword = process.env.SEED_PASSWORD || 'demo1234';
 const existingManager = db.prepare('SELECT id FROM managers WHERE email = ?').get('cara@citywideboston.com');
@@ -99,8 +105,8 @@ const insertAccount = db.prepare(`
     lockbox_code,
     door_code_encrypted, door_code_iv,
     alarm_code_encrypted, alarm_code_iv,
-    notes, status
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+    notes, status, record_type
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
 `);
 
 let inserted = 0;
@@ -117,11 +123,76 @@ for (const a of accounts) {
     a.lockbox_code ?? null,
     door_enc, door_iv,
     alarm_enc, alarm_iv,
-    a.notes ?? null,
+    a.notes ?? null, 'ic',
   );
   inserted++;
 }
-console.log(`✓ Seeded ${inserted} IC vendor accounts (skipped existing)`);
+
+// ─── Customer demo records ──────────────────────────────────
+interface CustomerSeed extends AccountSeed {
+  record_type: 'customer';
+  am_keys?: number;
+  ccm_keys?: number;
+  contractor_keys?: number;
+}
+const customers: CustomerSeed[] = [
+  {
+    ic_company_name: 'DEMO MEDICAL CENTER',
+    bc_vendor_number: '02014200001',
+    keys_yn: 1, security_app_yn: 1,
+    metal_keys: 3, key_cards: 2, has_fob: 1,
+    dispenser_keys: 1, lockbox_code: '55',
+    door_code: '7890', alarm_code: null,
+    am_keys: 1, ccm_keys: 2, contractor_keys: 3,
+    notes: 'Demo customer record — medical facility',
+    record_type: 'customer',
+  },
+  {
+    ic_company_name: 'DEMO BANK BRANCH',
+    bc_vendor_number: '02014200002',
+    keys_yn: 1, security_app_yn: 0,
+    metal_keys: 1, key_cards: 0, has_fob: 0,
+    dispenser_keys: 0, lockbox_code: null,
+    door_code: null, alarm_code: '3456',
+    am_keys: 1, ccm_keys: 1, contractor_keys: 2,
+    notes: 'Demo customer record — bank branch',
+    record_type: 'customer',
+  },
+];
+
+let custInserted = 0;
+for (const c of customers) {
+  let door_enc: string | null = null, door_iv: string | null = null;
+  let alarm_enc: string | null = null, alarm_iv: string | null = null;
+  if (c.door_code) { const r = encrypt(c.door_code); door_enc = r.encrypted; door_iv = r.iv; }
+  if (c.alarm_code) { const r = encrypt(c.alarm_code); alarm_enc = r.encrypted; alarm_iv = r.iv; }
+
+  // Use a dedicated statement that includes am/ccm/contractor keys
+  const custStmt = db.prepare(`
+    INSERT OR IGNORE INTO accounts (
+      ic_company_name, bc_vendor_number,
+      keys_yn, security_app_yn,
+      metal_keys, key_cards, has_fob, dispenser_keys,
+      am_keys, ccm_keys, contractor_keys,
+      lockbox_code,
+      door_code_encrypted, door_code_iv,
+      alarm_code_encrypted, alarm_code_iv,
+      notes, status, record_type
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+  `);
+  const res = custStmt.run(
+    c.ic_company_name, c.bc_vendor_number ?? null,
+    c.keys_yn ?? 0, c.security_app_yn ?? 0,
+    c.metal_keys ?? 0, c.key_cards ?? 0, c.has_fob ?? 0, c.dispenser_keys ?? 0,
+    c.am_keys ?? 0, c.ccm_keys ?? 0, c.contractor_keys ?? 0,
+    c.lockbox_code ?? null,
+    door_enc, door_iv,
+    alarm_enc, alarm_iv,
+    c.notes ?? null, 'customer',
+  ) as { changes: number };
+  if (res.changes > 0) custInserted++;
+}
+console.log(`✓ Seeded ${inserted} IC vendor accounts, ${custInserted} customer accounts (skipped existing)`);
 
 if (inserted > 0) {
   db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
