@@ -2,11 +2,12 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import fs from 'fs';
 
-// Desktop builds override the data directory (→ %APPDATA%/CityWideKMS) and the
-// schema location (→ packaged resources) via env vars. On Render/local dev these
-// are unset and we fall back to the repo-relative ./database folder.
-const dbDir = process.env.CITYWIDE_DB_DIR || path.join(process.cwd(), 'database');
-const DB_PATH = path.join(dbDir, 'citywide.db');
+// DB_PATH env var → /data/citywide.db on Render persistent disk
+// CITYWIDE_DB_DIR → Electron desktop (%APPDATA%/CityWideKMS)
+// default → ./database/citywide.db for local dev
+const DB_PATH = process.env.DB_PATH ||
+  path.join(process.env.CITYWIDE_DB_DIR || path.join(process.cwd(), 'database'), 'citywide.db');
+const dbDir = path.dirname(DB_PATH);
 
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });

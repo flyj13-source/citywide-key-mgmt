@@ -5,7 +5,11 @@ import path from 'path';
 import fs from 'fs';
 import { encrypt } from '../src/lib/crypto';
 
-const DB_PATH = path.join(__dirname, 'citywide.db');
+// Use the same DB_PATH resolution as db.ts so seed targets the persistent disk on Render
+const DB_PATH = process.env.DB_PATH ||
+  path.join(process.env.CITYWIDE_DB_DIR || path.join(__dirname, '..', 'database'), 'citywide.db');
+const dbDir = path.dirname(DB_PATH);
+if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
 const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL');
