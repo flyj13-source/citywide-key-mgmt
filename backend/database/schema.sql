@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ic_company_name TEXT NOT NULL,
-  bc_vendor_number TEXT UNIQUE,
+  bc_vendor_number TEXT,
   keys_yn INTEGER DEFAULT 0,
   security_app_yn INTEGER DEFAULT 0,
   metal_keys INTEGER DEFAULT 0,

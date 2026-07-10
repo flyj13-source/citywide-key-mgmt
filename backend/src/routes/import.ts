@@ -182,7 +182,7 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
 
   let inserted = 0;
   let skipped = 0;
-  const rowErrors: Array<{ row: number; message: string }> = [];
+  const rowErrors: Array<{ row: number; message: string; data?: any }> = [];
 
   // Wrap in a single explicit transaction — all rows commit in one WAL write.
   // node:sqlite has no .transaction() helper so we use BEGIN/COMMIT manually.
@@ -212,7 +212,15 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
         if (r.bc_client_number) existingBcClient.add(r.bc_client_number);
         inserted++;
       } catch (e: any) {
-        rowErrors.push({ row: r._row ?? 0, message: e.message });
+        const errMsg = (e as Error).message ?? String(e);
+        if (rowErrors.length < 10) {
+          rowErrors.push({
+            row: r._row ?? 0,
+            message: errMsg,
+            data: { ic_company_name: r.ic_company_name, bc_client_number: r.bc_client_number, bc_vendor_number: r.bc_vendor_number },
+          });
+        }
+        console.error(`[import] row ${r._row ?? '?'} failed: ${errMsg} — client="${r.ic_company_name}" bc_client="${r.bc_client_number}" bc_vendor="${r.bc_vendor_number}"`);
         skipped++;
       }
     }
