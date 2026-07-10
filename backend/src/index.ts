@@ -33,7 +33,7 @@ const allowedOrigins = [
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
 ];
 app.use(cors({ origin: allowedOrigins, credentials: true }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
 app.use(morgan('dev'));
 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

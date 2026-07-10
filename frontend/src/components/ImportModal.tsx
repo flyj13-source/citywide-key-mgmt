@@ -12,7 +12,7 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<ImportResult | null>(null);
-  const [summary, setSummary] = useState<{ inserted: number; skipped: number } | null>(null);
+  const [summary, setSummary] = useState<{ inserted: number; skipped: number; errors?: any[] } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = async (file: File) => {
@@ -117,8 +117,8 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
                 <tr className="bg-cw-black text-white">
                   <th className="px-3 py-2 text-left font-medium w-8"></th>
                   <th className="px-3 py-2 text-left font-medium">Row</th>
-                  <th className="px-3 py-2 text-left font-medium">IC Company Name</th>
-                  <th className="px-3 py-2 text-left font-medium">BC Vendor #</th>
+                  <th className="px-3 py-2 text-left font-medium">Client Name</th>
+                  <th className="px-3 py-2 text-left font-medium">BC Client #</th>
                   <th className="px-3 py-2 text-left font-medium">Keys</th>
                   <th className="px-3 py-2 text-left font-medium">Status / Note</th>
                 </tr>
@@ -129,7 +129,7 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
                     <td className="px-3 py-1.5 text-center">{statusIcon('valid')}</td>
                     <td className="px-3 py-1.5 text-cw-muted">{r._row}</td>
                     <td className="px-3 py-1.5 font-medium">{r.ic_company_name}</td>
-                    <td className="px-3 py-1.5 font-mono text-cw-muted">{r.bc_vendor_number || '—'}</td>
+                    <td className="px-3 py-1.5 font-mono text-cw-muted">{r.bc_client_number || '—'}</td>
                     <td className="px-3 py-1.5 text-cw-muted">{r.metal_keys || 0}M/{r.key_cards || 0}C</td>
                     <td className="px-3 py-1.5 text-green-700 text-xs">Valid</td>
                   </tr>
@@ -139,7 +139,7 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
                     <td className="px-3 py-1.5 text-center">{statusIcon('warning')}</td>
                     <td className="px-3 py-1.5 text-cw-muted">{w.row}</td>
                     <td className="px-3 py-1.5 font-medium">{w.data.ic_company_name}</td>
-                    <td className="px-3 py-1.5 font-mono text-cw-muted">{w.data.bc_vendor_number || '—'}</td>
+                    <td className="px-3 py-1.5 font-mono text-cw-muted">{w.data.bc_client_number || '—'}</td>
                     <td className="px-3 py-1.5 text-cw-muted">{w.data.metal_keys || 0}M/{w.data.key_cards || 0}C</td>
                     <td className="px-3 py-1.5 text-amber-600 text-xs max-w-[200px] truncate">{w.message}</td>
                   </tr>
@@ -178,11 +178,14 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
       {/* Step 3 — Done */}
       {step === 'done' && summary && (
         <div className="space-y-4 text-center py-4">
-          <div className="text-4xl">✅</div>
+          <div className="text-4xl">{summary.inserted > 0 ? '✅' : '⚠️'}</div>
           <div>
             <div className="text-lg font-bold text-cw-text">{summary.inserted} account{summary.inserted !== 1 ? 's' : ''} imported</div>
             {summary.skipped > 0 && (
               <div className="text-sm text-cw-muted mt-1">{summary.skipped} skipped (duplicates or invalid)</div>
+            )}
+            {(summary.errors?.length ?? 0) > 0 && (
+              <div className="text-sm text-red-600 mt-1">{summary.errors!.length} row{summary.errors!.length !== 1 ? 's' : ''} had insert errors</div>
             )}
           </div>
           <div className="flex gap-2 justify-center pt-2">

@@ -6,7 +6,7 @@ import db from '../lib/db';
 import { encrypt } from '../lib/crypto';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 // ── Column name → field mapping (case-insensitive, trimmed) ─────────────────
 const COLUMN_MAP: Record<string, string> = {
@@ -159,7 +159,7 @@ router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Res
 
 // ── POST /api/accounts/import/confirm — insert validated rows ────────────────
 router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
-  const { rows } = req.body as { rows: ParsedRow[] };
+  const { rows } = req.body as { rows: Array<ParsedRow & { _row?: number }> };
   if (!Array.isArray(rows) || rows.length === 0) {
     return res.status(400).json({ error: 'No rows to import' });
   }
@@ -182,39 +182,53 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
 
   let inserted = 0;
   let skipped = 0;
+  const rowErrors: Array<{ row: number; message: string }> = [];
 
-  for (const r of rows) {
-    if (!r.ic_company_name) { skipped++; continue; }
-    if (r.bc_client_number && existingBcClient.has(r.bc_client_number)) { skipped++; continue; }
+  // Wrap in a single explicit transaction — all rows commit in one WAL write.
+  // node:sqlite has no .transaction() helper so we use BEGIN/COMMIT manually.
+  // Individual row errors are caught and collected; they don't abort the batch.
+  const t0 = Date.now();
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      if (!r.ic_company_name) { skipped++; continue; }
+      if (r.bc_client_number && existingBcClient.has(r.bc_client_number)) { skipped++; continue; }
 
-    let door_enc: string | null = null, door_iv: string | null = null;
-    let alarm_enc: string | null = null, alarm_iv: string | null = null;
-    if (r.door_code) { const e = encrypt(r.door_code); door_enc = e.encrypted; door_iv = e.iv; }
-    if (r.alarm_code) { const e = encrypt(r.alarm_code); alarm_enc = e.encrypted; alarm_iv = e.iv; }
+      let door_enc: string | null = null, door_iv: string | null = null;
+      let alarm_enc: string | null = null, alarm_iv: string | null = null;
+      if (r.door_code) { const e = encrypt(r.door_code); door_enc = e.encrypted; door_iv = e.iv; }
+      if (r.alarm_code) { const e = encrypt(r.alarm_code); alarm_enc = e.encrypted; alarm_iv = e.iv; }
 
-    try {
-      insert.run(
-        r.ic_company_name, r.bc_client_number || null, r.bc_vendor_number || null,
-        r.ic_name || null, r.account_manager || null, r.ccm_manager || null,
-        r.keys_yn, r.security_app_yn,
-        r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys,
-        r.lockbox_code || null,
-        door_enc, door_iv, alarm_enc, alarm_iv,
-        r.notes || null, r.status || 'active'
-      );
-      if (r.bc_client_number) existingBcClient.add(r.bc_client_number);
-      inserted++;
-    } catch {
-      skipped++;
+      try {
+        insert.run(
+          r.ic_company_name, r.bc_client_number || null, r.bc_vendor_number || null,
+          r.ic_name || null, r.account_manager || null, r.ccm_manager || null,
+          r.keys_yn, r.security_app_yn,
+          r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys,
+          r.lockbox_code || null,
+          door_enc, door_iv, alarm_enc, alarm_iv,
+          r.notes || null, r.status || 'active'
+        );
+        if (r.bc_client_number) existingBcClient.add(r.bc_client_number);
+        inserted++;
+      } catch (e: any) {
+        rowErrors.push({ row: r._row ?? 0, message: e.message });
+        skipped++;
+      }
     }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
   }
+  const elapsed = Date.now() - t0;
 
   db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
     'bulk_import', null, null, req.manager!.name,
-    JSON.stringify({ inserted, skipped, total: rows.length })
+    JSON.stringify({ inserted, skipped, errors: rowErrors.length, total: rows.length, elapsed_ms: elapsed })
   );
 
-  res.json({ inserted, skipped });
+  res.json({ inserted, skipped, errors: rowErrors });
 });
 
 // ── GET /api/accounts/import/template — download blank .xlsx ────────────────
