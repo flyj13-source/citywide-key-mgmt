@@ -4,6 +4,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import path from 'path';
 
+import { autoSeedIfEmpty } from './lib/autoSeed';
 import authRouter from './routes/auth';
 import importRouter from './routes/import';
 import accountsRouter from './routes/accounts';
@@ -70,6 +71,15 @@ app.listen(PORT, () => {
   console.log(`\n🔑  City Wide Boston Key Management API`);
   console.log(`    Server running on port ${PORT}`);
   console.log(`    Health: http://localhost:${PORT}/api/health`);
+
+  // Seed runs AFTER the server is listening and the disk is mounted.
+  // Guards inside autoSeedIfEmpty() are idempotent — safe on every restart.
+  try {
+    autoSeedIfEmpty();
+  } catch (err) {
+    console.error('[seed] autoSeedIfEmpty failed:', err);
+  }
+
   console.log(`    Login: cara@citywideboston.com / demo1234\n`);
 });
 

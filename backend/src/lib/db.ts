@@ -13,6 +13,9 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
+// Diagnostic: printed on every boot so Render logs confirm which file is live
+console.log(`[db] DB_PATH=${DB_PATH} exists=${fs.existsSync(DB_PATH)} DB_PATH_env=${process.env.DB_PATH ?? '(unset — using default)'}`);
+
 const db = new DatabaseSync(DB_PATH);
 
 db.exec('PRAGMA journal_mode = WAL');
