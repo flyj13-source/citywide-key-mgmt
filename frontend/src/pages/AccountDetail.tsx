@@ -69,8 +69,11 @@ export default function AccountDetail() {
             <button onClick={() => navigate('/registry')} className="text-xs text-cw-muted hover:text-cw-text mb-2 block">← Key Registry</button>
             <h1 className="text-xl font-bold text-[#1a1a1a]">{account.ic_company_name}</h1>
             <div className="flex items-center gap-3 mt-1">
+              {account.bc_client_number && (
+                <span className="font-mono text-sm text-cw-muted">BC# {account.bc_client_number}</span>
+              )}
               {account.bc_vendor_number && (
-                <span className="font-mono text-sm text-cw-muted">{account.bc_vendor_number}</span>
+                <span className="font-mono text-sm text-cw-muted">Vendor# {account.bc_vendor_number}</span>
               )}
               <Badge variant={account.status === 'active' ? 'green' : 'gray'}>{account.status}</Badge>
               <Badge variant={account.record_type === 'customer' ? 'yellow' : 'gray'}>
@@ -97,6 +100,48 @@ export default function AccountDetail() {
             </>}
           </div>
         </div>
+
+        {/* Key Holders by Role */}
+        {account.record_type === 'customer' && (account.am_keys > 0 || account.ccm_keys > 0 || account.contractor_keys > 0 || account.ic_name || account.account_manager || account.ccm_manager) && (
+          <div className="card p-4">
+            <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">Key Holders by Role</h2>
+            <div className="divide-y divide-gray-100 text-sm">
+              {(account.ic_name || account.contractor_keys > 0) && (
+                <div className="flex items-center justify-between py-2">
+                  <div>
+                    <span className="font-medium text-cw-text">Independent Contractor</span>
+                    {account.ic_name && <span className="ml-2 text-cw-muted text-xs">{account.ic_name}</span>}
+                  </div>
+                  <span className={`font-semibold ${account.contractor_keys > 0 ? 'text-[#1a1a1a]' : 'text-gray-300'}`}>
+                    {account.contractor_keys > 0 ? `${account.contractor_keys} key${account.contractor_keys !== 1 ? 's' : ''}` : '—'}
+                  </span>
+                </div>
+              )}
+              {(account.account_manager || account.am_keys > 0) && (
+                <div className="flex items-center justify-between py-2">
+                  <div>
+                    <span className="font-medium text-cw-text">Account Manager</span>
+                    {account.account_manager && <span className="ml-2 text-cw-muted text-xs">{account.account_manager}</span>}
+                  </div>
+                  <span className={`font-semibold ${account.am_keys > 0 ? 'text-[#1a1a1a]' : 'text-gray-300'}`}>
+                    {account.am_keys > 0 ? `${account.am_keys} key${account.am_keys !== 1 ? 's' : ''}` : '—'}
+                  </span>
+                </div>
+              )}
+              {(account.ccm_manager || account.ccm_keys > 0) && (
+                <div className="flex items-center justify-between py-2">
+                  <div>
+                    <span className="font-medium text-cw-text">Contract Compliance Mgr</span>
+                    {account.ccm_manager && <span className="ml-2 text-cw-muted text-xs">{account.ccm_manager}</span>}
+                  </div>
+                  <span className={`font-semibold ${account.ccm_keys > 0 ? 'text-[#1a1a1a]' : 'text-gray-300'}`}>
+                    {account.ccm_keys > 0 ? `${account.ccm_keys} key${account.ccm_keys !== 1 ? 's' : ''}` : '—'}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Access Codes */}
         <div className="card p-4">

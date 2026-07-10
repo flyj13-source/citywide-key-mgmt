@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Badge from '../components/Badge';
-import { getAccounts, getAssignments, getOverdue, getStaff, getAudit } from '../lib/api';
+import { getAccounts, getAssignments, getOverdue, getStaff, getAudit, getKeyHolderStats } from '../lib/api';
 
 interface Metric { label: string; value: string | number; sub?: string; color?: string; }
 
@@ -23,6 +23,7 @@ export default function Dashboard() {
   const [overdueList, setOverdueList] = useState<any[]>([]);
   const [staffCount, setStaffCount] = useState(0);
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
+  const [keyStats, setKeyStats] = useState({ am_total: 0, ccm_total: 0, contractor_total: 0 });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -33,13 +34,15 @@ export default function Dashboard() {
       getOverdue(),
       getStaff(),
       getAudit({ limit: '10' }),
-    ]).then(([ic, cust, asgn, overdue, staff, audit]) => {
+      getKeyHolderStats(),
+    ]).then(([ic, cust, asgn, overdue, staff, audit, stats]) => {
       setIcCount(ic.total);
       setCustomerCount(cust.total);
       setActiveAssignments((asgn as any).total);
       setOverdueList(overdue);
       setStaffCount(staff.length);
       setRecentLogs(audit.logs);
+      setKeyStats(stats);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -86,6 +89,23 @@ export default function Dashboard() {
             color={overdueList.length > 0 ? 'text-red-600' : 'text-green-700'}
           />
           <MetricCard label="Staff Key Holders" value={staffCount} sub="active staff" />
+        </div>
+
+        {/* Keys by Holder */}
+        <div className="card p-5">
+          <h2 className="font-semibold text-sm mb-3 text-cw-text">Keys by Holder Role</h2>
+          <div className="grid grid-cols-3 gap-4">
+            {[
+              { label: 'IC / Contractor Keys', value: keyStats.contractor_total },
+              { label: 'Account Manager Keys', value: keyStats.am_total },
+              { label: 'CCM Keys', value: keyStats.ccm_total },
+            ].map(({ label, value }) => (
+              <div key={label} className="text-center">
+                <div className="text-2xl font-bold text-[#1a1a1a]">{value}</div>
+                <div className="text-xs text-cw-muted mt-1">{label}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

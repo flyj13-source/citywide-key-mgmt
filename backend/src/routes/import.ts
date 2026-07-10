@@ -21,7 +21,21 @@ const COLUMN_MAP: Record<string, string> = {
   'vendor number': 'bc_vendor_number',
   'account manager': 'account_manager',
   'contract compliance manager': 'ccm_manager',
+  'compliance manager': 'ccm_manager',
   'ccm': 'ccm_manager',
+  // Role key counts (Y/yes treated as 1, numeric values used directly)
+  'am key': 'am_keys',
+  'am keys': 'am_keys',
+  'am key(s)': 'am_keys',
+  'ccm key': 'ccm_keys',
+  'ccm keys': 'ccm_keys',
+  'ccm key(s)': 'ccm_keys',
+  'contractor key': 'contractor_keys',
+  'contractor keys': 'contractor_keys',
+  'contractor key(s)': 'contractor_keys',
+  'ic key': 'contractor_keys',
+  'ic keys': 'contractor_keys',
+  'ic key(s)': 'contractor_keys',
   // Shared columns
   'keys y/n': 'keys_yn',
   'keys': 'keys_yn',
@@ -49,6 +63,15 @@ function parseYN(val: any): number {
 
 function parseNum(val: any): number {
   const n = parseInt(String(val ?? '0').trim(), 10);
+  return isNaN(n) ? 0 : n;
+}
+
+// Handles both "Y"/"yes" (→1) and numeric counts
+function parseCount(val: any): number {
+  if (val === null || val === undefined || val === '') return 0;
+  const s = String(val).trim().toLowerCase();
+  if (['y', 'yes', 'true'].includes(s)) return 1;
+  const n = parseInt(s, 10);
   return isNaN(n) ? 0 : n;
 }
 
@@ -86,6 +109,9 @@ interface ParsedRow {
   key_cards: number;
   has_fob: number;
   dispenser_keys: number;
+  am_keys: number;
+  ccm_keys: number;
+  contractor_keys: number;
   lockbox_code: string;
   door_code: string;
   alarm_code: string;
@@ -107,6 +133,9 @@ function normalizeRow(raw: Record<string, any>): ParsedRow {
     key_cards: parseNum(raw.key_cards),
     has_fob: parseYN(raw.has_fob),
     dispenser_keys: parseNum(raw.dispenser_keys),
+    am_keys: parseCount(raw.am_keys),
+    ccm_keys: parseCount(raw.ccm_keys),
+    contractor_keys: parseCount(raw.contractor_keys),
     lockbox_code: String(raw.lockbox_code ?? '').trim(),
     door_code: String(raw.door_code ?? '').trim(),
     alarm_code: String(raw.alarm_code ?? '').trim(),
@@ -147,7 +176,7 @@ router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Res
     }
 
     if (data.bc_client_number && existingBcClient.has(data.bc_client_number)) {
-      warnings.push({ row, data, message: `BC Client Number "${data.bc_client_number}" already exists — will be skipped on confirm` });
+      warnings.push({ row, data, message: `BC Client Number "${data.bc_client_number}" already exists — will be skipped on confirm (use upsert mode to backfill)` });
       return;
     }
 
@@ -158,11 +187,15 @@ router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Res
 });
 
 // ── POST /api/accounts/import/confirm — insert validated rows ────────────────
+// mode='upsert' (body field): for rows whose bc_client_number already exists,
+// UPDATE only the fields that are currently NULL or empty rather than skipping.
 router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
-  const { rows } = req.body as { rows: Array<ParsedRow & { _row?: number }> };
+  const { rows, mode } = req.body as { rows: Array<ParsedRow & { _row?: number }>; mode?: string };
   if (!Array.isArray(rows) || rows.length === 0) {
     return res.status(400).json({ error: 'No rows to import' });
   }
+
+  const upsert = mode === 'upsert';
 
   const existingBcClient = new Set(
     (db.prepare('SELECT bc_client_number FROM accounts WHERE bc_client_number IS NOT NULL').all() as any[])
@@ -174,13 +207,37 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
       ic_company_name, bc_client_number, bc_vendor_number,
       ic_name, account_manager, ccm_manager,
       keys_yn, security_app_yn,
-      metal_keys, key_cards, has_fob, dispenser_keys, lockbox_code,
+      metal_keys, key_cards, has_fob, dispenser_keys,
+      am_keys, ccm_keys, contractor_keys,
+      lockbox_code,
       door_code_encrypted, door_code_iv, alarm_code_encrypted, alarm_code_iv,
       notes, status, record_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer')
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer')
+  `);
+
+  // Upsert UPDATE: fills NULL/blank text fields and zero numeric fields only
+  const upsertUpdate = db.prepare(`
+    UPDATE accounts SET
+      ic_name           = CASE WHEN (ic_name IS NULL OR ic_name = '')           THEN ? ELSE ic_name END,
+      bc_vendor_number  = CASE WHEN (bc_vendor_number IS NULL OR bc_vendor_number = '') THEN ? ELSE bc_vendor_number END,
+      account_manager   = CASE WHEN (account_manager IS NULL OR account_manager = '')  THEN ? ELSE account_manager END,
+      ccm_manager       = CASE WHEN (ccm_manager IS NULL OR ccm_manager = '')          THEN ? ELSE ccm_manager END,
+      keys_yn           = CASE WHEN keys_yn = 0           THEN ? ELSE keys_yn END,
+      security_app_yn   = CASE WHEN security_app_yn = 0   THEN ? ELSE security_app_yn END,
+      metal_keys        = CASE WHEN metal_keys = 0        THEN ? ELSE metal_keys END,
+      key_cards         = CASE WHEN key_cards = 0         THEN ? ELSE key_cards END,
+      has_fob           = CASE WHEN has_fob = 0           THEN ? ELSE has_fob END,
+      dispenser_keys    = CASE WHEN dispenser_keys = 0    THEN ? ELSE dispenser_keys END,
+      am_keys           = CASE WHEN am_keys = 0           THEN ? ELSE am_keys END,
+      ccm_keys          = CASE WHEN ccm_keys = 0          THEN ? ELSE ccm_keys END,
+      contractor_keys   = CASE WHEN contractor_keys = 0   THEN ? ELSE contractor_keys END,
+      lockbox_code      = CASE WHEN (lockbox_code IS NULL OR lockbox_code = '')  THEN ? ELSE lockbox_code END,
+      notes             = CASE WHEN (notes IS NULL OR notes = '')                THEN ? ELSE notes END
+    WHERE bc_client_number = ? AND record_type = 'customer'
   `);
 
   let inserted = 0;
+  let updated = 0;
   let skipped = 0;
   const rowErrors: Array<{ row: number; message: string; data?: any }> = [];
 
@@ -192,7 +249,10 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
   try {
     for (const r of rows) {
       if (!r.ic_company_name) { skipped++; continue; }
-      if (r.bc_client_number && existingBcClient.has(r.bc_client_number)) { skipped++; continue; }
+
+      const alreadyExists = r.bc_client_number && existingBcClient.has(r.bc_client_number);
+
+      if (alreadyExists && !upsert) { skipped++; continue; }
 
       let door_enc: string | null = null, door_iv: string | null = null;
       let alarm_enc: string | null = null, alarm_iv: string | null = null;
@@ -200,17 +260,31 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
       if (r.alarm_code) { const e = encrypt(r.alarm_code); alarm_enc = e.encrypted; alarm_iv = e.iv; }
 
       try {
-        insert.run(
-          r.ic_company_name, r.bc_client_number || null, r.bc_vendor_number || null,
-          r.ic_name || null, r.account_manager || null, r.ccm_manager || null,
-          r.keys_yn, r.security_app_yn,
-          r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys,
-          r.lockbox_code || null,
-          door_enc, door_iv, alarm_enc, alarm_iv,
-          r.notes || null, r.status || 'active'
-        );
-        if (r.bc_client_number) existingBcClient.add(r.bc_client_number);
-        inserted++;
+        if (alreadyExists && upsert) {
+          upsertUpdate.run(
+            r.ic_name || null, r.bc_vendor_number || null,
+            r.account_manager || null, r.ccm_manager || null,
+            r.keys_yn, r.security_app_yn,
+            r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys,
+            r.am_keys, r.ccm_keys, r.contractor_keys,
+            r.lockbox_code || null, r.notes || null,
+            r.bc_client_number,
+          );
+          updated++;
+        } else {
+          insert.run(
+            r.ic_company_name, r.bc_client_number || null, r.bc_vendor_number || null,
+            r.ic_name || null, r.account_manager || null, r.ccm_manager || null,
+            r.keys_yn, r.security_app_yn,
+            r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys,
+            r.am_keys ?? 0, r.ccm_keys ?? 0, r.contractor_keys ?? 0,
+            r.lockbox_code || null,
+            door_enc, door_iv, alarm_enc, alarm_iv,
+            r.notes || null, r.status || 'active'
+          );
+          if (r.bc_client_number) existingBcClient.add(r.bc_client_number);
+          inserted++;
+        }
       } catch (e: any) {
         const errMsg = (e as Error).message ?? String(e);
         if (rowErrors.length < 10) {
@@ -220,7 +294,7 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
             data: { ic_company_name: r.ic_company_name, bc_client_number: r.bc_client_number, bc_vendor_number: r.bc_vendor_number },
           });
         }
-        console.error(`[import] row ${r._row ?? '?'} failed: ${errMsg} — client="${r.ic_company_name}" bc_client="${r.bc_client_number}" bc_vendor="${r.bc_vendor_number}"`);
+        console.error(`[import] row ${r._row ?? '?'} failed: ${errMsg} — client="${r.ic_company_name}" bc_client="${r.bc_client_number}"`);
         skipped++;
       }
     }
@@ -233,10 +307,10 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
 
   db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
     'bulk_import', null, null, req.manager!.name,
-    JSON.stringify({ inserted, skipped, errors: rowErrors.length, total: rows.length, elapsed_ms: elapsed })
+    JSON.stringify({ inserted, updated, skipped, errors: rowErrors.length, total: rows.length, elapsed_ms: elapsed, mode: mode ?? 'insert' })
   );
 
-  res.json({ inserted, skipped, errors: rowErrors });
+  res.json({ inserted, updated, skipped, errors: rowErrors });
 });
 
 // ── GET /api/accounts/import/template — download blank .xlsx ────────────────
@@ -246,8 +320,9 @@ router.get('/template', requireAuth, (_req: AuthRequest, res: Response) => {
     'Client Name', 'BC Client Number', 'Independent Contractor', 'BC Vendor Number',
     'Account Manager', 'Contract Compliance Manager',
     'Keys Y/N', 'Security App Y/N',
-    'Metal Keys', 'Key Cards', 'Key Fobs', 'Dispenser Key', 'Lockbox Code',
-    'Door Code', 'Alarm Code', 'Notes',
+    'Metal Keys', 'Key Cards', 'Key Fobs', 'Dispenser Key',
+    'AM Key', 'CCM Key', 'Contractor Key',
+    'Lockbox Code', 'Door Code', 'Alarm Code', 'Notes',
   ];
   const ws = XLSX.utils.aoa_to_sheet([headers, []]);
   ws['!cols'] = headers.map((h) => ({ wch: Math.max(h.length + 4, 16) }));

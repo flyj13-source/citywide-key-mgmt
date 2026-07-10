@@ -12,7 +12,8 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<ImportResult | null>(null);
-  const [summary, setSummary] = useState<{ inserted: number; skipped: number; errors?: any[] } | null>(null);
+  const [upsertMode, setUpsertMode] = useState(false);
+  const [summary, setSummary] = useState<{ inserted: number; updated?: number; skipped: number; errors?: any[] } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = async (file: File) => {
@@ -43,7 +44,8 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
     if (!result) return;
     setLoading(true); setError('');
     try {
-      const res = await confirmImport(result.valid);
+      const rows = upsertMode ? [...result.valid, ...result.warnings.map(w => ({ ...w.data, _row: w.row }))] : result.valid;
+      const res = await confirmImport(rows, upsertMode ? 'upsert' : 'insert');
       setSummary(res);
       setStep('done');
     } catch (e: any) { setError(e.message); }
@@ -158,17 +160,31 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
             </table>
           </div>
 
+          {result.warnings.length > 0 && (
+            <label className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={upsertMode}
+                onChange={(e) => setUpsertMode(e.target.checked)}
+                className="accent-[#C0272D]"
+              />
+              Also update {result.warnings.length} existing record{result.warnings.length !== 1 ? 's' : ''} — fills blank fields only, won't overwrite existing data
+            </label>
+          )}
+
           {error && <div className="text-sm text-red-600">{error}</div>}
 
           <div className="flex gap-2 pt-1">
             <button
               onClick={handleConfirm}
-              disabled={loading || result.valid.length === 0}
+              disabled={loading || (result.valid.length === 0 && !upsertMode)}
               className="btn-primary"
             >
-              {loading ? 'Importing…' : `Import ${result.valid.length} valid account${result.valid.length !== 1 ? 's' : ''}`}
+              {loading ? 'Importing…' : upsertMode
+                ? `Import ${result.valid.length} + update ${result.warnings.length}`
+                : `Import ${result.valid.length} valid account${result.valid.length !== 1 ? 's' : ''}`}
             </button>
-            <button onClick={() => { setStep('upload'); setResult(null); setError(''); }} className="btn-secondary">
+            <button onClick={() => { setStep('upload'); setResult(null); setError(''); setUpsertMode(false); }} className="btn-secondary">
               ← Back
             </button>
           </div>
@@ -181,6 +197,9 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
           <div className="text-4xl">{summary.inserted > 0 ? '✅' : '⚠️'}</div>
           <div>
             <div className="text-lg font-bold text-cw-text">{summary.inserted} account{summary.inserted !== 1 ? 's' : ''} imported</div>
+            {(summary.updated ?? 0) > 0 && (
+              <div className="text-sm text-cw-muted mt-1">{summary.updated} existing record{summary.updated !== 1 ? 's' : ''} updated</div>
+            )}
             {summary.skipped > 0 && (
               <div className="text-sm text-cw-muted mt-1">{summary.skipped} skipped (duplicates or invalid)</div>
             )}

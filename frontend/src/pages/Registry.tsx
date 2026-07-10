@@ -314,8 +314,8 @@ export default function Registry() {
     { key: 'all', label: `All (${counts.all})` },
   ];
 
-  // col counts: customer=17 (16 data + edit), ic=14, all=15
-  const colSpan = tab === 'customer' ? 17 : tab === 'all' ? 15 : 14;
+  // col counts: customer=20 (19 data + edit), ic=14, all=15
+  const colSpan = tab === 'customer' ? 20 : tab === 'all' ? 15 : 14;
 
   return (
     <Layout>
@@ -392,6 +392,11 @@ export default function Registry() {
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Cards</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Fobs</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Dispenser Key</th>
+                {tab === 'customer' && <>
+                  <th className="text-center px-3 py-3 font-medium whitespace-nowrap">IC Keys</th>
+                  <th className="text-center px-3 py-3 font-medium whitespace-nowrap">AM Keys</th>
+                  <th className="text-center px-3 py-3 font-medium whitespace-nowrap">CCM Keys</th>
+                </>}
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Lockbox Code</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Door Code</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Alarm Code</th>
@@ -438,6 +443,11 @@ export default function Registry() {
                     <td className="px-3 py-3 text-center"><CountBadge value={a.key_cards} /></td>
                     <td className="px-3 py-3 text-center"><CountBadge value={a.has_fob} /></td>
                     <td className="px-3 py-3 text-center"><CountBadge value={a.dispenser_keys} /></td>
+                    {tab === 'customer' && <>
+                      <td className="px-3 py-3 text-center"><CountBadge value={a.contractor_keys} /></td>
+                      <td className="px-3 py-3 text-center"><CountBadge value={a.am_keys} /></td>
+                      <td className="px-3 py-3 text-center"><CountBadge value={a.ccm_keys} /></td>
+                    </>}
                     <td className="px-3 py-3 text-center text-xs font-mono text-gray-600">{a.lockbox_code || '—'}</td>
                     <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                       <RevealCell accountId={a.id} type="door" hasCode={!!a.door_code_encrypted} />

@@ -67,6 +67,8 @@ export const getAccounts = (params?: Record<string, string>) => {
   return req<{ accounts: any[]; total: number }>(`/accounts${q}`);
 };
 export const getAccount = (id: number) => req<any>(`/accounts/${id}`);
+export const getKeyHolderStats = () =>
+  req<{ am_total: number; ccm_total: number; contractor_total: number }>('/accounts/key-holder-stats');
 export const getAccountByCustomerId = (customerId: string) =>
   req<any>(`/accounts/by-customer-id/${encodeURIComponent(customerId)}`);
 export const getCustomerByBcNumber = (bcNumber: string) =>
@@ -156,9 +158,9 @@ export const previewImport = async (file: File) => {
   return res.json() as Promise<{ valid: any[]; warnings: any[]; errors: any[]; total: number }>;
 };
 
-export const confirmImport = (rows: any[]) =>
-  req<{ inserted: number; skipped: number }>('/accounts/import/confirm', {
-    method: 'POST', body: JSON.stringify({ rows }),
+export const confirmImport = (rows: any[], mode?: 'insert' | 'upsert') =>
+  req<{ inserted: number; updated?: number; skipped: number; errors?: any[] }>('/accounts/import/confirm', {
+    method: 'POST', body: JSON.stringify({ rows, mode }),
   });
 
 export const downloadImportTemplate = async () => {

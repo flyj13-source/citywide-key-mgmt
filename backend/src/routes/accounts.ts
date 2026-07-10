@@ -112,6 +112,19 @@ router.get('/customer-lookup/:bcNumber', requireAuth, (req: AuthRequest, res: Re
   res.json({ ...Object.assign({}, account), assignments: assignments.map((a) => Object.assign({}, a)) });
 });
 
+// Key-holder stats for dashboard card
+router.get('/key-holder-stats', requireAuth, (_req: AuthRequest, res: Response) => {
+  const row = db.prepare(`
+    SELECT
+      COALESCE(SUM(am_keys), 0)          AS am_total,
+      COALESCE(SUM(ccm_keys), 0)         AS ccm_total,
+      COALESCE(SUM(contractor_keys), 0)  AS contractor_total
+    FROM accounts WHERE record_type = 'customer'
+  `).get() as any;
+  const r = Object.assign({}, row);
+  res.json({ am_total: r.am_total, ccm_total: r.ccm_total, contractor_total: r.contractor_total });
+});
+
 router.get('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) as any;
   if (!account) return res.status(404).json({ error: 'Not found' });
