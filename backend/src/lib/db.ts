@@ -67,6 +67,28 @@ for (const [col, def] of needed) {
     db.exec(`ALTER TABLE accounts ADD COLUMN ${col} ${def}`);
 }
 
+// bc_vendor_number must NOT be unique — one IC serves many clients (same vendor# on many rows).
+// SQLite auto-indexes backing a UNIQUE constraint cannot be dropped via DROP INDEX; must rebuild.
+{
+  const indexes = (db.prepare('PRAGMA index_list(accounts)').all() as any[]).map((i: any) => i.name);
+  if (indexes.includes('sqlite_autoindex_accounts_1')) {
+    const currentCols = (db.prepare('PRAGMA table_info(accounts)').all() as any[]);
+    const colDefs = currentCols.map((c) => {
+      let def = `${c.name} ${c.type}`;
+      if (c.notnull && c.name !== 'id') def += ' NOT NULL';
+      if (c.dflt_value !== null) def += ` DEFAULT ${c.dflt_value}`;
+      return def;
+    }).join(', ');
+    const colNames = currentCols.map((c) => c.name).join(', ');
+    db.exec(`
+      CREATE TABLE accounts_new (${colDefs});
+      INSERT INTO accounts_new SELECT ${colNames} FROM accounts;
+      DROP TABLE accounts;
+      ALTER TABLE accounts_new RENAME TO accounts;
+    `);
+  }
+}
+
 // record_type column ('ic' | 'customer')
 if (!cols().includes('record_type'))
   db.exec("ALTER TABLE accounts ADD COLUMN record_type TEXT DEFAULT 'ic'");
