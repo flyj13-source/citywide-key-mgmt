@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
+import { logAudit } from '../lib/audit';
 import { encrypt, decrypt } from '../lib/crypto';
 
 const router = Router();
@@ -37,10 +38,7 @@ router.post('/reveal/:id', requireAuth, (req: AuthRequest, res: Response) => {
 
   if (!code) return res.status(404).json({ error: 'No code stored' });
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'vault_revealed', account.ic_company_name, account.id, req.manager!.name,
-    JSON.stringify({ type, ip: req.ip })
-  );
+  logAudit(req, 'vault_revealed', account.ic_company_name, account.id, { type, ip: req.ip });
 
   res.json({ code });
 });
@@ -64,10 +62,9 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
     db.prepare('UPDATE accounts SET door_access_code_encrypted=?, door_access_code_iv=? WHERE id=?').run(encrypted, iv, account_id);
   }
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'vault_updated', account.ic_company_name, account_id, req.manager!.name,
-    JSON.stringify({ has_door: !!door_code, has_alarm: !!alarm_code, has_door_access: !!door_access_code })
-  );
+  logAudit(req, 'vault_updated', account.ic_company_name, account_id, {
+    has_door: !!door_code, has_alarm: !!alarm_code, has_door_access: !!door_access_code,
+  });
 
   res.json({ success: true });
 });

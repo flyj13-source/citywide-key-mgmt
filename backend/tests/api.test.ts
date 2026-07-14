@@ -15,10 +15,14 @@ delete process.env.DB_PATH; // ensure we don't inherit a real /data path
 process.env.JWT_SECRET = 'test-secret';
 process.env.ENCRYPTION_KEY = crypto.randomBytes(32).toString('hex');
 process.env.SEED_PASSWORD = 'demo1234';
+process.env.TEST_USER_EMAIL = 'test@citywideboston.com';
+process.env.TEST_USER_PASSWORD = 'test-pass-1234';
 
 const DB_FILE = path.join(TEST_DIR, 'citywide.db');
 const ADMIN_EMAIL = 'cara@citywideboston.com';
 const ADMIN_PASS = 'demo1234';
+const TEST_EMAIL = 'test@citywideboston.com';
+const TEST_PASS = 'test-pass-1234';
 
 let app: Express;
 let autoSeedIfEmpty: () => void;
@@ -355,5 +359,92 @@ describe('SEED IDEMPOTENCE', () => {
     expect(third.managers).toBe(first.managers);
     expect(third.accounts).toBe(first.accounts);
     expect(third.hash).toBe(first.hash); // byte-identical — no password reset
+  });
+});
+
+// ═══════════════════════════════════════ TEST USER ══════════════════════════
+describe('TEST USER', () => {
+  let testToken: string;
+
+  it('is seeded with is_test=1 and can log in (is_test surfaced)', async () => {
+    const db = openDb();
+    const row: any = Object.assign({}, db.prepare('SELECT is_test, role, name FROM managers WHERE email = ?').get(TEST_EMAIL));
+    db.close();
+    expect(row.is_test).toBe(1);
+    expect(row.role).toBe('admin');
+    expect(row.name).toBe('Test Account (Cinch IT)');
+
+    const login = await request(app).post('/api/auth/login').send({ email: TEST_EMAIL, password: TEST_PASS });
+    expect(login.status).toBe(200);
+    expect(login.body.manager.is_test).toBe(true);
+    testToken = login.body.token;
+  });
+
+  it('re-running the boot seed never resets the test password', async () => {
+    const db = openDb();
+    const before = (Object.assign({}, db.prepare('SELECT password_hash AS h FROM managers WHERE email = ?').get(TEST_EMAIL)) as any).h;
+    db.close();
+    autoSeedIfEmpty();
+    const login = await request(app).post('/api/auth/login').send({ email: TEST_EMAIL, password: TEST_PASS });
+    expect(login.status).toBe(200);
+    const db2 = openDb();
+    const after = (Object.assign({}, db2.prepare('SELECT password_hash AS h FROM managers WHERE email = ?').get(TEST_EMAIL)) as any).h;
+    db2.close();
+    expect(after).toBe(before);
+  });
+
+  it('actions by the test user are flagged test_action:true; Cara actions are not', async () => {
+    const mine = await request(app).post('/api/accounts')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({ record_type: 'customer', ic_company_name: 'TESTUSER-CREATED' });
+    expect(mine.status).toBe(201);
+
+    const caras = await auth(request(app).post('/api/accounts'))
+      .send({ record_type: 'customer', ic_company_name: 'CARA-CREATED' });
+    expect(caras.status).toBe(201);
+
+    const db = openDb();
+    const testMeta = (Object.assign({}, db.prepare(
+      "SELECT metadata AS m FROM audit_log WHERE action='account_created' AND account_id = ?"
+    ).get(mine.body.id)) as any).m;
+    const caraMeta = (Object.assign({}, db.prepare(
+      "SELECT metadata AS m FROM audit_log WHERE action='account_created' AND account_id = ?"
+    ).get(caras.body.id)) as any).m;
+    db.close();
+
+    expect(JSON.parse(testMeta).test_action).toBe(true);
+    expect(JSON.parse(caraMeta).test_action).toBeUndefined();
+  });
+});
+
+// ═══════════════════════════════════════ DASHBOARD HYGIENE ══════════════════
+describe('DASHBOARD HYGIENE', () => {
+  it("bc_client_number '999…' is excluded from the exclude_test count and key-holder sums", async () => {
+    // Baselines
+    const beforeCount = (await auth(request(app).get('/api/accounts?type=customer&exclude_test=1&limit=1'))).body.total;
+    const beforeStats = (await auth(request(app).get('/api/accounts/key-holder-stats'))).body;
+
+    // Add a sentinel-style test record with key counts
+    const s = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'HYGIENE SENTINEL',
+      bc_client_number: '99900123', am_keys: 5, ccm_keys: 5, contractor_keys: 5,
+    });
+    expect(s.status).toBe(201);
+
+    // exclude_test count is unchanged; the plain count DOES include it
+    const afterExcluded = (await auth(request(app).get('/api/accounts?type=customer&exclude_test=1&limit=1'))).body.total;
+    const afterPlain = (await auth(request(app).get('/api/accounts?type=customer&limit=1'))).body.total;
+    expect(afterExcluded).toBe(beforeCount);
+    expect(afterPlain).toBeGreaterThan(beforeCount);
+
+    // key-holder sums unchanged (sentinel's 5/5/5 excluded)
+    const afterStats = (await auth(request(app).get('/api/accounts/key-holder-stats'))).body;
+    expect(afterStats.am_total).toBe(beforeStats.am_total);
+    expect(afterStats.ccm_total).toBe(beforeStats.ccm_total);
+    expect(afterStats.contractor_total).toBe(beforeStats.contractor_total);
+
+    // But it's still visible in the registry list (never hidden)
+    const listed = (await auth(request(app).get('/api/accounts?search=HYGIENE SENTINEL&limit=10'))).body;
+    expect(listed.accounts.some((a: any) => a.ic_company_name === 'HYGIENE SENTINEL')).toBe(true);
   });
 });

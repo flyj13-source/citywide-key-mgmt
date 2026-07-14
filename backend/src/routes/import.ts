@@ -3,6 +3,7 @@ import multer from 'multer';
 import * as XLSX from 'xlsx';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
+import { logAudit } from '../lib/audit';
 import { encrypt } from '../lib/crypto';
 
 const router = Router();
@@ -305,10 +306,9 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
   }
   const elapsed = Date.now() - t0;
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'bulk_import', null, null, req.manager!.name,
-    JSON.stringify({ inserted, updated, skipped, errors: rowErrors.length, total: rows.length, elapsed_ms: elapsed, mode: mode ?? 'insert' })
-  );
+  logAudit(req, 'bulk_import', null, null, {
+    inserted, updated, skipped, errors: rowErrors.length, total: rows.length, elapsed_ms: elapsed, mode: mode ?? 'insert',
+  });
 
   res.json({ inserted, updated, skipped, errors: rowErrors });
 });

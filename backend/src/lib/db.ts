@@ -97,6 +97,14 @@ if (!cols().includes('record_type'))
   db.exec("ALTER TABLE accounts ADD COLUMN record_type TEXT DEFAULT 'ic'");
 db.exec("UPDATE accounts SET record_type='ic' WHERE record_type IS NULL");
 
+// is_test flag on managers — marks the dedicated troubleshooting account so its
+// actions can be badged in the audit UI. PRAGMA-guarded: added only if absent.
+const managerCols = (db.prepare('PRAGMA table_info(managers)').all() as any[]).map(
+  (c) => Object.assign({}, c).name
+);
+if (!managerCols.includes('is_test'))
+  db.exec('ALTER TABLE managers ADD COLUMN is_test INTEGER DEFAULT 0');
+
 // ── Desktop-only local tables (offline sync + queued AI) ────────────────────
 // Created only in the Electron build so the Render schema stays untouched.
 if (process.env.CITYWIDE_DESKTOP === '1') {

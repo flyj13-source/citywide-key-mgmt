@@ -19,6 +19,28 @@ export function autoSeedIfEmpty(): void {
     console.log('✓ [seed] Manager cara@citywideboston.com already exists');
   }
 
+  // ── Dedicated test/troubleshooting account (Cinch IT) ───────────────────────
+  // Created ONLY when TEST_USER_PASSWORD is set. Password never hardcoded.
+  // Same insert-if-absent guard as Cara's row → never resets an existing hash.
+  const testPassword = process.env.TEST_USER_PASSWORD;
+  const testEmail = process.env.TEST_USER_EMAIL || 'test@citywideboston.com';
+  if (!testPassword) {
+    console.log('• [seed] test user skipped, no password set (TEST_USER_PASSWORD unset)');
+  } else {
+    const existingTest = db.prepare('SELECT id FROM managers WHERE email = ?').get(testEmail);
+    if (!existingTest) {
+      const hash = bcrypt.hashSync(testPassword, 10);
+      db.prepare(
+        'INSERT INTO managers (name, email, password_hash, role, is_test) VALUES (?, ?, ?, ?, 1)'
+      ).run('Test Account (Cinch IT)', testEmail, hash, 'admin');
+      console.log(`✓ [seed] Test user created: ${testEmail} (is_test=1)`);
+    } else {
+      // Ensure the flag is set even if the row predates this column.
+      db.prepare('UPDATE managers SET is_test = 1 WHERE email = ? AND is_test IS NOT 1').run(testEmail);
+      console.log(`✓ [seed] Test user ${testEmail} already exists — password unchanged`);
+    }
+  }
+
   // ── Demo accounts — only if the accounts table is completely empty ─────────
   // Skips on any real deployment that already has imported data.
   const count = (db.prepare('SELECT COUNT(*) as c FROM accounts').get() as any).c as number;

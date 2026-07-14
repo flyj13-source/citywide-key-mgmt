@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
+import { logAudit } from '../lib/audit';
 import ExcelJS from 'exceljs';
 import path from 'path';
 import fs from 'fs';
@@ -92,9 +93,7 @@ router.post('/excel', requireAuth, async (req: AuthRequest, res: Response) => {
   await wb.xlsx.write(res);
   res.end();
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'excel_exported', null, null, (req as AuthRequest).manager!.name, JSON.stringify({ rows: accounts.length })
-  );
+  logAudit(req as AuthRequest, 'excel_exported', null, null, { rows: accounts.length });
 });
 
 router.post('/outlook', requireAuth, async (req: AuthRequest, res: Response) => {
@@ -105,9 +104,7 @@ router.post('/outlook', requireAuth, async (req: AuthRequest, res: Response) => 
       req.body.to || process.env.SMTP_USER || 'cara@citywideboston.com',
       overdue.map((o) => ({ account_name: o.account_name, assignee: o.assignee, days: o.days_overdue }))
     );
-    db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-      'email_sent', null, null, req.manager!.name, JSON.stringify({ overdue_count: overdue.length })
-    );
+    logAudit(req, 'email_sent', null, null, { overdue_count: overdue.length });
     res.json({ success: true, sent: overdue.length });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -119,9 +116,7 @@ router.post('/teams', requireAuth, async (req: AuthRequest, res: Response) => {
   if (overdue.length === 0) return res.json({ message: 'No overdue assignments' });
   try {
     await sendTeamsAlert(overdue.map((o) => ({ account_name: o.account_name, assignee: o.assignee, days: o.days_overdue })));
-    db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-      'teams_alert_sent', null, null, req.manager!.name, JSON.stringify({ overdue_count: overdue.length })
-    );
+    logAudit(req, 'teams_alert_sent', null, null, { overdue_count: overdue.length });
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

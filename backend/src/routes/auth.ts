@@ -15,13 +15,17 @@ router.post('/login', (req: Request, res: Response) => {
   const valid = bcrypt.compareSync(password, manager.password_hash);
   if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
+  const isTest = !!manager.is_test;
   const token = jwt.sign(
-    { id: manager.id, name: manager.name, email: manager.email, role: manager.role },
+    { id: manager.id, name: manager.name, email: manager.email, role: manager.role, is_test: isTest },
     process.env.JWT_SECRET || 'dev-secret',
     { expiresIn: '8h' }
   );
 
-  return res.json({ token, manager: { id: manager.id, name: manager.name, email: manager.email, role: manager.role } });
+  return res.json({
+    token,
+    manager: { id: manager.id, name: manager.name, email: manager.email, role: manager.role, is_test: isTest },
+  });
 });
 
 // JWT-protected password change

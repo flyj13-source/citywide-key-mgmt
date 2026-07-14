@@ -75,6 +75,36 @@ npm run reset-password -- --email cara@citywideboston.com --password [newpasswor
 
 ---
 
+## Test / troubleshooting account
+
+A dedicated admin account (separate from Cara's) for troubleshooting, error
+correction, and update verification. Its audit entries are badged with a neutral
+**TEST** pill in the Audit Log and Dashboard, and sentinel/test records
+(`bc_client_number` starting `999`) are excluded from the dashboard Customers
+count and Keys-by-Holder sums so real numbers stay truthful. The persistence
+gauntlet (`npm run persist:*`) authenticates as this account only — never Cara's.
+
+**Enable** (the account is created only when a password is set):
+1. Set two env vars in Render → Environment (and in `backend/.env` for local use):
+   ```
+   TEST_USER_EMAIL=test@citywideboston.com
+   TEST_USER_PASSWORD=<a-password-you-choose>     # never hardcoded; keep it secret
+   ```
+2. Redeploy / restart. `autoSeedIfEmpty()` inserts the account **only if absent**
+   (it never resets an existing password). Login: `test@citywideboston.com` +
+   the password you set. If `TEST_USER_PASSWORD` is unset the boot log prints
+   `test user skipped, no password set` and no account is created.
+
+**Disable** (soft revoke — keeps audit history):
+```bash
+cd backend
+npm run test-user:disable      # sets a random unknown password hash; row + audit preserved
+```
+To re-enable, set a fresh `TEST_USER_PASSWORD` and redeploy, or
+`npm run reset-password -- --email test@citywideboston.com --password <new>`.
+
+---
+
 ## Configure M365
 
 1. Copy `.env.example` to `backend/.env`

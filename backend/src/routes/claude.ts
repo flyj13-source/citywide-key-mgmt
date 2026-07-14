@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
+import { logAudit } from '../lib/audit';
 import Anthropic from '@anthropic-ai/sdk';
 
 const router = Router();
@@ -65,9 +66,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const text = await generateAnswer(message, history);
 
-    db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-      'ai_query', null, null, req.manager!.name, JSON.stringify({ query: message.slice(0, 100) })
-    );
+    logAudit(req, 'ai_query', null, null, { query: message.slice(0, 100) });
 
     res.json({ response: text });
   } catch (e: any) {

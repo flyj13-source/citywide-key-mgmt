@@ -8,18 +8,20 @@
  *   npm run persist:snapshot   → record the current customer count
  *   npm run persist:verify -- --full   → also compare total count to snapshot
  *
+ * Authenticates ONLY as the dedicated test user — never Cara's account.
+ *
  * Config via env:
- *   PERSIST_URL       base URL (default https://citywide-backend.onrender.com)
- *   PERSIST_EMAIL     login email (default cara@citywideboston.com)
- *   PERSIST_PASSWORD  login password (default demo1234)
+ *   PERSIST_URL         base URL (default https://citywide-backend-0xuj.onrender.com)
+ *   TEST_USER_EMAIL     login email (default test@citywideboston.com)
+ *   TEST_USER_PASSWORD  login password (REQUIRED — no fallback)
  */
 
 import fs from 'fs';
 import path from 'path';
 
 const BASE = (process.env.PERSIST_URL || 'https://citywide-backend-0xuj.onrender.com').replace(/\/$/, '');
-const EMAIL = process.env.PERSIST_EMAIL || 'cara@citywideboston.com';
-const PASSWORD = process.env.PERSIST_PASSWORD || 'demo1234';
+const EMAIL = process.env.TEST_USER_EMAIL || 'test@citywideboston.com';
+const PASSWORD = process.env.TEST_USER_PASSWORD || '';
 
 const SENTINEL_FILE = path.join(__dirname, '..', '.persist-sentinel.json');
 const SNAPSHOT_FILE = path.join(__dirname, '..', '.persist-snapshot.json');
@@ -35,12 +37,15 @@ function pass(msg: string) {
 }
 
 async function login(): Promise<string> {
+  if (!PASSWORD) {
+    die('TEST_USER_PASSWORD is not set. The gauntlet authenticates as the test user only — set TEST_USER_EMAIL / TEST_USER_PASSWORD in backend/.env (never Cara\'s creds).');
+  }
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
   });
-  if (!res.ok) die(`Login failed against ${BASE} (HTTP ${res.status}). Check PERSIST_* env.`);
+  if (!res.ok) die(`Login as ${EMAIL} failed against ${BASE} (HTTP ${res.status}). Check TEST_USER_* env + that the test user is enabled.`);
   return ((await res.json()) as { token: string }).token;
 }
 

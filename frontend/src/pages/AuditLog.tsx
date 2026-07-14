@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Layout from '../components/Layout';
 import Badge from '../components/Badge';
+import TestPill from '../components/TestPill';
 import { getAudit, downloadExcel } from '../lib/api';
 
 const ACTION_LABELS: Record<string, { label: string; variant: 'red' | 'green' | 'gray' | 'yellow' | 'blue' }> = {
@@ -101,9 +102,14 @@ export default function AuditLog() {
                     <td className="px-4 py-3 max-w-[200px] truncate text-cw-muted">
                       {log.account_name || '—'}
                     </td>
-                    <td className="px-4 py-3 font-medium">{log.manager}</td>
+                    <td className="px-4 py-3 font-medium">
+                      <span className="inline-flex items-center gap-1.5">
+                        {log.manager}
+                        {meta.test_action && <TestPill />}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-xs text-cw-muted">
-                      {Object.entries(meta).map(([k, v]) => (
+                      {Object.entries(meta).filter(([k]) => k !== 'test_action').map(([k, v]) => (
                         <span key={k} className="mr-2"><span className="font-medium">{k}:</span> {String(v)}</span>
                       ))}
                     </td>

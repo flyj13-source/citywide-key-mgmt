@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
+import { logAudit } from '../lib/audit';
 import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
@@ -42,10 +43,7 @@ router.post('/invite', requireAuth, async (req: AuthRequest, res: Response) => {
     // email failure is non-blocking in demo mode
   }
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'contractor_invited', null, null, req.manager!.name,
-    JSON.stringify({ contractor: name, email, accounts: assigned_accounts.length })
-  );
+  logAudit(req, 'contractor_invited', null, null, { contractor: name, email, accounts: assigned_accounts.length });
 
   res.json({ success: true, token, magic_link: magicLink });
 });

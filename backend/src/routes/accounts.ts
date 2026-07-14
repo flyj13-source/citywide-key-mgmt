@@ -1,16 +1,24 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
+import { logAudit } from '../lib/audit';
 import { encrypt } from '../lib/crypto';
 
 const router = Router();
 
 router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
-  const { search = '', status = '', type = 'all', page = '1', limit = '50' } = req.query as Record<string, string>;
+  const { search = '', status = '', type = 'all', exclude_test = '', page = '1', limit = '50' } = req.query as Record<string, string>;
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   let whereClauses = '1=1';
   const params: any[] = [];
+
+  // Dashboard hygiene: the dashboard passes exclude_test=1 so sentinel/test
+  // records (bc_client_number starting "999") don't distort real counts. The
+  // registry list omits the flag, so those rows stay visible there.
+  if (exclude_test === '1' || exclude_test === 'true') {
+    whereClauses += " AND (bc_client_number IS NULL OR bc_client_number NOT LIKE '999%')";
+  }
 
   if (search) {
     whereClauses += ' AND (ic_company_name LIKE ? OR notes LIKE ? OR bc_vendor_number LIKE ? OR bc_client_number LIKE ? OR ic_name LIKE ? OR account_manager LIKE ?)';
@@ -82,10 +90,7 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
     notes || null, status || 'active', rtype,
   );
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'account_created', ic_company_name, result.lastInsertRowid, req.manager!.name,
-    JSON.stringify({ bc_vendor_number, record_type: rtype })
-  );
+  logAudit(req, 'account_created', ic_company_name, result.lastInsertRowid, { bc_vendor_number, record_type: rtype });
 
   res.status(201).json({ id: result.lastInsertRowid });
 });
@@ -119,7 +124,9 @@ router.get('/key-holder-stats', requireAuth, (_req: AuthRequest, res: Response) 
       COALESCE(SUM(am_keys), 0)          AS am_total,
       COALESCE(SUM(ccm_keys), 0)         AS ccm_total,
       COALESCE(SUM(contractor_keys), 0)  AS contractor_total
-    FROM accounts WHERE record_type = 'customer'
+    FROM accounts
+    WHERE record_type = 'customer'
+      AND (bc_client_number IS NULL OR bc_client_number NOT LIKE '999%')
   `).get() as any;
   const r = Object.assign({}, row);
   res.json({ am_total: r.am_total, ccm_total: r.ccm_total, contractor_total: r.contractor_total });
@@ -177,9 +184,7 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     db.prepare('UPDATE accounts SET door_access_code_encrypted=?, door_access_code_iv=? WHERE id=?').run(encrypted, iv, req.params.id);
   }
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'account_updated', ic_company_name, req.params.id, req.manager!.name, JSON.stringify({ bc_vendor_number })
-  );
+  logAudit(req, 'account_updated', ic_company_name, req.params.id, { bc_vendor_number });
 
   res.json({ success: true });
 });
@@ -190,10 +195,9 @@ router.delete('/:id', requireAuth, (req: AuthRequest, res: Response) => {
 
   db.prepare('DELETE FROM accounts WHERE id = ?').run(req.params.id);
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'account_deleted', account.ic_company_name, req.params.id, req.manager!.name,
-    JSON.stringify({ bc_vendor_number: account.bc_vendor_number, record_type: account.record_type })
-  );
+  logAudit(req, 'account_deleted', account.ic_company_name, req.params.id, {
+    bc_vendor_number: account.bc_vendor_number, record_type: account.record_type,
+  });
 
   res.json({ success: true });
 });

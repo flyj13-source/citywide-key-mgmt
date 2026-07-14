@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Badge from '../components/Badge';
+import TestPill from '../components/TestPill';
 import { getAccounts, getAssignments, getOverdue, getStaff, getAudit, getKeyHolderStats } from '../lib/api';
 
 interface Metric { label: string; value: string | number; sub?: string; color?: string; }
@@ -29,7 +30,8 @@ export default function Dashboard() {
   useEffect(() => {
     Promise.all([
       getAccounts({ limit: '1', type: 'ic' }),
-      getAccounts({ limit: '1', type: 'customer' }),
+      // exclude_test → sentinel/test records (bc_client_number 999*) don't inflate the count
+      getAccounts({ limit: '1', type: 'customer', exclude_test: '1' }),
       getAssignments({ status: 'checked_out', limit: '1' }),
       getOverdue(),
       getStaff(),
@@ -141,18 +143,22 @@ export default function Dashboard() {
               <Link to="/audit" className="text-xs text-cw-red hover:underline">Full log →</Link>
             </div>
             <div className="divide-y divide-cw-border">
-              {recentLogs.map((log) => (
-                <div key={log.id} className="px-5 py-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-cw-text">{actionLabel[log.action] || log.action}</span>
-                    <span className="text-xs text-cw-muted">{new Date(log.created_at).toLocaleDateString()}</span>
+              {recentLogs.map((log) => {
+                const isTest = (() => { try { return !!JSON.parse(log.metadata || '{}').test_action; } catch { return false; } })();
+                return (
+                  <div key={log.id} className="px-5 py-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-cw-text">{actionLabel[log.action] || log.action}</span>
+                      <span className="text-xs text-cw-muted">{new Date(log.created_at).toLocaleDateString()}</span>
+                    </div>
+                    <div className="text-xs text-cw-muted mt-0.5 flex items-center gap-1.5 flex-wrap">
+                      {log.account_name && <span>{log.account_name} · </span>}
+                      <span>{log.manager}</span>
+                      {isTest && <TestPill />}
+                    </div>
                   </div>
-                  <div className="text-xs text-cw-muted mt-0.5">
-                    {log.account_name && <span>{log.account_name} · </span>}
-                    {log.manager}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

@@ -9,6 +9,7 @@
     "encrypt-seed": "ts-node database/encrypt-seed.ts",
     "reset-password": "ts-node src/scripts/reset-password.ts",
     "force-reset": "ts-node src/scripts/force-reset.ts",
+    "test-user:disable": "ts-node src/scripts/disable-test-user.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "persist:check": "ts-node scripts/persistence-check.ts write",

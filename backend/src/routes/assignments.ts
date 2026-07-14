@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
+import { logAudit } from '../lib/audit';
 
 const router = Router();
 
@@ -29,10 +30,7 @@ router.post('/checkout', requireAuth, (req: AuthRequest, res: Response) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'checked_out')
   `).run(account_id, account_name, assignee, assignee_email || null, key_type || 'physical', keys_held || null, due_at || null, notes || null);
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'key_checked_out', account_name, account_id, req.manager!.name,
-    JSON.stringify({ assignee, key_type, keys_held, due_at })
-  );
+  logAudit(req, 'key_checked_out', account_name, account_id, { assignee, key_type, keys_held, due_at });
 
   res.status(201).json({ id: result.lastInsertRowid });
 });
@@ -48,10 +46,9 @@ router.post('/checkin', requireAuth, (req: AuthRequest, res: Response) => {
     WHERE id=?
   `).run(condition_on_return || 'good', notes || '', notes || '', id);
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    'key_checked_in', assignment.account_name, assignment.account_id, req.manager!.name,
-    JSON.stringify({ assignee: assignment.assignee, condition: condition_on_return })
-  );
+  logAudit(req, 'key_checked_in', assignment.account_name, assignment.account_id, {
+    assignee: assignment.assignee, condition: condition_on_return,
+  });
 
   res.json({ success: true });
 });
