@@ -59,6 +59,7 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
     ic_name, account_manager, ccm_manager,
     keys_yn, security_app_yn,
     metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
+    ic_office_keys, am_office_keys, ccm_office_keys,
     am_keys, ccm_keys, contractor_keys,
     lockbox_code, door_code, alarm_code, door_access_code,
     notes, status, record_type,
@@ -79,18 +80,20 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
       ic_name, account_manager, ccm_manager,
       keys_yn, security_app_yn,
       metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
+      ic_office_keys, am_office_keys, ccm_office_keys,
       am_keys, ccm_keys, contractor_keys,
       lockbox_code,
       door_code_encrypted, door_code_iv,
       alarm_code_encrypted, alarm_code_iv,
       door_access_code_encrypted, door_access_code_iv,
       notes, status, record_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     ic_company_name, bc_vendor_number || null, bc_client_number || null,
     ic_name || null, account_manager || null, ccm_manager || null,
     keys_yn ? 1 : 0, security_app_yn ? 1 : 0,
     metal_keys || 0, key_cards || 0, has_fob ? 1 : 0, dispenser_keys || 0, office_keys || 0,
+    ic_office_keys || 0, am_office_keys || 0, ccm_office_keys || 0,
     am_keys || 0, ccm_keys || 0, contractor_keys || 0,
     lockbox_code || null,
     door_enc, door_iv,
@@ -126,20 +129,31 @@ router.get('/customer-lookup/:bcNumber', requireAuth, (req: AuthRequest, res: Re
   res.json({ ...Object.assign({}, account), assignments: assignments.map((a) => Object.assign({}, a)) });
 });
 
-// Key-holder stats for dashboard card
+// Key-holder stats for the dashboard "Keys Personally Held" card.
+// Each role's total = their regular role keys + their share of office keys.
 router.get('/key-holder-stats', requireAuth, (_req: AuthRequest, res: Response) => {
   const row = db.prepare(`
     SELECT
       COALESCE(SUM(am_keys), 0)          AS am_total,
       COALESCE(SUM(ccm_keys), 0)         AS ccm_total,
       COALESCE(SUM(contractor_keys), 0)  AS contractor_total,
-      COALESCE(SUM(office_keys), 0)      AS office_total
+      COALESCE(SUM(office_keys), 0)      AS office_total,
+      COALESCE(SUM(ic_office_keys), 0)   AS ic_office_total,
+      COALESCE(SUM(am_office_keys), 0)   AS am_office_total,
+      COALESCE(SUM(ccm_office_keys), 0)  AS ccm_office_total
     FROM accounts
     WHERE record_type = 'customer'
       AND (bc_client_number IS NULL OR bc_client_number NOT LIKE '999%')
   `).get() as any;
   const r = Object.assign({}, row);
-  res.json({ am_total: r.am_total, ccm_total: r.ccm_total, contractor_total: r.contractor_total, office_total: r.office_total });
+  res.json({
+    // Regular role totals + site office total (kept for compatibility)
+    am_total: r.am_total, ccm_total: r.ccm_total, contractor_total: r.contractor_total, office_total: r.office_total,
+    // Personally-held = role keys + that role's office keys
+    ic_personal: r.contractor_total + r.ic_office_total,
+    am_personal: r.am_total + r.am_office_total,
+    ccm_personal: r.ccm_total + r.ccm_office_total,
+  });
 });
 
 router.get('/:id', requireAuth, (req: AuthRequest, res: Response) => {
@@ -157,6 +171,7 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     ic_name, account_manager, ccm_manager,
     keys_yn, security_app_yn,
     metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
+    ic_office_keys, am_office_keys, ccm_office_keys,
     am_keys, ccm_keys, contractor_keys,
     lockbox_code, door_code, alarm_code, door_access_code,
     notes, status,
@@ -168,6 +183,7 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
       ic_name=?, account_manager=?, ccm_manager=?,
       keys_yn=?, security_app_yn=?,
       metal_keys=?, key_cards=?, has_fob=?, dispenser_keys=?, office_keys=?,
+      ic_office_keys=?, am_office_keys=?, ccm_office_keys=?,
       am_keys=?, ccm_keys=?, contractor_keys=?,
       lockbox_code=?, notes=?, status=?
     WHERE id=?
@@ -176,6 +192,7 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     ic_name || null, account_manager || null, ccm_manager || null,
     keys_yn ? 1 : 0, security_app_yn ? 1 : 0,
     metal_keys ?? 0, key_cards ?? 0, has_fob ? 1 : 0, dispenser_keys ?? 0, office_keys ?? 0,
+    ic_office_keys ?? 0, am_office_keys ?? 0, ccm_office_keys ?? 0,
     am_keys ?? 0, ccm_keys ?? 0, contractor_keys ?? 0,
     lockbox_code || null, notes || null, status || 'active',
     req.params.id,

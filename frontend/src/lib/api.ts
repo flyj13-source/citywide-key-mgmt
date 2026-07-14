@@ -68,7 +68,10 @@ export const getAccounts = (params?: Record<string, string>) => {
 };
 export const getAccount = (id: number) => req<any>(`/accounts/${id}`);
 export const getKeyHolderStats = () =>
-  req<{ am_total: number; ccm_total: number; contractor_total: number; office_total: number }>('/accounts/key-holder-stats');
+  req<{
+    am_total: number; ccm_total: number; contractor_total: number; office_total: number;
+    ic_personal: number; am_personal: number; ccm_personal: number;
+  }>('/accounts/key-holder-stats');
 export const getAccountManagers = () =>
   req<{ managers: any[] }>('/managers/account-managers');
 export const getCcms = () =>

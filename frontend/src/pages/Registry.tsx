@@ -21,6 +21,9 @@ const emptyForm = {
   has_fob: 0,
   dispenser_keys: 0,
   office_keys: 0,
+  ic_office_keys: 0,
+  am_office_keys: 0,
+  ccm_office_keys: 0,
   am_keys: 0,
   ccm_keys: 0,
   contractor_keys: 0,
@@ -237,10 +240,10 @@ function AccountFormModal({
           </div>
         </div>
 
-        {isCustomer && (
-          <div>
-            <SectionLabel>Role Key Counts</SectionLabel>
-            <div className="grid grid-cols-3 gap-3">
+        <div>
+          <SectionLabel>Role Key Counts</SectionLabel>
+          {isCustomer && (
+            <div className="grid grid-cols-3 gap-3 mb-3">
               {[
                 { label: 'AM Keys', key: 'am_keys' },
                 { label: 'CCM Keys', key: 'ccm_keys' },
@@ -251,8 +254,20 @@ function AccountFormModal({
                 </FormField>
               ))}
             </div>
+          )}
+          {/* Office keys split by who holds them — applies to both Customer and IC */}
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { label: 'IC Office', key: 'ic_office_keys' },
+              { label: 'AM Office', key: 'am_office_keys' },
+              { label: 'CCM Office', key: 'ccm_office_keys' },
+            ].map(({ label, key }) => (
+              <FormField key={key} label={label}>
+                <input type="number" min={0} className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={(form as any)[key] ?? 0} onChange={numF(key)} />
+              </FormField>
+            ))}
           </div>
-        )}
+        </div>
 
         <div>
           <SectionLabel>Access Codes</SectionLabel>
@@ -406,17 +421,27 @@ const RegistryTable = memo(function RegistryTable({
 });
 
 // ── People roster (Account Managers / CCMs) ────────────────
-// Aggregates come pre-grouped from the backend (SQL GROUP BY + SUMs). Each key
-// column is "Keys Across Clients" — the SUM of that CLIENT-level key type over
-// the person's clients (the schema has no per-type-per-role split). Sorting is
-// client-side over the small roster (one row per person, not per client).
-const ROSTER_COLS: { key: string; label: string }[] = [
-  { key: 'metal_keys', label: 'Metal Keys' },
-  { key: 'key_cards', label: 'Key Cards' },
-  { key: 'key_fobs', label: 'Key Fobs' },
-  { key: 'dispenser_keys', label: 'Dispenser Keys' },
-  { key: 'office_keys', label: 'Office Keys' },
+// Aggregates come pre-grouped from the backend (SQL GROUP BY + SUMs). Two zones:
+//   PERSONALLY HOLDS   — keys in that person's own pocket (role-count fields)
+//   ACROSS THEIR CLIENTS — every key that exists at the clients they manage
+// Sorting is client-side over the small roster (one row per person).
+const PERSONAL_COLS: { key: string; label: string }[] = [
+  { key: 'keys_held', label: 'Keys Held' },
+  { key: 'office_held', label: 'Office Keys Held' },
 ];
+const CLIENT_COLS: { key: string; label: string }[] = [
+  { key: 'metal_keys', label: 'Metal' },
+  { key: 'key_cards', label: 'Cards' },
+  { key: 'key_fobs', label: 'Fobs' },
+  { key: 'dispenser_keys', label: 'Dispenser' },
+  { key: 'office_keys', label: 'Office' },
+];
+const RED_BORDER = 'border-l-2 border-[#C0272D]';
+
+function MutedCount({ value }: { value: number }) {
+  if (!value) return <span className="text-gray-300">—</span>;
+  return <span className="text-gray-500 text-xs font-medium">{value}</span>;
+}
 
 function RosterTable({
   role, rows, loading, onSelect,
@@ -426,7 +451,7 @@ function RosterTable({
   loading: boolean;
   onSelect: (person: string) => void;
 }) {
-  const [sortKey, setSortKey] = useState('total_keys');
+  const [sortKey, setSortKey] = useState('keys_held');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const personLabel = role === 'am' ? 'Account Manager' : 'Contract Compliance Manager';
 
@@ -450,23 +475,29 @@ function RosterTable({
     <div className="card overflow-x-auto max-w-full">
       <table className="w-full text-sm border-collapse">
         <thead>
-          <tr className="bg-[#1a1a1a] text-white text-xs">
+          {/* Zone header row */}
+          <tr className="bg-[#1a1a1a] text-white text-[11px]">
             <th rowSpan={2} className="text-left px-4 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('person')}>{personLabel}{arrow('person')}</th>
             <th rowSpan={2} className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('clients_managed')}>Clients Managed{arrow('clients_managed')}</th>
-            <th colSpan={5} className="text-center px-3 py-2 font-semibold whitespace-nowrap border-b border-white/20 text-[11px] uppercase tracking-wide">Keys Across Clients</th>
-            <th rowSpan={2} className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('total_keys')}>Total Keys{arrow('total_keys')}</th>
+            <th colSpan={2} className={`text-center px-3 py-2 font-bold uppercase tracking-wide whitespace-nowrap ${RED_BORDER}`}>Personally Holds</th>
+            <th colSpan={6} className="text-center px-3 py-2 font-medium uppercase tracking-wide whitespace-nowrap text-white/50 border-l border-white/20">Across Their Clients</th>
           </tr>
+          {/* Column header row */}
           <tr className="bg-[#1a1a1a] text-white text-xs">
-            {ROSTER_COLS.map((c) => (
-              <th key={c.key} className="text-center px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none" onClick={() => sort(c.key)}>{c.label}{arrow(c.key)}</th>
+            {PERSONAL_COLS.map((c, idx) => (
+              <th key={c.key} className={`text-center px-3 py-2 font-semibold whitespace-nowrap cursor-pointer select-none ${idx === 0 ? RED_BORDER : ''}`} onClick={() => sort(c.key)}>{c.label}{arrow(c.key)}</th>
             ))}
+            {CLIENT_COLS.map((c, idx) => (
+              <th key={c.key} className={`text-center px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none text-white/60 ${idx === 0 ? 'border-l border-white/20' : ''}`} onClick={() => sort(c.key)}>{c.label}{arrow(c.key)}</th>
+            ))}
+            <th className="text-center px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none text-white/60" onClick={() => sort('total_client_keys')}>Total Client Keys{arrow('total_client_keys')}</th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={8} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+            <tr><td colSpan={10} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
           ) : sorted.length === 0 ? (
-            <tr><td colSpan={8} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
+            <tr><td colSpan={10} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
           ) : sorted.map((p, i) => {
             const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
             return (
@@ -478,12 +509,16 @@ function RosterTable({
               >
                 <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap">{p.person}</td>
                 <td className="px-3 py-3 text-center"><CountBadge value={p.clients_managed} /></td>
-                {ROSTER_COLS.map((c) => (
-                  <td key={c.key} className="px-3 py-3 text-center"><CountBadge value={p[c.key]} /></td>
-                ))}
-                <td className="px-3 py-3 text-center">
-                  <span className="inline-flex items-center justify-center min-w-[1.75rem] h-6 px-2 rounded-full bg-[#C0272D] text-white text-xs font-bold">{p.total_keys}</span>
+                {/* Personally Holds — primary, red-bordered */}
+                <td className={`px-3 py-3 text-center ${RED_BORDER}`}>
+                  <span className="inline-flex items-center justify-center min-w-[1.75rem] h-6 px-2 rounded-full bg-[#C0272D] text-white text-xs font-bold">{p.keys_held}</span>
                 </td>
+                <td className="px-3 py-3 text-center"><CountBadge value={p.office_held} /></td>
+                {/* Across Their Clients — secondary, muted */}
+                {CLIENT_COLS.map((c, idx) => (
+                  <td key={c.key} className={`px-3 py-3 text-center ${idx === 0 ? 'border-l border-gray-200' : ''}`}><MutedCount value={p[c.key]} /></td>
+                ))}
+                <td className="px-3 py-3 text-center text-gray-600 text-xs font-semibold">{p.total_client_keys || '—'}</td>
               </tr>
             );
           })}

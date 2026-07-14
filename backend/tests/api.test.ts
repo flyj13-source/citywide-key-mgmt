@@ -460,12 +460,11 @@ describe('OFFICE KEYS + PEOPLE ROSTERS', () => {
     expect(a.office_keys).toBe(9);
   });
 
-  it('import maps the "Office Key" column (Y→1, numeric→as-is, blank→0)', async () => {
-    const HEADERS = ['Client Name', 'BC Client Number', 'Office Key', 'Metal Keys'];
+  it('import maps Office Key + role-office columns (Y→1, numeric→as-is, blank→0)', async () => {
+    const HEADERS = ['Client Name', 'BC Client Number', 'Office Key', 'IC Office Key', 'AM Office Key', 'CCM Office Key'];
     const rows = [
-      ['OFFICE IMP A', 'BCC-OK-A', '3', '1'],   // numeric → 3
-      ['OFFICE IMP B', 'BCC-OK-B', 'Y', '2'],   // Y → 1
-      ['OFFICE IMP C', 'BCC-OK-C', '', '0'],    // blank → 0
+      ['OFFICE IMP A', 'BCC-OK-A', '3', '1', 'Y', ''],   // office 3, ic 1, am Y→1, ccm blank→0
+      ['OFFICE IMP B', 'BCC-OK-B', 'Y', '', '2', '5'],   // office Y→1, ic blank→0, am 2, ccm 5
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([HEADERS, ...rows]), 'S');
@@ -474,52 +473,94 @@ describe('OFFICE KEYS + PEOPLE ROSTERS', () => {
     const preview = await auth(request(app).post('/api/accounts/import')).attach('file', buf, 'o.xlsx');
     expect(preview.status).toBe(200);
     const confirm = await auth(request(app).post('/api/accounts/import/confirm')).send({ rows: preview.body.valid });
-    expect(confirm.body.inserted).toBe(3);
+    expect(confirm.body.inserted).toBe(2);
 
     const db = openDb();
-    const get = (name: string) => (Object.assign({}, db.prepare('SELECT office_keys FROM accounts WHERE ic_company_name = ?').get(name)) as any).office_keys;
-    expect(get('OFFICE IMP A')).toBe(3);
-    expect(get('OFFICE IMP B')).toBe(1);
-    expect(get('OFFICE IMP C')).toBe(0);
+    const get = (name: string) => Object.assign({}, db.prepare(
+      'SELECT office_keys, ic_office_keys, am_office_keys, ccm_office_keys FROM accounts WHERE ic_company_name = ?'
+    ).get(name)) as any;
+    expect(get('OFFICE IMP A')).toMatchObject({ office_keys: 3, ic_office_keys: 1, am_office_keys: 1, ccm_office_keys: 0 });
+    expect(get('OFFICE IMP B')).toMatchObject({ office_keys: 1, ic_office_keys: 0, am_office_keys: 2, ccm_office_keys: 5 });
     db.close();
   });
 
-  it('AM roster aggregates clients + key sums correctly (spot-check by hand)', async () => {
+  it('role-split office keys round-trip through create → get', async () => {
+    const res = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'ROLE OFFICE SITE',
+      office_keys: 6, ic_office_keys: 1, am_office_keys: 2, ccm_office_keys: 3,
+    });
+    const a = (await auth(request(app).get(`/api/accounts/${res.body.id}`))).body;
+    expect(a.office_keys).toBe(6);
+    expect(a.ic_office_keys).toBe(1);
+    expect(a.am_office_keys).toBe(2);
+    expect(a.ccm_office_keys).toBe(3);
+  });
+
+  it('AM roster splits PERSONALLY HELD vs ACROSS CLIENTS (spot-check by hand)', async () => {
     const AM = 'ROSTER TESTER AM';
-    // Two clients for the same AM with known key counts.
+    // Two clients: known client-level type counts AND known AM-personal counts.
     await auth(request(app).post('/api/accounts')).send({
       record_type: 'customer', ic_company_name: 'RT CLIENT 1', account_manager: AM,
       metal_keys: 2, key_cards: 1, has_fob: 1, dispenser_keys: 0, office_keys: 3,
+      am_keys: 2, am_office_keys: 1,
     });
     await auth(request(app).post('/api/accounts')).send({
       record_type: 'customer', ic_company_name: 'RT CLIENT 2', account_manager: AM,
       metal_keys: 4, key_cards: 0, has_fob: 0, dispenser_keys: 5, office_keys: 1,
+      am_keys: 3, am_office_keys: 4,
     });
 
     const roster = (await auth(request(app).get('/api/managers/account-managers'))).body.managers;
     const row = roster.find((m: any) => m.person === AM);
     expect(row).toBeTruthy();
     expect(row.clients_managed).toBe(2);
+    // PERSONALLY HOLDS
+    expect(row.keys_held).toBe(5);        // am_keys 2 + 3
+    expect(row.office_held).toBe(5);      // am_office_keys 1 + 4
+    // ACROSS THEIR CLIENTS
     expect(row.metal_keys).toBe(6);       // 2 + 4
     expect(row.key_cards).toBe(1);        // 1 + 0
     expect(row.key_fobs).toBe(1);         // 1 + 0
     expect(row.dispenser_keys).toBe(5);   // 0 + 5
     expect(row.office_keys).toBe(4);      // 3 + 1
-    expect(row.total_keys).toBe(17);      // 6+1+1+5+4
+    expect(row.total_client_keys).toBe(17); // 6+1+1+5+4
   });
 
-  it('CCM roster groups by ccm_manager', async () => {
+  it('AM roster is sorted by keys_held desc by default', async () => {
+    const roster = (await auth(request(app).get('/api/managers/account-managers'))).body.managers;
+    for (let i = 1; i < roster.length; i++) {
+      expect(roster[i - 1].keys_held).toBeGreaterThanOrEqual(roster[i].keys_held);
+    }
+  });
+
+  it('CCM roster groups by ccm_manager with personal + client split', async () => {
     const CCM = 'ROSTER TESTER CCM';
     await auth(request(app).post('/api/accounts')).send({
       record_type: 'customer', ic_company_name: 'RT CCM CLIENT', ccm_manager: CCM,
-      metal_keys: 7, office_keys: 2,
+      metal_keys: 7, office_keys: 2, ccm_keys: 4, ccm_office_keys: 3,
     });
     const roster = (await auth(request(app).get('/api/managers/ccms'))).body.managers;
     const row = roster.find((m: any) => m.person === CCM);
     expect(row).toBeTruthy();
     expect(row.clients_managed).toBe(1);
+    expect(row.keys_held).toBe(4);          // ccm_keys
+    expect(row.office_held).toBe(3);        // ccm_office_keys
     expect(row.metal_keys).toBe(7);
     expect(row.office_keys).toBe(2);
-    expect(row.total_keys).toBe(9);
+    expect(row.total_client_keys).toBe(9);  // 7 + 2
+  });
+
+  it('dashboard personally-held totals = role keys + role office keys', async () => {
+    const before = (await auth(request(app).get('/api/accounts/key-holder-stats'))).body;
+    await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'PERSONAL HELD SITE',
+      contractor_keys: 10, ic_office_keys: 2,
+      am_keys: 5, am_office_keys: 1,
+      ccm_keys: 3, ccm_office_keys: 4,
+    });
+    const after = (await auth(request(app).get('/api/accounts/key-holder-stats'))).body;
+    expect(after.ic_personal - before.ic_personal).toBe(12);  // 10 + 2
+    expect(after.am_personal - before.am_personal).toBe(6);   // 5 + 1
+    expect(after.ccm_personal - before.ccm_personal).toBe(7); // 3 + 4
   });
 });
