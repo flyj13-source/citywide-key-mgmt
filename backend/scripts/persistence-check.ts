@@ -17,7 +17,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const BASE = (process.env.PERSIST_URL || 'https://citywide-backend.onrender.com').replace(/\/$/, '');
+const BASE = (process.env.PERSIST_URL || 'https://citywide-backend-0xuj.onrender.com').replace(/\/$/, '');
 const EMAIL = process.env.PERSIST_EMAIL || 'cara@citywideboston.com';
 const PASSWORD = process.env.PERSIST_PASSWORD || 'demo1234';
 
