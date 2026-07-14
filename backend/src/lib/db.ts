@@ -49,6 +49,7 @@ const needed: [string, string][] = [
   ['metal_keys', 'INTEGER DEFAULT 0'],
   ['key_cards', 'INTEGER DEFAULT 0'],
   ['dispenser_keys', 'INTEGER DEFAULT 0'],
+  ['office_keys', 'INTEGER DEFAULT 0'],
   ['lockbox_code', 'TEXT'],
   ['door_access_code_encrypted', 'TEXT'],
   ['door_access_code_iv', 'TEXT'],

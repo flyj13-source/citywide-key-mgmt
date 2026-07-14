@@ -68,7 +68,11 @@ export const getAccounts = (params?: Record<string, string>) => {
 };
 export const getAccount = (id: number) => req<any>(`/accounts/${id}`);
 export const getKeyHolderStats = () =>
-  req<{ am_total: number; ccm_total: number; contractor_total: number }>('/accounts/key-holder-stats');
+  req<{ am_total: number; ccm_total: number; contractor_total: number; office_total: number }>('/accounts/key-holder-stats');
+export const getAccountManagers = () =>
+  req<{ managers: any[] }>('/managers/account-managers');
+export const getCcms = () =>
+  req<{ managers: any[] }>('/managers/ccms');
 export const getAccountByCustomerId = (customerId: string) =>
   req<any>(`/accounts/by-customer-id/${encodeURIComponent(customerId)}`);
 export const getCustomerByBcNumber = (bcNumber: string) =>

@@ -9,6 +9,7 @@ import { autoSeedIfEmpty } from './lib/autoSeed';
 import authRouter from './routes/auth';
 import importRouter from './routes/import';
 import accountsRouter from './routes/accounts';
+import managersRouter from './routes/managers';
 import assignmentsRouter from './routes/assignments';
 import vaultRouter from './routes/vault';
 import auditRouter from './routes/audit';
@@ -58,6 +59,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/auth', authRouter);
 app.use('/api/accounts/import', importRouter);
 app.use('/api/accounts', accountsRouter);
+app.use('/api/managers', managersRouter);
 app.use('/api/assignments', assignmentsRouter);
 app.use('/api/vault', vaultRouter);
 app.use('/api/audit', auditRouter);

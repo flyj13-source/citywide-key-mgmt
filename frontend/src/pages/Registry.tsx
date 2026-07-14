@@ -3,9 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
 import ImportModal from '../components/ImportModal';
-import { getAccounts, getAccount, createAccount, updateAccount, revealCode } from '../lib/api';
+import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms } from '../lib/api';
 
-type TabType = 'ic' | 'customer' | 'all';
+type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'all';
 
 const emptyForm = {
   ic_company_name: '',
@@ -20,6 +20,7 @@ const emptyForm = {
   key_cards: 0,
   has_fob: 0,
   dispenser_keys: 0,
+  office_keys: 0,
   am_keys: 0,
   ccm_keys: 0,
   contractor_keys: 0,
@@ -227,6 +228,7 @@ function AccountFormModal({
               { label: 'Key Cards', key: 'key_cards' },
               { label: 'Key Fobs', key: 'has_fob' },
               { label: 'Dispenser Key', key: 'dispenser_keys' },
+              { label: 'Office Keys', key: 'office_keys' },
             ].map(({ label, key }) => (
               <FormField key={key} label={label}>
                 <input type="number" min={0} className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={(form as any)[key] ?? 0} onChange={numF(key)} />
@@ -324,6 +326,7 @@ const RegistryTable = memo(function RegistryTable({
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Cards</th>
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Fobs</th>
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Dispenser Key</th>
+            <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Office Keys</th>
             {tab === 'customer' && <>
               <th className="text-center px-3 py-3 font-medium whitespace-nowrap">IC Keys</th>
               <th className="text-center px-3 py-3 font-medium whitespace-nowrap">AM Keys</th>
@@ -375,6 +378,7 @@ const RegistryTable = memo(function RegistryTable({
                 <td className="px-3 py-3 text-center"><CountBadge value={a.key_cards} /></td>
                 <td className="px-3 py-3 text-center"><CountBadge value={a.has_fob} /></td>
                 <td className="px-3 py-3 text-center"><CountBadge value={a.dispenser_keys} /></td>
+                <td className="px-3 py-3 text-center"><CountBadge value={a.office_keys} /></td>
                 {tab === 'customer' && <>
                   <td className="px-3 py-3 text-center"><CountBadge value={a.contractor_keys} /></td>
                   <td className="px-3 py-3 text-center"><CountBadge value={a.am_keys} /></td>
@@ -401,6 +405,94 @@ const RegistryTable = memo(function RegistryTable({
   );
 });
 
+// ── People roster (Account Managers / CCMs) ────────────────
+// Aggregates come pre-grouped from the backend (SQL GROUP BY + SUMs). Each key
+// column is "Keys Across Clients" — the SUM of that CLIENT-level key type over
+// the person's clients (the schema has no per-type-per-role split). Sorting is
+// client-side over the small roster (one row per person, not per client).
+const ROSTER_COLS: { key: string; label: string }[] = [
+  { key: 'metal_keys', label: 'Metal Keys' },
+  { key: 'key_cards', label: 'Key Cards' },
+  { key: 'key_fobs', label: 'Key Fobs' },
+  { key: 'dispenser_keys', label: 'Dispenser Keys' },
+  { key: 'office_keys', label: 'Office Keys' },
+];
+
+function RosterTable({
+  role, rows, loading, onSelect,
+}: {
+  role: 'am' | 'ccm';
+  rows: any[];
+  loading: boolean;
+  onSelect: (person: string) => void;
+}) {
+  const [sortKey, setSortKey] = useState('total_keys');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const personLabel = role === 'am' ? 'Account Manager' : 'Contract Compliance Manager';
+
+  const sorted = useMemo(() => {
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      const cmp = typeof av === 'string' ? String(av).localeCompare(String(bv)) : (av - bv);
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return copy;
+  }, [rows, sortKey, sortDir]);
+
+  const sort = (key: string) => {
+    if (key === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir(key === 'person' ? 'asc' : 'desc'); }
+  };
+  const arrow = (key: string) => (key === sortKey ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+
+  return (
+    <div className="card overflow-x-auto max-w-full">
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="bg-[#1a1a1a] text-white text-xs">
+            <th rowSpan={2} className="text-left px-4 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('person')}>{personLabel}{arrow('person')}</th>
+            <th rowSpan={2} className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('clients_managed')}>Clients Managed{arrow('clients_managed')}</th>
+            <th colSpan={5} className="text-center px-3 py-2 font-semibold whitespace-nowrap border-b border-white/20 text-[11px] uppercase tracking-wide">Keys Across Clients</th>
+            <th rowSpan={2} className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('total_keys')}>Total Keys{arrow('total_keys')}</th>
+          </tr>
+          <tr className="bg-[#1a1a1a] text-white text-xs">
+            {ROSTER_COLS.map((c) => (
+              <th key={c.key} className="text-center px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none" onClick={() => sort(c.key)}>{c.label}{arrow(c.key)}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {loading ? (
+            <tr><td colSpan={8} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+          ) : sorted.length === 0 ? (
+            <tr><td colSpan={8} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
+          ) : sorted.map((p, i) => {
+            const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
+            return (
+              <tr
+                key={p.person}
+                className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${rowBg}`}
+                onClick={() => onSelect(p.person)}
+                title="View this person's clients"
+              >
+                <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap">{p.person}</td>
+                <td className="px-3 py-3 text-center"><CountBadge value={p.clients_managed} /></td>
+                {ROSTER_COLS.map((c) => (
+                  <td key={c.key} className="px-3 py-3 text-center"><CountBadge value={p[c.key]} /></td>
+                ))}
+                <td className="px-3 py-3 text-center">
+                  <span className="inline-flex items-center justify-center min-w-[1.75rem] h-6 px-2 rounded-full bg-[#C0272D] text-white text-xs font-bold">{p.total_keys}</span>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────
 
 type ModalState =
@@ -420,7 +512,13 @@ export default function Registry() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalState>(null);
   const [showImport, setShowImport] = useState(false);
+  const [roster, setRoster] = useState<any[]>([]);
+  const [rosterLoading, setRosterLoading] = useState(false);
+  // When a roster person is clicked, drill into their client list.
+  const [drill, setDrill] = useState<{ role: 'am' | 'ccm'; name: string } | null>(null);
   const LIMIT = 50;
+
+  const isRosterTab = (tab === 'am' || tab === 'ccm') && !drill;
 
   // Debounce the applied search: typing updates the input instantly, but the
   // list is only refetched 300ms after the user pauses (was 4 API calls PER
@@ -430,19 +528,41 @@ export default function Registry() {
     return () => clearTimeout(id);
   }, [search]);
 
-  // Row data — depends only on the applied (debounced) search, page, and tab.
+  // Row data — for the Customers/IC/All tabs and for the roster drill-down.
+  // A pure roster tab (am/ccm, no drill) loads the roster instead (below).
   const loadRows = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await getAccounts({ search: debouncedSearch, page: String(page), limit: String(LIMIT), type: tab });
+      const params: Record<string, string> = { search: debouncedSearch, page: String(page), limit: String(LIMIT) };
+      if (drill) {
+        params.type = 'customer';
+        params[drill.role === 'am' ? 'account_manager' : 'ccm_manager'] = drill.name;
+      } else {
+        params.type = tab;
+      }
+      const data = await getAccounts(params);
       setAccounts(data.accounts);
       setTotal(data.total);
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, page, tab]);
+  }, [debouncedSearch, page, tab, drill]);
 
-  useEffect(() => { loadRows(); }, [loadRows]);
+  // People roster — aggregated server-side (GROUP BY), one row per person.
+  const loadRoster = useCallback(async () => {
+    setRosterLoading(true);
+    try {
+      const data = tab === 'am' ? await getAccountManagers() : await getCcms();
+      setRoster(data.managers);
+    } finally {
+      setRosterLoading(false);
+    }
+  }, [tab]);
+
+  useEffect(() => {
+    if (isRosterTab) loadRoster();
+    else loadRows();
+  }, [isRosterTab, loadRoster, loadRows]);
 
   // Tab/type counts — independent of search, so they are NOT refetched while
   // typing. Refreshed on mount and after any mutation.
@@ -476,11 +596,21 @@ export default function Registry() {
   const tabs: { key: TabType; label: string }[] = useMemo(() => [
     { key: 'customer', label: `Customers (${counts.customer})` },
     { key: 'ic', label: `IC Vendors (${counts.ic})` },
+    { key: 'am', label: 'Account Managers' },
+    { key: 'ccm', label: 'Contract Compliance Mgrs' },
     { key: 'all', label: `All (${counts.all})` },
   ], [counts]);
 
-  // col counts: customer=20 (19 data + edit), ic=14, all=15
-  const colSpan = tab === 'customer' ? 20 : tab === 'all' ? 15 : 14;
+  const selectTab = (key: TabType) => { setTab(key); setPage(1); setDrill(null); };
+  const openPerson = (name: string) => {
+    setDrill({ role: tab === 'am' ? 'am' : 'ccm', name });
+    setPage(1);
+  };
+
+  // When drilled in, the client list uses the Customer column layout.
+  // col counts (incl. Office Keys): customer=21, all=16, ic=15
+  const tableTab: TabType = drill ? 'customer' : tab;
+  const colSpan = tableTab === 'customer' ? 21 : tableTab === 'all' ? 16 : 15;
 
   return (
     <Layout>
@@ -509,7 +639,7 @@ export default function Registry() {
           {tabs.map((t) => (
             <button
               key={t.key}
-              onClick={() => { setTab(t.key); setPage(1); }}
+              onClick={() => selectTab(t.key)}
               className={`pb-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
                 tab === t.key
                   ? 'border-[#C0272D] text-[#C0272D]'
@@ -521,26 +651,49 @@ export default function Registry() {
           ))}
         </div>
 
-        {/* Search */}
-        <input
-          className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
-          placeholder="Search by name, number, or manager…"
-          value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-        />
+        {/* Drill-down banner (roster person → their clients) */}
+        {drill && (
+          <div className="flex items-center gap-3">
+            <button onClick={() => setDrill(null)} className="text-sm text-[#C0272D] hover:underline">
+              ← Back to {drill.role === 'am' ? 'Account Managers' : 'Contract Compliance Mgrs'}
+            </button>
+            <span className="text-sm text-cw-muted">
+              Clients managed by <span className="font-semibold text-[#1a1a1a]">{drill.name}</span>
+            </span>
+          </div>
+        )}
 
-        {/* Table */}
-        <RegistryTable
-          tab={tab}
-          accounts={accounts}
-          loading={loading}
-          colSpan={colSpan}
-          onRowClick={onRowClick}
-          onEdit={openEdit}
-        />
+        {/* Search — not shown on the pure roster tabs */}
+        {!isRosterTab && (
+          <input
+            className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
+            placeholder="Search by name, number, or manager…"
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          />
+        )}
+
+        {/* Roster (Account Managers / CCMs) OR the client table */}
+        {isRosterTab ? (
+          <RosterTable
+            role={tab as 'am' | 'ccm'}
+            rows={roster}
+            loading={rosterLoading}
+            onSelect={openPerson}
+          />
+        ) : (
+          <RegistryTable
+            tab={tableTab}
+            accounts={accounts}
+            loading={loading}
+            colSpan={colSpan}
+            onRowClick={onRowClick}
+            onEdit={openEdit}
+          />
+        )}
 
         {/* Pagination */}
-        {total > LIMIT && (
+        {!isRosterTab && total > LIMIT && (
           <div className="flex items-center gap-3 justify-center">
             <button className="btn-secondary" disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
             <span className="text-sm text-cw-muted">Page {page} of {Math.ceil(total / LIMIT)}</span>

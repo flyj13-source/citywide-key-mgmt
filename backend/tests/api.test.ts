@@ -448,3 +448,78 @@ describe('DASHBOARD HYGIENE', () => {
     expect(listed.accounts.some((a: any) => a.ic_company_name === 'HYGIENE SENTINEL')).toBe(true);
   });
 });
+
+// ═══════════════════════════════════════ OFFICE KEYS & ROSTERS ══════════════
+describe('OFFICE KEYS + PEOPLE ROSTERS', () => {
+  it('office_keys round-trips through create → get', async () => {
+    const res = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'OFFICE KEY SITE', office_keys: 9,
+    });
+    expect(res.status).toBe(201);
+    const a = (await auth(request(app).get(`/api/accounts/${res.body.id}`))).body;
+    expect(a.office_keys).toBe(9);
+  });
+
+  it('import maps the "Office Key" column (Y→1, numeric→as-is, blank→0)', async () => {
+    const HEADERS = ['Client Name', 'BC Client Number', 'Office Key', 'Metal Keys'];
+    const rows = [
+      ['OFFICE IMP A', 'BCC-OK-A', '3', '1'],   // numeric → 3
+      ['OFFICE IMP B', 'BCC-OK-B', 'Y', '2'],   // Y → 1
+      ['OFFICE IMP C', 'BCC-OK-C', '', '0'],    // blank → 0
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([HEADERS, ...rows]), 'S');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const preview = await auth(request(app).post('/api/accounts/import')).attach('file', buf, 'o.xlsx');
+    expect(preview.status).toBe(200);
+    const confirm = await auth(request(app).post('/api/accounts/import/confirm')).send({ rows: preview.body.valid });
+    expect(confirm.body.inserted).toBe(3);
+
+    const db = openDb();
+    const get = (name: string) => (Object.assign({}, db.prepare('SELECT office_keys FROM accounts WHERE ic_company_name = ?').get(name)) as any).office_keys;
+    expect(get('OFFICE IMP A')).toBe(3);
+    expect(get('OFFICE IMP B')).toBe(1);
+    expect(get('OFFICE IMP C')).toBe(0);
+    db.close();
+  });
+
+  it('AM roster aggregates clients + key sums correctly (spot-check by hand)', async () => {
+    const AM = 'ROSTER TESTER AM';
+    // Two clients for the same AM with known key counts.
+    await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'RT CLIENT 1', account_manager: AM,
+      metal_keys: 2, key_cards: 1, has_fob: 1, dispenser_keys: 0, office_keys: 3,
+    });
+    await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'RT CLIENT 2', account_manager: AM,
+      metal_keys: 4, key_cards: 0, has_fob: 0, dispenser_keys: 5, office_keys: 1,
+    });
+
+    const roster = (await auth(request(app).get('/api/managers/account-managers'))).body.managers;
+    const row = roster.find((m: any) => m.person === AM);
+    expect(row).toBeTruthy();
+    expect(row.clients_managed).toBe(2);
+    expect(row.metal_keys).toBe(6);       // 2 + 4
+    expect(row.key_cards).toBe(1);        // 1 + 0
+    expect(row.key_fobs).toBe(1);         // 1 + 0
+    expect(row.dispenser_keys).toBe(5);   // 0 + 5
+    expect(row.office_keys).toBe(4);      // 3 + 1
+    expect(row.total_keys).toBe(17);      // 6+1+1+5+4
+  });
+
+  it('CCM roster groups by ccm_manager', async () => {
+    const CCM = 'ROSTER TESTER CCM';
+    await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'RT CCM CLIENT', ccm_manager: CCM,
+      metal_keys: 7, office_keys: 2,
+    });
+    const roster = (await auth(request(app).get('/api/managers/ccms'))).body.managers;
+    const row = roster.find((m: any) => m.person === CCM);
+    expect(row).toBeTruthy();
+    expect(row.clients_managed).toBe(1);
+    expect(row.metal_keys).toBe(7);
+    expect(row.office_keys).toBe(2);
+    expect(row.total_keys).toBe(9);
+  });
+});

@@ -24,7 +24,7 @@ export default function Dashboard() {
   const [overdueList, setOverdueList] = useState<any[]>([]);
   const [staffCount, setStaffCount] = useState(0);
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
-  const [keyStats, setKeyStats] = useState({ am_total: 0, ccm_total: 0, contractor_total: 0 });
+  const [keyStats, setKeyStats] = useState({ am_total: 0, ccm_total: 0, contractor_total: 0, office_total: 0 });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -95,12 +95,13 @@ export default function Dashboard() {
 
         {/* Keys by Holder */}
         <div className="card p-5">
-          <h2 className="font-semibold text-sm mb-3 text-cw-text">Keys by Holder Role</h2>
-          <div className="grid grid-cols-3 gap-4">
+          <h2 className="font-semibold text-sm mb-3 text-cw-text">Keys by Holder</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {[
               { label: 'IC / Contractor Keys', value: keyStats.contractor_total },
               { label: 'Account Manager Keys', value: keyStats.am_total },
               { label: 'CCM Keys', value: keyStats.ccm_total },
+              { label: 'Office Keys (site total)', value: keyStats.office_total },
             ].map(({ label, value }) => (
               <div key={label} className="text-center">
                 <div className="text-2xl font-bold text-[#1a1a1a]">{value}</div>

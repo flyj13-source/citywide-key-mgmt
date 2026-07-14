@@ -48,6 +48,8 @@ const COLUMN_MAP: Record<string, string> = {
   'fob': 'has_fob',
   'dispenser key': 'dispenser_keys',
   'dispenser keys': 'dispenser_keys',
+  'office key': 'office_keys',
+  'office keys': 'office_keys',
   'lockbox code': 'lockbox_code',
   'lockbox': 'lockbox_code',
   'door code': 'door_code',
@@ -110,6 +112,7 @@ interface ParsedRow {
   key_cards: number;
   has_fob: number;
   dispenser_keys: number;
+  office_keys: number;
   am_keys: number;
   ccm_keys: number;
   contractor_keys: number;
@@ -134,6 +137,7 @@ function normalizeRow(raw: Record<string, any>): ParsedRow {
     key_cards: parseNum(raw.key_cards),
     has_fob: parseYN(raw.has_fob),
     dispenser_keys: parseNum(raw.dispenser_keys),
+    office_keys: parseCount(raw.office_keys),
     am_keys: parseCount(raw.am_keys),
     ccm_keys: parseCount(raw.ccm_keys),
     contractor_keys: parseCount(raw.contractor_keys),
@@ -208,12 +212,12 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
       ic_company_name, bc_client_number, bc_vendor_number,
       ic_name, account_manager, ccm_manager,
       keys_yn, security_app_yn,
-      metal_keys, key_cards, has_fob, dispenser_keys,
+      metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
       am_keys, ccm_keys, contractor_keys,
       lockbox_code,
       door_code_encrypted, door_code_iv, alarm_code_encrypted, alarm_code_iv,
       notes, status, record_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer')
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer')
   `);
 
   // Upsert UPDATE: fills NULL/blank text fields and zero numeric fields only
@@ -229,6 +233,7 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
       key_cards         = CASE WHEN key_cards = 0         THEN ? ELSE key_cards END,
       has_fob           = CASE WHEN has_fob = 0           THEN ? ELSE has_fob END,
       dispenser_keys    = CASE WHEN dispenser_keys = 0    THEN ? ELSE dispenser_keys END,
+      office_keys       = CASE WHEN office_keys = 0       THEN ? ELSE office_keys END,
       am_keys           = CASE WHEN am_keys = 0           THEN ? ELSE am_keys END,
       ccm_keys          = CASE WHEN ccm_keys = 0          THEN ? ELSE ccm_keys END,
       contractor_keys   = CASE WHEN contractor_keys = 0   THEN ? ELSE contractor_keys END,
@@ -266,7 +271,7 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
             r.ic_name || null, r.bc_vendor_number || null,
             r.account_manager || null, r.ccm_manager || null,
             r.keys_yn, r.security_app_yn,
-            r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys,
+            r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys, r.office_keys,
             r.am_keys, r.ccm_keys, r.contractor_keys,
             r.lockbox_code || null, r.notes || null,
             r.bc_client_number,
@@ -277,7 +282,7 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
             r.ic_company_name, r.bc_client_number || null, r.bc_vendor_number || null,
             r.ic_name || null, r.account_manager || null, r.ccm_manager || null,
             r.keys_yn, r.security_app_yn,
-            r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys,
+            r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys, r.office_keys,
             r.am_keys ?? 0, r.ccm_keys ?? 0, r.contractor_keys ?? 0,
             r.lockbox_code || null,
             door_enc, door_iv, alarm_enc, alarm_iv,
@@ -320,7 +325,7 @@ router.get('/template', requireAuth, (_req: AuthRequest, res: Response) => {
     'Client Name', 'BC Client Number', 'Independent Contractor', 'BC Vendor Number',
     'Account Manager', 'Contract Compliance Manager',
     'Keys Y/N', 'Security App Y/N',
-    'Metal Keys', 'Key Cards', 'Key Fobs', 'Dispenser Key',
+    'Metal Keys', 'Key Cards', 'Key Fobs', 'Dispenser Key', 'Office Key',
     'AM Key', 'CCM Key', 'Contractor Key',
     'Lockbox Code', 'Door Code', 'Alarm Code', 'Notes',
   ];

@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   key_cards INTEGER DEFAULT 0,
   has_fob INTEGER DEFAULT 0,
   dispenser_keys INTEGER DEFAULT 0,
+  office_keys INTEGER DEFAULT 0,
   lockbox_code TEXT,
   door_code_encrypted TEXT,
   door_code_iv TEXT,
