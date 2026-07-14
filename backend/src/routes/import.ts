@@ -175,7 +175,7 @@ router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Res
   if (rawRows.length === 0) return res.status(400).json({ error: 'No data rows found — check column headers' });
 
   const existingBcClient = new Set(
-    (db.prepare('SELECT bc_client_number FROM accounts WHERE bc_client_number IS NOT NULL').all() as any[])
+    (db.prepare('SELECT bc_client_number FROM accounts WHERE bc_client_number IS NOT NULL AND COALESCE(archived, 0) = 0').all() as any[])
       .map((r) => Object.assign({}, r).bc_client_number as string)
   );
 
@@ -215,7 +215,7 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
   const upsert = mode === 'upsert';
 
   const existingBcClient = new Set(
-    (db.prepare('SELECT bc_client_number FROM accounts WHERE bc_client_number IS NOT NULL').all() as any[])
+    (db.prepare('SELECT bc_client_number FROM accounts WHERE bc_client_number IS NOT NULL AND COALESCE(archived, 0) = 0').all() as any[])
       .map((r) => Object.assign({}, r).bc_client_number as string)
   );
 

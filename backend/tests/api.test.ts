@@ -172,11 +172,11 @@ describe('ACCOUNTS', () => {
     expect(c).toBe(2);
   });
 
-  it('DELETE removes an account', async () => {
+  it('DELETE (admin + typed confirm) removes an account', async () => {
     const created = await auth(request(app).post('/api/accounts')).send({
       record_type: 'customer', ic_company_name: 'To Delete',
     });
-    const del = await auth(request(app).delete(`/api/accounts/${created.body.id}`));
+    const del = await auth(request(app).delete(`/api/accounts/${created.body.id}`)).send({ confirm: 'DELETE' });
     expect(del.status).toBe(200);
     const got = await auth(request(app).get(`/api/accounts/${created.body.id}`));
     expect(got.status).toBe(404);
@@ -562,5 +562,120 @@ describe('OFFICE KEYS + PEOPLE ROSTERS', () => {
     expect(after.ic_personal - before.ic_personal).toBe(12);  // 10 + 2
     expect(after.am_personal - before.am_personal).toBe(6);   // 5 + 1
     expect(after.ccm_personal - before.ccm_personal).toBe(7); // 3 + 4
+  });
+});
+
+// ═══════════════════════════════════════ SOFT DELETE (ARCHIVE) ══════════════
+describe('ARCHIVE / RESTORE / PURGE', () => {
+  it('archive removes the account from tabs + counts but preserves audit history', async () => {
+    const created = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'ARCHIVE ME', bc_client_number: 'BCC-ARCH-1',
+    });
+    const id = created.body.id;
+
+    const beforeCount = (await auth(request(app).get('/api/accounts?type=customer&limit=1'))).body.total;
+
+    const arch = await auth(request(app).post(`/api/accounts/${id}/archive`));
+    expect(arch.status).toBe(200);
+
+    // Gone from the normal customer list + count
+    const afterCount = (await auth(request(app).get('/api/accounts?type=customer&limit=1'))).body.total;
+    expect(beforeCount - afterCount).toBe(1);
+    const list = (await auth(request(app).get('/api/accounts?type=customer&search=ARCHIVE ME&limit=50'))).body;
+    expect(list.accounts.some((a: any) => a.id === id)).toBe(false);
+
+    // Present in the archived view with archived_by set
+    const archived = (await auth(request(app).get('/api/accounts?type=all&archived=1&limit=1000'))).body;
+    const row = archived.accounts.find((a: any) => a.id === id);
+    expect(row).toBeTruthy();
+    expect(row.archived).toBe(1);
+    expect(row.archived_by).toBe('Cara Angeloni');
+
+    // Audit history is untouched and still queryable
+    const db = openDb();
+    const audits = (Object.assign({}, db.prepare(
+      "SELECT COUNT(*) AS c FROM audit_log WHERE account_id = ? AND action IN ('account_created','account_archived')"
+    ).get(id)) as any).c;
+    db.close();
+    expect(audits).toBe(2);
+  });
+
+  it('restore returns the account to the registry', async () => {
+    const created = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'ic', ic_company_name: 'RESTORE ME', bc_vendor_number: '02014990001',
+    });
+    const id = created.body.id;
+    await auth(request(app).post(`/api/accounts/${id}/archive`));
+
+    const restore = await auth(request(app).post(`/api/accounts/${id}/restore`));
+    expect(restore.status).toBe(200);
+
+    const list = (await auth(request(app).get('/api/accounts?type=ic&search=RESTORE ME&limit=50'))).body;
+    expect(list.accounts.some((a: any) => a.id === id)).toBe(true);
+    const archived = (await auth(request(app).get('/api/accounts?type=all&archived=1&limit=1000'))).body;
+    expect(archived.accounts.some((a: any) => a.id === id)).toBe(false);
+  });
+
+  it('archive is BLOCKED when keys are checked out', async () => {
+    const created = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'HAS CUSTODY',
+    });
+    const id = created.body.id;
+    await auth(request(app).post('/api/assignments/checkout')).send({
+      account_id: id, account_name: 'HAS CUSTODY', assignee: 'Tech', key_type: 'physical',
+    });
+
+    const blocked = await auth(request(app).post(`/api/accounts/${id}/archive`));
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error).toMatch(/Return checked-out keys/i);
+
+    // Still present in the registry
+    const list = (await auth(request(app).get('/api/accounts?type=customer&search=HAS CUSTODY&limit=50'))).body;
+    expect(list.accounts.some((a: any) => a.id === id)).toBe(true);
+  });
+
+  it('purge requires admin + typed DELETE; then hard-removes the row (audit remains)', async () => {
+    const created = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'PURGE ME',
+    });
+    const id = created.body.id;
+
+    // Wrong confirmation → 400, row still exists
+    const bad = await auth(request(app).delete(`/api/accounts/${id}`)).send({ confirm: 'nope' });
+    expect(bad.status).toBe(400);
+    expect((await auth(request(app).get(`/api/accounts/${id}`))).status).toBe(200);
+
+    // Correct confirmation → 200, row gone
+    const ok = await auth(request(app).delete(`/api/accounts/${id}`)).send({ confirm: 'DELETE' });
+    expect(ok.status).toBe(200);
+    expect((await auth(request(app).get(`/api/accounts/${id}`))).status).toBe(404);
+
+    // Audit rows survive the purge (reference the name string)
+    const db = openDb();
+    const audits = (Object.assign({}, db.prepare(
+      "SELECT COUNT(*) AS c FROM audit_log WHERE account_id = ? AND action = 'account_purged'"
+    ).get(id)) as any).c;
+    db.close();
+    expect(audits).toBe(1);
+  });
+
+  it('roster + key-holder stats exclude archived customers', async () => {
+    const AM = 'ARCHIVE ROSTER AM';
+    const c1 = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'ARCH ROSTER 1', account_manager: AM, am_keys: 5, metal_keys: 4,
+    });
+    await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'ARCH ROSTER 2', account_manager: AM, am_keys: 3, metal_keys: 2,
+    });
+    const before = (await auth(request(app).get('/api/managers/account-managers'))).body.managers.find((m: any) => m.person === AM);
+    expect(before.clients_managed).toBe(2);
+    expect(before.keys_held).toBe(8);
+
+    await auth(request(app).post(`/api/accounts/${c1.body.id}/archive`));
+
+    const after = (await auth(request(app).get('/api/managers/account-managers'))).body.managers.find((m: any) => m.person === AM);
+    expect(after.clients_managed).toBe(1);
+    expect(after.keys_held).toBe(3);   // archived client's 5 excluded
+    expect(after.metal_keys).toBe(2);  // archived client's 4 excluded
   });
 });

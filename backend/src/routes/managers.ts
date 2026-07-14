@@ -35,6 +35,7 @@ function roster(
       COALESCE(SUM(office_keys), 0)        AS office_keys
     FROM accounts
     WHERE record_type = 'customer'
+      AND COALESCE(archived, 0) = 0
       AND ${groupCol} IS NOT NULL AND TRIM(${groupCol}) <> ''
       AND (bc_client_number IS NULL OR bc_client_number NOT LIKE '999%')
     GROUP BY ${groupCol}

@@ -7,11 +7,15 @@ import { encrypt } from '../lib/crypto';
 const router = Router();
 
 router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
-  const { search = '', status = '', type = 'all', exclude_test = '', account_manager = '', ccm_manager = '', page = '1', limit = '50' } = req.query as Record<string, string>;
+  const { search = '', status = '', type = 'all', exclude_test = '', account_manager = '', ccm_manager = '', archived = '0', page = '1', limit = '50' } = req.query as Record<string, string>;
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   let whereClauses = '1=1';
   const params: any[] = [];
+
+  // Soft delete: archived records are hidden from every normal view. The
+  // Archived tab passes archived=1 to see them.
+  whereClauses += archived === '1' ? ' AND archived = 1' : ' AND COALESCE(archived, 0) = 0';
 
   // Dashboard hygiene: the dashboard passes exclude_test=1 so sentinel/test
   // records (bc_client_number starting "999") don't distort real counts. The
@@ -109,7 +113,7 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
 
 // IC-only lookup (original route — searches all types for backward compat)
 router.get('/by-customer-id/:vendorNumber', requireAuth, (req: AuthRequest, res: Response) => {
-  const account = db.prepare('SELECT * FROM accounts WHERE bc_vendor_number = ?').get(req.params.vendorNumber) as any;
+  const account = db.prepare('SELECT * FROM accounts WHERE bc_vendor_number = ? AND COALESCE(archived, 0) = 0').get(req.params.vendorNumber) as any;
   if (!account) return res.status(404).json({ error: 'No account found' });
   const assignments = db.prepare(
     'SELECT * FROM key_assignments WHERE account_id = ? ORDER BY checked_out_at DESC LIMIT 20'
@@ -120,7 +124,7 @@ router.get('/by-customer-id/:vendorNumber', requireAuth, (req: AuthRequest, res:
 // Customer-only lookup — search by bc_client_number (primary customer ID)
 router.get('/customer-lookup/:bcNumber', requireAuth, (req: AuthRequest, res: Response) => {
   const account = db.prepare(
-    "SELECT * FROM accounts WHERE bc_client_number = ? AND record_type = 'customer'"
+    "SELECT * FROM accounts WHERE bc_client_number = ? AND record_type = 'customer' AND COALESCE(archived, 0) = 0"
   ).get(req.params.bcNumber) as any;
   if (!account) return res.status(404).json({ error: 'No customer found' });
   const assignments = db.prepare(
@@ -143,6 +147,7 @@ router.get('/key-holder-stats', requireAuth, (_req: AuthRequest, res: Response) 
       COALESCE(SUM(ccm_office_keys), 0)  AS ccm_office_total
     FROM accounts
     WHERE record_type = 'customer'
+      AND COALESCE(archived, 0) = 0
       AND (bc_client_number IS NULL OR bc_client_number NOT LIKE '999%')
   `).get() as any;
   const r = Object.assign({}, row);
@@ -216,14 +221,64 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   res.json({ success: true });
 });
 
+// ── Soft delete (archive) — record leaves the registry, history preserved ────
+router.post('/:id/archive', requireAuth, (req: AuthRequest, res: Response) => {
+  const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) as any;
+  if (!account) return res.status(404).json({ error: 'Not found' });
+
+  // Never orphan live custody: block if keys are still checked out.
+  const active = Object.assign({}, db.prepare(
+    "SELECT COUNT(*) AS c FROM key_assignments WHERE account_id = ? AND status = 'checked_out'"
+  ).get(req.params.id)) as any;
+  if (active.c > 0) {
+    return res.status(409).json({ error: 'Return checked-out keys before archiving' });
+  }
+
+  db.prepare('UPDATE accounts SET archived = 1, archived_at = CURRENT_TIMESTAMP, archived_by = ? WHERE id = ?')
+    .run(req.manager!.name, req.params.id);
+
+  logAudit(req, 'account_archived', account.ic_company_name, req.params.id, {
+    bc_vendor_number: account.bc_vendor_number, bc_client_number: account.bc_client_number,
+    record_type: account.record_type,
+  });
+
+  res.json({ success: true });
+});
+
+// ── Restore an archived record back into the registry ────────────────────────
+router.post('/:id/restore', requireAuth, (req: AuthRequest, res: Response) => {
+  const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) as any;
+  if (!account) return res.status(404).json({ error: 'Not found' });
+
+  db.prepare('UPDATE accounts SET archived = 0, archived_at = NULL, archived_by = NULL WHERE id = ?')
+    .run(req.params.id);
+
+  logAudit(req, 'account_restored', account.ic_company_name, req.params.id, {
+    record_type: account.record_type,
+  });
+
+  res.json({ success: true });
+});
+
+// ── Hard purge — admin only, typed confirmation. Removes the account row ONLY;
+// audit rows remain (they reference the name string, not a FK). ──────────────
 router.delete('/:id', requireAuth, (req: AuthRequest, res: Response) => {
+  if (req.manager?.role !== 'admin') {
+    return res.status(403).json({ error: 'Only an admin can permanently delete accounts' });
+  }
+  const { confirm } = req.body as { confirm?: string };
+  if (confirm !== 'DELETE') {
+    return res.status(400).json({ error: 'Type DELETE to confirm permanent deletion' });
+  }
+
   const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) as any;
   if (!account) return res.status(404).json({ error: 'Not found' });
 
   db.prepare('DELETE FROM accounts WHERE id = ?').run(req.params.id);
 
-  logAudit(req, 'account_deleted', account.ic_company_name, req.params.id, {
-    bc_vendor_number: account.bc_vendor_number, record_type: account.record_type,
+  logAudit(req, 'account_purged', account.ic_company_name, req.params.id, {
+    bc_vendor_number: account.bc_vendor_number, bc_client_number: account.bc_client_number,
+    record_type: account.record_type,
   });
 
   res.json({ success: true });

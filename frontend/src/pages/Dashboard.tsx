@@ -5,14 +5,15 @@ import Badge from '../components/Badge';
 import TestPill from '../components/TestPill';
 import { getAccounts, getAssignments, getOverdue, getStaff, getAudit, getKeyHolderStats } from '../lib/api';
 
-interface Metric { label: string; value: string | number; sub?: string; color?: string; }
+interface Metric { label: string; value: string | number; sub?: string; color?: string; footer?: React.ReactNode; }
 
-function MetricCard({ label, value, sub, color = '' }: Metric) {
+function MetricCard({ label, value, sub, color = '', footer }: Metric) {
   return (
     <div className="card p-5">
       <div className="text-xs text-cw-muted uppercase tracking-wide mb-1">{label}</div>
       <div className={`text-3xl font-bold ${color || 'text-cw-text'}`}>{value}</div>
       {sub && <div className="text-xs text-cw-muted mt-1">{sub}</div>}
+      {footer && <div className="mt-1">{footer}</div>}
     </div>
   );
 }
@@ -25,6 +26,7 @@ export default function Dashboard() {
   const [staffCount, setStaffCount] = useState(0);
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
   const [keyStats, setKeyStats] = useState({ ic_personal: 0, am_personal: 0, ccm_personal: 0 });
+  const [archivedCount, setArchivedCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -37,7 +39,8 @@ export default function Dashboard() {
       getStaff(),
       getAudit({ limit: '10' }),
       getKeyHolderStats(),
-    ]).then(([ic, cust, asgn, overdue, staff, audit, stats]) => {
+      getAccounts({ limit: '1', type: 'all', archived: '1' }),
+    ]).then(([ic, cust, asgn, overdue, staff, audit, stats, arch]) => {
       setIcCount(ic.total);
       setCustomerCount(cust.total);
       setActiveAssignments((asgn as any).total);
@@ -45,6 +48,7 @@ export default function Dashboard() {
       setStaffCount(staff.length);
       setRecentLogs(audit.logs);
       setKeyStats(stats);
+      setArchivedCount(arch.total);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -82,7 +86,14 @@ export default function Dashboard() {
         {/* Metrics */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <MetricCard label="IC Vendors" value={icCount} sub="in key registry" />
-          <MetricCard label="Customers" value={customerCount} sub="in key registry" />
+          <MetricCard
+            label="Customers"
+            value={customerCount}
+            sub="in key registry"
+            footer={archivedCount > 0
+              ? <Link to="/registry?tab=archived" className="text-xs text-cw-red hover:underline">{archivedCount} archived →</Link>
+              : undefined}
+          />
           <MetricCard label="Active Check-Outs" value={activeAssignments} sub="keys currently out" />
           <MetricCard
             label="Overdue"
@@ -172,6 +183,7 @@ export default function Dashboard() {
             <Link to="/vault" className="btn-secondary text-sm">Open Vault</Link>
             <Link to="/reports" className="btn-secondary text-sm">Export Report</Link>
             <Link to="/assistant" className="btn-secondary text-sm">Ask AI</Link>
+            <Link to="/registry?tab=archived" className="btn-secondary text-sm">Manage / Remove Accounts</Link>
           </div>
         </div>
       </div>

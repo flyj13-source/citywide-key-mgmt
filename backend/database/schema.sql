@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS accounts (
   door_access_code_iv TEXT,
   notes TEXT,
   status TEXT DEFAULT 'active',
+  archived INTEGER DEFAULT 0,
+  archived_at DATETIME,
+  archived_by TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   -- legacy columns kept for reference / migration compat
   name TEXT,

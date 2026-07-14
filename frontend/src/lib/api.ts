@@ -84,6 +84,12 @@ export const createAccount = (data: any) =>
   req<any>('/accounts', { method: 'POST', body: JSON.stringify(data) });
 export const updateAccount = (id: number, data: any) =>
   req<any>(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const archiveAccount = (id: number) =>
+  req<any>(`/accounts/${id}/archive`, { method: 'POST' });
+export const restoreAccount = (id: number) =>
+  req<any>(`/accounts/${id}/restore`, { method: 'POST' });
+export const purgeAccount = (id: number, confirm: string) =>
+  req<any>(`/accounts/${id}`, { method: 'DELETE', body: JSON.stringify({ confirm }) });
 
 // Assignments
 export const getAssignments = (params?: Record<string, string>) => {

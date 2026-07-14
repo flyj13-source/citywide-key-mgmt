@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useMemo, memo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
 import ImportModal from '../components/ImportModal';
-import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms } from '../lib/api';
+import { getManager } from '../lib/auth';
+import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount } from '../lib/api';
 
-type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'all';
+type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'all' | 'archived';
 
 const emptyForm = {
   ic_company_name: '',
@@ -304,12 +305,14 @@ function AccountFormModal({
 // Memoized so typing in the search box (which re-renders the page shell to
 // update the input) does NOT re-render the 50 visible rows every keystroke.
 const RegistryTable = memo(function RegistryTable({
-  tab, accounts, loading, colSpan, onRowClick, onEdit,
+  tab, accounts, loading, colSpan, selectedId, onToggleSelect, onRowClick, onEdit,
 }: {
   tab: TabType;
   accounts: any[];
   loading: boolean;
   colSpan: number;
+  selectedId: number | null;
+  onToggleSelect: (id: number) => void;
   onRowClick: (id: number) => void;
   onEdit: (e: React.MouseEvent, id: number) => void;
 }) {
@@ -318,10 +321,11 @@ const RegistryTable = memo(function RegistryTable({
       <table className="w-full text-sm border-collapse">
         <thead>
           <tr className="bg-[#1a1a1a] text-white text-xs">
+            <th className="w-11 px-2 py-3 sticky left-0 z-20 bg-[#1a1a1a]"></th>
             {tab === 'customer' ? (
               <>
-                <th className="text-left px-4 py-3 font-medium whitespace-nowrap sticky left-0 z-20 bg-[#1a1a1a] min-w-[200px]">Client Name</th>
-                <th className="text-left px-3 py-3 font-medium whitespace-nowrap sticky left-[200px] z-20 bg-[#1a1a1a] min-w-[150px]">BC Client #</th>
+                <th className="text-left px-4 py-3 font-medium whitespace-nowrap sticky left-11 z-20 bg-[#1a1a1a] min-w-[200px]">Client Name</th>
+                <th className="text-left px-3 py-3 font-medium whitespace-nowrap sticky left-[244px] z-20 bg-[#1a1a1a] min-w-[150px]">BC Client #</th>
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Independent Contractor</th>
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">BC Vendor #</th>
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Account Manager</th>
@@ -361,19 +365,29 @@ const RegistryTable = memo(function RegistryTable({
           ) : accounts.length === 0 ? (
             <tr><td colSpan={colSpan} className="px-4 py-8 text-center text-cw-muted">No records found</td></tr>
           ) : accounts.map((a, i) => {
-            const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
+            const selected = selectedId === a.id;
+            const rowBg = selected ? 'bg-[#fbeaea]' : (i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]');
             return (
               <tr
                 key={a.id}
                 className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${rowBg}`}
                 onClick={() => onRowClick(a.id)}
               >
+                <td className={`w-11 px-2 py-3 text-center sticky left-0 z-10 ${rowBg}`} onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-[#C0272D] cursor-pointer align-middle"
+                    checked={selected}
+                    onChange={() => onToggleSelect(a.id)}
+                    aria-label={`Select ${a.ic_company_name}`}
+                  />
+                </td>
                 {tab === 'customer' ? (
                   <>
-                    <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[200px] truncate sticky left-0 z-10 ${rowBg}`}>
+                    <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[200px] truncate sticky left-11 z-10 ${rowBg}`}>
                       {a.ic_company_name}
                     </td>
-                    <td className={`px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap sticky left-[200px] z-10 ${rowBg}`}>
+                    <td className={`px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap sticky left-[244px] z-10 ${rowBg}`}>
                       {a.bc_client_number || '—'}
                     </td>
                     <td className="px-3 py-3 text-xs text-gray-700 whitespace-nowrap max-w-[180px] truncate">{a.ic_name || '—'}</td>
@@ -419,6 +433,59 @@ const RegistryTable = memo(function RegistryTable({
     </div>
   );
 });
+
+// ── Archived records table ─────────────────────────────────
+function ArchivedTable({
+  rows, loading, isAdmin, onRestore, onPurge,
+}: {
+  rows: any[];
+  loading: boolean;
+  isAdmin: boolean;
+  onRestore: (id: number) => void;
+  onPurge: (a: any) => void;
+}) {
+  return (
+    <div className="card overflow-x-auto max-w-full">
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="bg-[#1a1a1a] text-white text-xs">
+            <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Name</th>
+            <th className="text-left px-3 py-3 font-medium whitespace-nowrap">BC #</th>
+            <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Type</th>
+            <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Archived by</th>
+            <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Archived on</th>
+            <th className="text-right px-4 py-3 font-medium whitespace-nowrap">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {loading ? (
+            <tr><td colSpan={6} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+          ) : rows.length === 0 ? (
+            <tr><td colSpan={6} className="px-4 py-8 text-center text-cw-muted">No archived records</td></tr>
+          ) : rows.map((a, i) => {
+            const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
+            const bc = a.record_type === 'customer' ? a.bc_client_number : a.bc_vendor_number;
+            return (
+              <tr key={a.id} className={`border-b border-gray-100 ${rowBg}`}>
+                <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[240px] truncate">{a.ic_company_name}</td>
+                <td className="px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap">{bc || '—'}</td>
+                <td className="px-3 py-3 text-center"><TypeBadge type={a.record_type || 'ic'} /></td>
+                <td className="px-3 py-3 text-xs text-gray-700 whitespace-nowrap">{a.archived_by || '—'}</td>
+                <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{a.archived_at ? new Date(a.archived_at + 'Z').toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <button onClick={() => onRestore(a.id)} className="text-xs border border-[#1a1a1a] text-[#1a1a1a] rounded px-2.5 py-1 hover:bg-gray-50 transition-colors mr-2">Restore</button>
+                  {isAdmin && (
+                    <button onClick={() => onPurge(a)} className="text-xs border border-gray-300 text-gray-600 rounded px-2.5 py-1 hover:border-[#C0272D] hover:text-[#C0272D] transition-colors">Delete Permanently</button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 // ── People roster (Account Managers / CCMs) ────────────────
 // Aggregates come pre-grouped from the backend (SQL GROUP BY + SUMs). Two zones:
@@ -537,9 +604,11 @@ type ModalState =
 
 export default function Registry() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<TabType>('customer');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isAdmin = getManager()?.role === 'admin';
+  const [tab, setTab] = useState<TabType>(searchParams.get('tab') === 'archived' ? 'archived' : 'customer');
   const [accounts, setAccounts] = useState<any[]>([]);
-  const [counts, setCounts] = useState({ ic: 0, customer: 0, all: 0 });
+  const [counts, setCounts] = useState({ ic: 0, customer: 0, all: 0, archived: 0 });
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -551,9 +620,17 @@ export default function Registry() {
   const [rosterLoading, setRosterLoading] = useState(false);
   // When a roster person is clicked, drill into their client list.
   const [drill, setDrill] = useState<{ role: 'am' | 'ccm'; name: string } | null>(null);
+  // Row selection + delete flows.
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<any | null>(null);
+  const [archiveError, setArchiveError] = useState('');
+  const [purgeTarget, setPurgeTarget] = useState<any | null>(null);
+  const [purgeConfirm, setPurgeConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
   const LIMIT = 50;
 
   const isRosterTab = (tab === 'am' || tab === 'ccm') && !drill;
+  const isArchivedTab = tab === 'archived' && !drill;
 
   // Debounce the applied search: typing updates the input instantly, but the
   // list is only refetched 300ms after the user pauses (was 4 API calls PER
@@ -572,6 +649,9 @@ export default function Registry() {
       if (drill) {
         params.type = 'customer';
         params[drill.role === 'am' ? 'account_manager' : 'ccm_manager'] = drill.name;
+      } else if (tab === 'archived') {
+        params.type = 'all';
+        params.archived = '1';
       } else {
         params.type = tab;
       }
@@ -602,12 +682,13 @@ export default function Registry() {
   // Tab/type counts — independent of search, so they are NOT refetched while
   // typing. Refreshed on mount and after any mutation.
   const refreshCounts = useCallback(async () => {
-    const [icData, custData, allData] = await Promise.all([
+    const [icData, custData, allData, archData] = await Promise.all([
       getAccounts({ limit: '1', type: 'ic' }),
       getAccounts({ limit: '1', type: 'customer' }),
       getAccounts({ limit: '1', type: 'all' }),
+      getAccounts({ limit: '1', type: 'all', archived: '1' }),
     ]);
-    setCounts({ ic: icData.total, customer: custData.total, all: allData.total });
+    setCounts({ ic: icData.total, customer: custData.total, all: allData.total, archived: archData.total });
   }, []);
 
   useEffect(() => { refreshCounts(); }, [refreshCounts]);
@@ -634,18 +715,62 @@ export default function Registry() {
     { key: 'am', label: 'Account Managers' },
     { key: 'ccm', label: 'Contract Compliance Mgrs' },
     { key: 'all', label: `All (${counts.all})` },
+    { key: 'archived', label: `Archived (${counts.archived})` },
   ], [counts]);
 
-  const selectTab = (key: TabType) => { setTab(key); setPage(1); setDrill(null); };
+  const selectTab = (key: TabType) => {
+    setTab(key);
+    setPage(1);
+    setDrill(null);
+    setSelectedId(null);
+    setSearchParams(key === 'archived' ? { tab: 'archived' } : {}, { replace: true });
+  };
   const openPerson = (name: string) => {
     setDrill({ role: tab === 'am' ? 'am' : 'ccm', name });
     setPage(1);
   };
 
+  const selectedAccount = accounts.find((a) => a.id === selectedId) || null;
+
+  const doArchive = async () => {
+    if (!archiveTarget) return;
+    setBusy(true); setArchiveError('');
+    try {
+      await archiveAccount(archiveTarget.id);
+      setArchiveTarget(null);
+      setSelectedId(null);
+      loadRows();
+      refreshCounts();
+    } catch (err: any) {
+      setArchiveError(err?.message || 'Could not archive');
+    } finally { setBusy(false); }
+  };
+
+  const doRestore = async (id: number) => {
+    setBusy(true);
+    try {
+      await restoreAccount(id);
+      loadRows();
+      refreshCounts();
+    } finally { setBusy(false); }
+  };
+
+  const doPurge = async () => {
+    if (!purgeTarget || purgeConfirm !== 'DELETE') return;
+    setBusy(true);
+    try {
+      await purgeAccount(purgeTarget.id, purgeConfirm);
+      setPurgeTarget(null);
+      setPurgeConfirm('');
+      loadRows();
+      refreshCounts();
+    } finally { setBusy(false); }
+  };
+
   // When drilled in, the client list uses the Customer column layout.
-  // col counts (incl. Office Keys): customer=21, all=16, ic=15
+  // col counts incl. leading checkbox + Office Keys: customer=22, all=17, ic=16
   const tableTab: TabType = drill ? 'customer' : tab;
-  const colSpan = tableTab === 'customer' ? 21 : tableTab === 'all' ? 16 : 15;
+  const colSpan = tableTab === 'customer' ? 22 : tableTab === 'all' ? 17 : 16;
 
   return (
     <Layout>
@@ -665,6 +790,14 @@ export default function Registry() {
             </button>
             <button onClick={() => openAdd('ic')} className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors">
               + Add IC
+            </button>
+            <button
+              onClick={() => { setArchiveError(''); setArchiveTarget(selectedAccount); }}
+              disabled={!selectedAccount}
+              title={selectedAccount ? 'Archive the selected account' : 'Select a row first'}
+              className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-40 disabled:hover:border-[#1a1a1a] disabled:hover:text-[#1a1a1a] disabled:cursor-not-allowed transition-colors"
+            >
+              Delete Account
             </button>
           </div>
         </div>
@@ -708,7 +841,7 @@ export default function Registry() {
           />
         )}
 
-        {/* Roster (Account Managers / CCMs) OR the client table */}
+        {/* Roster (Account Managers / CCMs) · Archived · or the client table */}
         {isRosterTab ? (
           <RosterTable
             role={tab as 'am' | 'ccm'}
@@ -716,12 +849,22 @@ export default function Registry() {
             loading={rosterLoading}
             onSelect={openPerson}
           />
+        ) : isArchivedTab ? (
+          <ArchivedTable
+            rows={accounts}
+            loading={loading}
+            isAdmin={isAdmin}
+            onRestore={doRestore}
+            onPurge={(a) => { setPurgeConfirm(''); setPurgeTarget(a); }}
+          />
         ) : (
           <RegistryTable
             tab={tableTab}
             accounts={accounts}
             loading={loading}
             colSpan={colSpan}
+            selectedId={selectedId}
+            onToggleSelect={(id) => setSelectedId((cur) => (cur === id ? null : id))}
             onRowClick={onRowClick}
             onEdit={openEdit}
           />
@@ -749,6 +892,48 @@ export default function Registry() {
 
       {showImport && (
         <ImportModal onClose={() => setShowImport(false)} onDone={() => { loadRows(); refreshCounts(); }} />
+      )}
+
+      {/* Archive confirmation */}
+      {archiveTarget && (
+        <Modal title="Archive account" onClose={() => setArchiveTarget(null)} width="max-w-md">
+          <p className="text-sm text-cw-text">
+            Archive <span className="font-semibold">{archiveTarget.ic_company_name}</span>? The record leaves the
+            registry but its history is preserved. You can restore it later.
+          </p>
+          {archiveError && (
+            <p className="mt-3 text-sm text-[#C0272D] bg-[#fbeaea] border border-[#f0c9cb] rounded px-3 py-2">{archiveError}</p>
+          )}
+          <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
+            <button onClick={doArchive} disabled={busy} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors">
+              {busy ? 'Archiving…' : 'Archive'}
+            </button>
+            <button onClick={() => setArchiveTarget(null)} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Permanent delete (admin) — typed confirmation */}
+      {purgeTarget && (
+        <Modal title="Delete permanently" onClose={() => { setPurgeTarget(null); setPurgeConfirm(''); }} width="max-w-md">
+          <p className="text-sm text-cw-text">
+            This permanently deletes <span className="font-semibold">{purgeTarget.ic_company_name}</span>. This cannot
+            be undone. Its audit history is retained. Type <span className="font-mono font-bold">DELETE</span> to confirm.
+          </p>
+          <input
+            className="input mt-3 focus:ring-[#C0272D] focus:border-[#C0272D]"
+            placeholder="DELETE"
+            value={purgeConfirm}
+            onChange={(e) => setPurgeConfirm(e.target.value)}
+            autoFocus
+          />
+          <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
+            <button onClick={doPurge} disabled={busy || purgeConfirm !== 'DELETE'} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+              {busy ? 'Deleting…' : 'Delete Permanently'}
+            </button>
+            <button onClick={() => { setPurgeTarget(null); setPurgeConfirm(''); }} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
+          </div>
+        </Modal>
       )}
     </Layout>
   );
