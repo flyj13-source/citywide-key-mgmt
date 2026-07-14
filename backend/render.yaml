@@ -5,11 +5,20 @@ services:
     rootDir: backend
     buildCommand: npm ci && npm run build
     startCommand: node dist/index.js
+    # Persistent disk — WITHOUT this the SQLite file lives on ephemeral storage
+    # and every deploy/restart wipes all data. DB_PATH points the app + seed at
+    # the mounted disk; the boot self-check verifies it landed there.
+    disk:
+      name: citywide-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 3001
+      - key: DB_PATH
+        value: /data/citywide.db
       - key: JWT_SECRET
         generateValue: true
       - key: ENCRYPTION_KEY

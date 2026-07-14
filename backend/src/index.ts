@@ -4,6 +4,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import path from 'path';
 
+import db, { DATABASE_FILE } from './lib/db';
 import { autoSeedIfEmpty } from './lib/autoSeed';
 import authRouter from './routes/auth';
 import importRouter from './routes/import';
@@ -67,20 +68,54 @@ app.use('/api/contractors', contractorsRouter);
 // Public contractor routes (no JWT)
 app.use('/api/contractor', contractorsRouter);
 
-app.listen(PORT, () => {
-  console.log(`\n🔑  City Wide Boston Key Management API`);
-  console.log(`    Server running on port ${PORT}`);
-  console.log(`    Health: http://localhost:${PORT}/api/health`);
+// ── Tier 3 boot self-check ──────────────────────────────────────────────────
+// One grep-able line per start proving WHERE the DB lives and whether it is on
+// the Render persistent disk. If it is not, data is ephemeral and every
+// deploy/restart wipes it — make that impossible to miss in the logs.
+export function bootSelfCheck(): string {
+  const count = (sql: string): number => {
+    try {
+      return (Object.assign({}, db.prepare(sql).get()) as any).c as number;
+    } catch {
+      return -1;
+    }
+  };
+  const tables = count("SELECT COUNT(*) AS c FROM sqlite_master WHERE type = 'table'");
+  const customers = count("SELECT COUNT(*) AS c FROM accounts WHERE record_type = 'customer'");
+  const ics = count("SELECT COUNT(*) AS c FROM accounts WHERE record_type = 'ic' OR record_type IS NULL");
+  const onMount = DATABASE_FILE.startsWith('/data');
 
-  // Seed runs AFTER the server is listening and the disk is mounted.
-  // Guards inside autoSeedIfEmpty() are idempotent — safe on every restart.
-  try {
-    autoSeedIfEmpty();
-  } catch (err) {
-    console.error('[seed] autoSeedIfEmpty failed:', err);
+  const line = `BOOT: db=${DATABASE_FILE} onMount=${onMount} tables=${tables} customers=${customers} ics=${ics}`;
+  console.log(line);
+  if (!onMount) {
+    console.log('\x1b[41m\x1b[97m WARNING: DATABASE IS EPHEMERAL — DATA WILL NOT PERSIST \x1b[0m');
+    console.log(
+      'WARNING: DATABASE IS EPHEMERAL — DATA WILL NOT PERSIST ' +
+      `(DB_PATH=${DATABASE_FILE} is not on the /data mounted disk — set DB_PATH=/data/citywide.db)`
+    );
   }
+  return line;
+}
 
-  console.log(`    Login: cara@citywideboston.com / demo1234\n`);
-});
+// Only bind a port when run directly (node dist/index.js). When imported by the
+// test suite we just want the `app` object for supertest — no open listener.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`\n🔑  City Wide Boston Key Management API`);
+    console.log(`    Server running on port ${PORT}`);
+    console.log(`    Health: http://localhost:${PORT}/api/health`);
+
+    // Seed runs AFTER the server is listening and the disk is mounted.
+    // Guards inside autoSeedIfEmpty() are idempotent — safe on every restart.
+    try {
+      autoSeedIfEmpty();
+    } catch (err) {
+      console.error('[seed] autoSeedIfEmpty failed:', err);
+    }
+
+    bootSelfCheck();
+    console.log(`    Login: cara@citywideboston.com / demo1234\n`);
+  });
+}
 
 export default app;

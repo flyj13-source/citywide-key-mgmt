@@ -36,3 +36,7 @@ handoff/INSTALL-GUIDE-pdf-src.md
 handoff/INSTALL-GUIDE-pdf-src.pdf
 handoff/guide.css
 /database/
+
+# Persistence-gauntlet local state (Tier 2)
+backend/.persist-sentinel.json
+backend/.persist-snapshot.json

@@ -184,4 +184,18 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   res.json({ success: true });
 });
 
+router.delete('/:id', requireAuth, (req: AuthRequest, res: Response) => {
+  const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) as any;
+  if (!account) return res.status(404).json({ error: 'Not found' });
+
+  db.prepare('DELETE FROM accounts WHERE id = ?').run(req.params.id);
+
+  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
+    'account_deleted', account.ic_company_name, req.params.id, req.manager!.name,
+    JSON.stringify({ bc_vendor_number: account.bc_vendor_number, record_type: account.record_type })
+  );
+
+  res.json({ success: true });
+});
+
 export default router;
