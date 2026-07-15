@@ -3,6 +3,7 @@ import request from 'supertest';
 import type { Express } from 'express';
 import * as XLSX from 'xlsx';
 import { DatabaseSync } from 'node:sqlite';
+import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -780,5 +781,102 @@ describe('ROLE KEY TYPE BREAKDOWN', () => {
     expect(row.office_held).toBe(3);      // 1+2
     expect(row.keys_held).toBe(9);        // (2+1+1)+(3+0+2)
     expect(row.total_held).toBe(12);      // 9 + 3 office
+  });
+});
+
+// ═══════════════════════════════════════ DELETE PERMISSIONS ═════════════════
+describe('CAN_DELETE PERMISSIONS', () => {
+  it('Cara is seeded with can_delete=1 and it flows through login', async () => {
+    const db = openDb();
+    const cd = (Object.assign({}, db.prepare('SELECT can_delete FROM managers WHERE email = ?').get(ADMIN_EMAIL)) as any).can_delete;
+    db.close();
+    expect(cd).toBe(1);
+    const login = await request(app).post('/api/auth/login').send({ email: ADMIN_EMAIL, password: ADMIN_PASS });
+    expect(login.body.manager.can_delete).toBe(true);
+  });
+
+  it('a manager WITHOUT can_delete gets 403 on archive/restore/purge', async () => {
+    const db = openDb();
+    db.prepare('INSERT INTO managers (name, email, password_hash, role, can_delete) VALUES (?, ?, ?, ?, 0)')
+      .run('No Delete', 'nodelete@cw.com', bcrypt.hashSync('pass1234', 10), 'manager');
+    db.close();
+    const login = await request(app).post('/api/auth/login').send({ email: 'nodelete@cw.com', password: 'pass1234' });
+    expect(login.body.manager.can_delete).toBe(false);
+    const noDel = login.body.token;
+
+    const created = await auth(request(app).post('/api/accounts')).send({ record_type: 'customer', ic_company_name: 'PERM TEST' });
+    const arch = await request(app).post(`/api/accounts/${created.body.id}/archive`).set('Authorization', `Bearer ${noDel}`);
+    expect(arch.status).toBe(403);
+    expect(arch.body.error).toMatch(/Delete access required — contact Cara Angeloni/);
+    const del = await request(app).delete(`/api/accounts/${created.body.id}`).set('Authorization', `Bearer ${noDel}`).send({ confirm: 'DELETE' });
+    expect(del.status).toBe(403);
+  });
+
+  it('admin can grant can_delete via PATCH /managers/:id/permissions (audit-logged), then that manager can archive', async () => {
+    const db = openDb();
+    const mgr: any = Object.assign({}, db.prepare('SELECT id FROM managers WHERE email = ?').get('nodelete@cw.com'));
+    db.close();
+
+    const grant = await auth(request(app).patch(`/api/managers/${mgr.id}/permissions`)).send({ can_delete: true });
+    expect(grant.status).toBe(200);
+    expect(grant.body.can_delete).toBe(true);
+
+    const db2 = openDb();
+    const audit = (Object.assign({}, db2.prepare("SELECT COUNT(*) AS c FROM audit_log WHERE action = 'permissions_changed'").get()) as any).c;
+    db2.close();
+    expect(audit).toBeGreaterThanOrEqual(1);
+
+    // now that manager can archive
+    const login = await request(app).post('/api/auth/login').send({ email: 'nodelete@cw.com', password: 'pass1234' });
+    const created = await auth(request(app).post('/api/accounts')).send({ record_type: 'customer', ic_company_name: 'PERM GRANTED' });
+    const arch = await request(app).post(`/api/accounts/${created.body.id}/archive`).set('Authorization', `Bearer ${login.body.token}`);
+    expect(arch.status).toBe(200);
+  });
+
+  it('non-admin cannot grant permissions', async () => {
+    const login = await request(app).post('/api/auth/login').send({ email: 'nodelete@cw.com', password: 'pass1234' });
+    const db = openDb();
+    const mgr: any = Object.assign({}, db.prepare('SELECT id FROM managers WHERE email = ?').get(ADMIN_EMAIL));
+    db.close();
+    const res = await request(app).patch(`/api/managers/${mgr.id}/permissions`).set('Authorization', `Bearer ${login.body.token}`).send({ can_delete: false });
+    expect(res.status).toBe(403);
+  });
+});
+
+// ═══════════════════════════════════════ IMPORT DRY-RUN ═════════════════════
+describe('UPDATE-MODE IMPORT DRY-RUN', () => {
+  it('reports fields it WOULD backfill without writing', async () => {
+    // existing customer with empty account_manager + ccm_manager + role counts
+    await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'DRYRUN CO', bc_client_number: 'DRYRUN-1',
+    });
+
+    const rows = [
+      { ic_company_name: 'DRYRUN CO', bc_client_number: 'DRYRUN-1', account_manager: 'New AM', ccm_manager: 'New CCM', am_keys: 3, office_keys: 2 },
+      { ic_company_name: 'GHOST', bc_client_number: 'DRYRUN-NONE', account_manager: 'X' }, // unmatched
+    ];
+    const res = await auth(request(app).post('/api/accounts/import/dry-run')).send({ rows });
+    expect(res.status).toBe(200);
+    expect(res.body.matched).toBe(1);
+    expect(res.body.unmatched).toBe(1);
+    expect(res.body.wouldFill.account_manager).toBe(1);
+    expect(res.body.wouldFill.ccm_manager).toBe(1);
+    expect(res.body.wouldFill.am_keys).toBe(1);
+    expect(res.body.wouldFill.office_keys).toBe(1);
+
+    // dry-run wrote nothing: the row's account_manager is still empty
+    const got = (await auth(request(app).get('/api/accounts?type=customer&search=DRYRUN CO&limit=1'))).body.accounts[0];
+    expect(got.account_manager == null || got.account_manager === '').toBe(true);
+  });
+
+  it('does not report populated fields (never overwrites)', async () => {
+    await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'DRYRUN FULL', bc_client_number: 'DRYRUN-2', account_manager: 'Existing AM',
+    });
+    const res = await auth(request(app).post('/api/accounts/import/dry-run')).send({
+      rows: [{ ic_company_name: 'DRYRUN FULL', bc_client_number: 'DRYRUN-2', account_manager: 'Would Overwrite' }],
+    });
+    expect(res.body.matched).toBe(1);
+    expect(res.body.wouldFill.account_manager ?? 0).toBe(0); // populated → not filled
   });
 });

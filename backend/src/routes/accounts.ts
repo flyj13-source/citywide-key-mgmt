@@ -255,8 +255,16 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   res.json({ success: true });
 });
 
+// Archive / restore / purge all require the can_delete permission.
+const DELETE_DENIED = 'Delete access required — contact Cara Angeloni';
+function requireDelete(req: AuthRequest, res: Response): boolean {
+  if (!req.manager?.can_delete) { res.status(403).json({ error: DELETE_DENIED }); return false; }
+  return true;
+}
+
 // ── Soft delete (archive) — record leaves the registry, history preserved ────
 router.post('/:id/archive', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireDelete(req, res)) return;
   const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) as any;
   if (!account) return res.status(404).json({ error: 'Not found' });
 
@@ -281,6 +289,7 @@ router.post('/:id/archive', requireAuth, (req: AuthRequest, res: Response) => {
 
 // ── Restore an archived record back into the registry ────────────────────────
 router.post('/:id/restore', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireDelete(req, res)) return;
   const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) as any;
   if (!account) return res.status(404).json({ error: 'Not found' });
 
@@ -297,6 +306,7 @@ router.post('/:id/restore', requireAuth, (req: AuthRequest, res: Response) => {
 // ── Hard purge — admin only, typed confirmation. Removes the account row ONLY;
 // audit rows remain (they reference the name string, not a FK). ──────────────
 router.delete('/:id', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireDelete(req, res)) return;
   if (req.manager?.role !== 'admin') {
     return res.status(403).json({ error: 'Only an admin can permanently delete accounts' });
   }

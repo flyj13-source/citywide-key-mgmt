@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
+import { logAudit } from '../lib/audit';
 
 const router = Router();
 
@@ -62,6 +63,27 @@ router.get('/account-managers', requireAuth, (_req: AuthRequest, res: Response) 
 
 router.get('/ccms', requireAuth, (_req: AuthRequest, res: Response) => {
   res.json({ managers: roster('ccm_manager', 'ccm') });
+});
+
+// ── Grant / revoke a manager's delete permission (admin only) ────────────────
+// The Manage Users UI arrives later; the endpoint exists now so Cara can grant
+// can_delete=1 to a teammate. Audit-logged.
+router.patch('/:id/permissions', requireAuth, (req: AuthRequest, res: Response) => {
+  if (req.manager?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+  const target = db.prepare('SELECT id, name, email FROM managers WHERE id = ?').get(req.params.id) as any;
+  if (!target) return res.status(404).json({ error: 'Manager not found' });
+
+  const { can_delete } = req.body as { can_delete?: boolean | number };
+  const value = can_delete ? 1 : 0;
+  db.prepare('UPDATE managers SET can_delete = ? WHERE id = ?').run(value, req.params.id);
+
+  logAudit(req, 'permissions_changed', null, null, {
+    target_manager: target.email, can_delete: value === 1,
+  });
+
+  res.json({ id: target.id, email: target.email, can_delete: value === 1 });
 });
 
 export default router;

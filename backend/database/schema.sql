@@ -104,5 +104,7 @@ CREATE TABLE IF NOT EXISTS managers (
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   role TEXT DEFAULT 'manager',
+  is_test INTEGER DEFAULT 0,
+  can_delete INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

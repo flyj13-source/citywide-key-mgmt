@@ -41,6 +41,11 @@ export function autoSeedIfEmpty(): void {
     }
   }
 
+  // ── Delete permission — Cara + the test account only (idempotent) ───────────
+  const grant = db.prepare("UPDATE managers SET can_delete = 1 WHERE email = ? AND COALESCE(can_delete, 0) <> 1");
+  const granted = (grant.run('cara@citywideboston.com') as any).changes + (grant.run(testEmail) as any).changes;
+  if (granted > 0) console.log(`✓ [seed] Granted delete permission to Cara + test account`);
+
   // ── Demo accounts — only if the accounts table is completely empty ─────────
   // Skips on any real deployment that already has imported data.
   const count = (db.prepare('SELECT COUNT(*) as c FROM accounts').get() as any).c as number;

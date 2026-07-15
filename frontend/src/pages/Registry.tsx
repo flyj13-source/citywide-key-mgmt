@@ -379,12 +379,13 @@ function AccountFormModal({
 // Memoized so typing in the search box (which re-renders the page shell to
 // update the input) does NOT re-render the 50 visible rows every keystroke.
 const RegistryTable = memo(function RegistryTable({
-  tab, accounts, loading, colSpan, selectedId, onToggleSelect, onRowClick, onEdit,
+  tab, accounts, loading, colSpan, selectable, selectedId, onToggleSelect, onRowClick, onEdit,
 }: {
   tab: TabType;
   accounts: any[];
   loading: boolean;
   colSpan: number;
+  selectable: boolean;
   selectedId: number | null;
   onToggleSelect: (id: number) => void;
   onRowClick: (id: number) => void;
@@ -395,11 +396,11 @@ const RegistryTable = memo(function RegistryTable({
       <table className="w-full text-sm border-collapse">
         <thead>
           <tr className="bg-[#1a1a1a] text-white text-xs">
-            <th className="w-11 px-2 py-3 sticky left-0 z-20 bg-[#1a1a1a]"></th>
+            {selectable && <th className="w-11 px-2 py-3 sticky left-0 z-20 bg-[#1a1a1a]"></th>}
             {tab === 'customer' ? (
               <>
-                <th className="text-left px-4 py-3 font-medium whitespace-nowrap sticky left-11 z-20 bg-[#1a1a1a] min-w-[200px]">Client Name</th>
-                <th className="text-left px-3 py-3 font-medium whitespace-nowrap sticky left-[244px] z-20 bg-[#1a1a1a] min-w-[150px]">BC Client #</th>
+                <th className={`text-left px-4 py-3 font-medium whitespace-nowrap sticky ${selectable ? 'left-11' : 'left-0'} z-20 bg-[#1a1a1a] min-w-[200px]`}>Client Name</th>
+                <th className={`text-left px-3 py-3 font-medium whitespace-nowrap sticky ${selectable ? 'left-[244px]' : 'left-[200px]'} z-20 bg-[#1a1a1a] min-w-[150px]`}>BC Client #</th>
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Independent Contractor</th>
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">BC Vendor #</th>
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Account Manager</th>
@@ -447,21 +448,23 @@ const RegistryTable = memo(function RegistryTable({
                 className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${rowBg}`}
                 onClick={() => onRowClick(a.id)}
               >
-                <td className={`w-11 px-2 py-3 text-center sticky left-0 z-10 ${rowBg}`} onClick={(e) => e.stopPropagation()}>
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 accent-[#C0272D] cursor-pointer align-middle"
-                    checked={selected}
-                    onChange={() => onToggleSelect(a.id)}
-                    aria-label={`Select ${a.ic_company_name}`}
-                  />
-                </td>
+                {selectable && (
+                  <td className={`w-11 px-2 py-3 text-center sticky left-0 z-10 ${rowBg}`} onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-[#C0272D] cursor-pointer align-middle"
+                      checked={selected}
+                      onChange={() => onToggleSelect(a.id)}
+                      aria-label={`Select ${a.ic_company_name}`}
+                    />
+                  </td>
+                )}
                 {tab === 'customer' ? (
                   <>
-                    <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[200px] truncate sticky left-11 z-10 ${rowBg}`}>
+                    <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[200px] truncate sticky ${selectable ? 'left-11' : 'left-0'} z-10 ${rowBg}`}>
                       {a.ic_company_name}
                     </td>
-                    <td className={`px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap sticky left-[244px] z-10 ${rowBg}`}>
+                    <td className={`px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap sticky ${selectable ? 'left-[244px]' : 'left-[200px]'} z-10 ${rowBg}`}>
                       {a.bc_client_number || '—'}
                     </td>
                     <td className="px-3 py-3 text-xs text-gray-700 whitespace-nowrap max-w-[180px] truncate">{a.ic_name || '—'}</td>
@@ -510,10 +513,11 @@ const RegistryTable = memo(function RegistryTable({
 
 // ── Archived records table ─────────────────────────────────
 function ArchivedTable({
-  rows, loading, isAdmin, onRestore, onPurge,
+  rows, loading, canDelete, isAdmin, onRestore, onPurge,
 }: {
   rows: any[];
   loading: boolean;
+  canDelete: boolean;
   isAdmin: boolean;
   onRestore: (id: number) => void;
   onPurge: (a: any) => void;
@@ -547,9 +551,15 @@ function ArchivedTable({
                 <td className="px-3 py-3 text-xs text-gray-700 whitespace-nowrap">{a.archived_by || '—'}</td>
                 <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{a.archived_at ? new Date(a.archived_at + 'Z').toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
-                  <button onClick={() => onRestore(a.id)} className="text-xs border border-[#1a1a1a] text-[#1a1a1a] rounded px-2.5 py-1 hover:bg-gray-50 transition-colors mr-2">Restore</button>
-                  {isAdmin && (
-                    <button onClick={() => onPurge(a)} className="text-xs border border-gray-300 text-gray-600 rounded px-2.5 py-1 hover:border-[#C0272D] hover:text-[#C0272D] transition-colors">Delete Permanently</button>
+                  {canDelete ? (
+                    <>
+                      <button onClick={() => onRestore(a.id)} className="text-xs border border-[#1a1a1a] text-[#1a1a1a] rounded px-2.5 py-1 hover:bg-gray-50 transition-colors mr-2">Restore</button>
+                      {isAdmin && (
+                        <button onClick={() => onPurge(a)} className="text-xs border border-gray-300 text-gray-600 rounded px-2.5 py-1 hover:border-[#C0272D] hover:text-[#C0272D] transition-colors">Delete Permanently</button>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-xs text-gray-400">—</span>
                   )}
                 </td>
               </tr>
@@ -685,6 +695,7 @@ export default function Registry() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const isAdmin = getManager()?.role === 'admin';
+  const canDelete = !!getManager()?.can_delete;
   const [tab, setTab] = useState<TabType>(searchParams.get('tab') === 'archived' ? 'archived' : 'customer');
   const [accounts, setAccounts] = useState<any[]>([]);
   const [counts, setCounts] = useState({ ic: 0, customer: 0, all: 0, archived: 0 });
@@ -849,7 +860,9 @@ export default function Registry() {
   // When drilled in, the client list uses the Customer column layout.
   // col counts incl. leading checkbox + Office Keys: customer=22, all=17, ic=16
   const tableTab: TabType = drill ? 'customer' : tab;
-  const colSpan = tableTab === 'customer' ? 22 : tableTab === 'all' ? 17 : 16;
+  // Base counts include the leading checkbox column; drop it without delete rights.
+  const baseColSpan = tableTab === 'customer' ? 22 : tableTab === 'all' ? 17 : 16;
+  const colSpan = canDelete ? baseColSpan : baseColSpan - 1;
 
   return (
     <Layout>
@@ -870,14 +883,16 @@ export default function Registry() {
             <button onClick={() => openAdd('ic')} className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors">
               + Add IC
             </button>
-            <button
-              onClick={() => { setArchiveError(''); setArchiveTarget(selectedAccount); }}
-              disabled={!selectedAccount}
-              title={selectedAccount ? 'Archive the selected account' : 'Select a row first'}
-              className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-40 disabled:hover:border-[#1a1a1a] disabled:hover:text-[#1a1a1a] disabled:cursor-not-allowed transition-colors"
-            >
-              Delete Account
-            </button>
+            {canDelete && (
+              <button
+                onClick={() => { setArchiveError(''); setArchiveTarget(selectedAccount); }}
+                disabled={!selectedAccount}
+                title={selectedAccount ? 'Archive the selected account' : 'Select a row first'}
+                className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-40 disabled:hover:border-[#1a1a1a] disabled:hover:text-[#1a1a1a] disabled:cursor-not-allowed transition-colors"
+              >
+                Delete Account
+              </button>
+            )}
           </div>
         </div>
 
@@ -932,6 +947,7 @@ export default function Registry() {
           <ArchivedTable
             rows={accounts}
             loading={loading}
+            canDelete={canDelete}
             isAdmin={isAdmin}
             onRestore={doRestore}
             onPurge={(a) => { setPurgeConfirm(''); setPurgeTarget(a); }}
@@ -942,6 +958,7 @@ export default function Registry() {
             accounts={accounts}
             loading={loading}
             colSpan={colSpan}
+            selectable={canDelete}
             selectedId={selectedId}
             onToggleSelect={(id) => setSelectedId((cur) => (cur === id ? null : id))}
             onRowClick={onRowClick}

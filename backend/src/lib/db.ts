@@ -120,6 +120,9 @@ const managerCols = (db.prepare('PRAGMA table_info(managers)').all() as any[]).m
 );
 if (!managerCols.includes('is_test'))
   db.exec('ALTER TABLE managers ADD COLUMN is_test INTEGER DEFAULT 0');
+// can_delete — archive/restore/purge permission (Cara + the test account by default)
+if (!managerCols.includes('can_delete'))
+  db.exec('ALTER TABLE managers ADD COLUMN can_delete INTEGER DEFAULT 0');
 
 // ── Desktop-only local tables (offline sync + queued AI) ────────────────────
 // Created only in the Electron build so the Render schema stays untouched.

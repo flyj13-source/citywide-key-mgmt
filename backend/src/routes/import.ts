@@ -387,6 +387,46 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
   res.json({ inserted, updated, skipped, errors: rowErrors });
 });
 
+// ── POST /api/accounts/import/dry-run — what an update-mode import WOULD fill ──
+// Matches existing rows by bc_client_number and reports, per field, how many
+// would be back-filled (DB empty/0, sheet has a value). Writes nothing.
+const BACKFILL_TEXT = ['ic_name', 'bc_vendor_number', 'account_manager', 'ccm_manager', 'lockbox_code', 'notes'];
+const BACKFILL_NUM = [
+  'keys_yn', 'security_app_yn', 'metal_keys', 'key_cards', 'has_fob', 'dispenser_keys', 'office_keys',
+  'ic_office_keys', 'am_office_keys', 'ccm_office_keys', 'am_keys', 'ccm_keys', 'contractor_keys',
+  'am_metal_keys', 'am_key_cards', 'am_key_fobs', 'ccm_metal_keys', 'ccm_key_cards', 'ccm_key_fobs',
+  'contractor_metal_keys', 'contractor_key_cards', 'contractor_key_fobs',
+];
+router.post('/dry-run', requireAuth, (req: AuthRequest, res: Response) => {
+  const { rows } = req.body as { rows: ParsedRow[] };
+  if (!Array.isArray(rows)) return res.status(400).json({ error: 'No rows provided' });
+
+  const find = db.prepare("SELECT * FROM accounts WHERE bc_client_number = ? AND record_type = 'customer' AND COALESCE(archived, 0) = 0");
+  const wouldFill: Record<string, number> = {};
+  let matched = 0, unmatched = 0, rowsWithFills = 0;
+
+  for (const r of rows) {
+    if (!r.bc_client_number) { unmatched++; continue; }
+    const existing = find.get(r.bc_client_number) as any;
+    if (!existing) { unmatched++; continue; }
+    matched++;
+    let rowFilled = false;
+    for (const f of BACKFILL_TEXT) {
+      const dbEmpty = existing[f] == null || String(existing[f]).trim() === '';
+      const rowHas = (r as any)[f] != null && String((r as any)[f]).trim() !== '';
+      if (dbEmpty && rowHas) { wouldFill[f] = (wouldFill[f] || 0) + 1; rowFilled = true; }
+    }
+    for (const f of BACKFILL_NUM) {
+      if ((Number(existing[f]) || 0) === 0 && (Number((r as any)[f]) || 0) > 0) {
+        wouldFill[f] = (wouldFill[f] || 0) + 1; rowFilled = true;
+      }
+    }
+    if (rowFilled) rowsWithFills++;
+  }
+
+  res.json({ total: rows.length, matched, unmatched, rowsWithFills, wouldFill });
+});
+
 // ── GET /api/accounts/import/template — download blank .xlsx ────────────────
 router.get('/template', requireAuth, (_req: AuthRequest, res: Response) => {
   const wb = XLSX.utils.book_new();

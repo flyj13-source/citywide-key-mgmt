@@ -16,15 +16,16 @@ router.post('/login', (req: Request, res: Response) => {
   if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
   const isTest = !!manager.is_test;
+  const canDelete = !!manager.can_delete;
   const token = jwt.sign(
-    { id: manager.id, name: manager.name, email: manager.email, role: manager.role, is_test: isTest },
+    { id: manager.id, name: manager.name, email: manager.email, role: manager.role, is_test: isTest, can_delete: canDelete },
     process.env.JWT_SECRET || 'dev-secret',
     { expiresIn: '8h' }
   );
 
   return res.json({
     token,
-    manager: { id: manager.id, name: manager.name, email: manager.email, role: manager.role, is_test: isTest },
+    manager: { id: manager.id, name: manager.name, email: manager.email, role: manager.role, is_test: isTest, can_delete: canDelete },
   });
 });
 

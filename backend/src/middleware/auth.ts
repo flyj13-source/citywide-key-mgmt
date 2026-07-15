@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
 export interface AuthRequest extends Request {
-  manager?: { id: number; name: string; email: string; role: string; is_test?: boolean };
+  manager?: { id: number; name: string; email: string; role: string; is_test?: boolean; can_delete?: boolean };
 }
 
 export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
@@ -13,7 +13,7 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   const token = header.slice(7);
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET || 'dev-secret') as {
-      id: number; name: string; email: string; role: string; is_test?: boolean;
+      id: number; name: string; email: string; role: string; is_test?: boolean; can_delete?: boolean;
     };
     req.manager = payload;
     next();

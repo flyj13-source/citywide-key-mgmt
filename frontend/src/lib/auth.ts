@@ -6,6 +6,8 @@ export interface Manager {
   name: string;
   email: string;
   role: string;
+  is_test?: boolean;
+  can_delete?: boolean;
 }
 
 export function getToken(): string | null {
