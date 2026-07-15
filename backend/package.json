@@ -18,7 +18,8 @@
     "gauntlet:write": "ts-node scripts/gauntlet.ts write",
     "gauntlet:verify": "ts-node scripts/gauntlet.ts verify",
     "gauntlet:full": "ts-node scripts/gauntlet.ts full",
-    "gauntlet:cleanup": "ts-node scripts/gauntlet.ts cleanup"
+    "gauntlet:cleanup": "ts-node scripts/gauntlet.ts cleanup",
+    "report:backfill": "ts-node scripts/report-backfill-dry-run.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",
