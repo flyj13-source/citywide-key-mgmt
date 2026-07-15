@@ -20,21 +20,31 @@ export default function Checkout() {
   const [searchAcc, setSearchAcc] = useState('');
 
   useEffect(() => {
-    getAccounts({ limit: '200' }).then((d) => setAccounts(d.accounts));
     loadAssignments();
   }, []);
+
+  // Server-side search across ALL non-archived accounts (both customers + ICs),
+  // debounced. Client-side filtering over a capped list missed most of the 578+
+  // records; the API already searches name/numbers/managers and hides archived.
+  useEffect(() => {
+    if (!searchAcc || form.account_id) { setAccounts([]); return; }
+    const id = setTimeout(() => {
+      getAccounts({ search: searchAcc, type: 'all', limit: '20' })
+        .then((d) => setAccounts(d.accounts))
+        .catch(() => setAccounts([]));
+    }, 250);
+    return () => clearTimeout(id);
+  }, [searchAcc, form.account_id]);
 
   const loadAssignments = () => {
     getAssignments({ status: 'checked_out', limit: '100' }).then((d) => setAssignments(d.assignments));
   };
 
-  const filteredAccounts = searchAcc
-    ? accounts.filter((a) => a.name.toLowerCase().includes(searchAcc.toLowerCase()))
-    : accounts;
+  const filteredAccounts = accounts;
 
   const selectAccount = (a: any) => {
-    setForm({ ...form, account_id: a.id, account_name: a.name });
-    setSearchAcc(a.name);
+    setForm({ ...form, account_id: a.id, account_name: a.ic_company_name });
+    setSearchAcc(a.ic_company_name);
   };
 
   const handleCheckout = async () => {
@@ -119,8 +129,9 @@ export default function Checkout() {
                   {searchAcc && !form.account_id && filteredAccounts.length > 0 && (
                     <div className="absolute z-10 w-full bg-white border border-cw-border rounded shadow-lg max-h-48 overflow-y-auto mt-1">
                       {filteredAccounts.slice(0, 20).map((a) => (
-                        <button key={a.id} onClick={() => selectAccount(a)} className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50">
-                          {a.name}
+                        <button key={a.id} onClick={() => selectAccount(a)} className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2">
+                          <span className="truncate">{a.ic_company_name}</span>
+                          <span className="text-[10px] uppercase tracking-wide text-cw-muted shrink-0">{a.record_type === 'customer' ? 'Customer' : 'IC'}</span>
                         </button>
                       ))}
                     </div>

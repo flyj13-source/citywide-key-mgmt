@@ -679,3 +679,30 @@ describe('ARCHIVE / RESTORE / PURGE', () => {
     expect(after.metal_keys).toBe(2);  // archived client's 4 excluded
   });
 });
+
+// ═══════════════════════════════════════ CHECKOUT ACCOUNT SEARCH ════════════
+// The Check Out Key picker searches ALL accounts server-side by name and must
+// never surface archived ones.
+describe('CHECKOUT ACCOUNT SEARCH', () => {
+  it('finds customers AND ICs by ic_company_name via type=all, excludes archived', async () => {
+    const cust = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'ZORP CHECKOUT CLIENT',
+    });
+    await auth(request(app).post('/api/accounts')).send({
+      record_type: 'ic', ic_company_name: 'ZORP CHECKOUT VENDOR', bc_vendor_number: '02014990900',
+    });
+
+    const found = (await auth(request(app).get('/api/accounts?type=all&search=ZORP CHECKOUT&limit=20'))).body;
+    const names = found.accounts.map((a: any) => a.ic_company_name);
+    expect(names).toContain('ZORP CHECKOUT CLIENT');
+    expect(names).toContain('ZORP CHECKOUT VENDOR');
+    // rows carry ic_company_name (the field the picker binds to), not a null `name`
+    expect(found.accounts.every((a: any) => typeof a.ic_company_name === 'string')).toBe(true);
+
+    // Archive the customer → it disappears from the picker's search
+    await auth(request(app).post(`/api/accounts/${cust.body.id}/archive`));
+    const after = (await auth(request(app).get('/api/accounts?type=all&search=ZORP CHECKOUT&limit=20'))).body;
+    expect(after.accounts.map((a: any) => a.ic_company_name)).not.toContain('ZORP CHECKOUT CLIENT');
+    expect(after.accounts.map((a: any) => a.ic_company_name)).toContain('ZORP CHECKOUT VENDOR');
+  });
+});
