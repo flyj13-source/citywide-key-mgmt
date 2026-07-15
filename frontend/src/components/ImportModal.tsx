@@ -4,7 +4,11 @@ import { previewImport, confirmImport, downloadImportTemplate } from '../lib/api
 
 type Step = 'upload' | 'preview' | 'done';
 
-interface ImportResult { valid: any[]; warnings: any[]; errors: any[]; total: number; unmappedHeaders?: string[]; }
+interface ImportResult {
+  valid: any[]; warnings: any[]; errors: any[]; total: number;
+  unmappedHeaders?: string[];
+  fieldCollisions?: { field: string; headers: string[] }[];
+}
 
 export default function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [step, setStep] = useState<Step>('upload');
@@ -105,6 +109,22 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
               <span className="font-semibold">⚠ {result.unmappedHeaders!.length} column{result.unmappedHeaders!.length !== 1 ? 's' : ''} not recognized — will be ignored:</span>{' '}
               {result.unmappedHeaders!.join(', ')}
               <div className="mt-1 text-amber-700">Rename to match the template, or the data in these columns won't be imported.</div>
+            </div>
+          )}
+
+          {/* Two different columns both resolved to the same field — the
+              exact bug that blanked ccm_manager (name column vs. a separate
+              CCM key-count column). We now keep the first non-blank value per
+              row instead of silently letting one overwrite the other, but
+              it's still worth flagging so the sheet can be disambiguated. */}
+          {(result.fieldCollisions?.length ?? 0) > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded p-3 text-xs text-amber-800">
+              <span className="font-semibold">⚠ Multiple columns map to the same field:</span>
+              <ul className="mt-1 list-disc list-inside">
+                {result.fieldCollisions!.map((c) => (
+                  <li key={c.field}>{c.headers.join(' + ')} → both set "{c.field}" (first non-blank value per row wins)</li>
+                ))}
+              </ul>
             </div>
           )}
 

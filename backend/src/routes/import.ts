@@ -24,20 +24,33 @@ const COLUMN_MAP: Record<string, string> = {
   'account manager': 'account_manager',
   'contract compliance manager': 'ccm_manager',
   'compliance manager': 'ccm_manager',
-  'ccm': 'ccm_manager',
   // Role key counts (Y/yes treated as 1, numeric values used directly)
+  //
+  // IMPORTANT: the real registry sheet has BOTH a manager-NAME column
+  // ("Contract Compliance Manager") AND a separate, later, short KEY-COUNT
+  // column ("CCM"). A bare 'ccm' alias here used to point at ccm_manager,
+  // which collided with the name column on the SAME destination field — the
+  // blank key-count "CCM" column (appearing after "Contract Compliance
+  // Manager" in the sheet) silently overwrote the correctly-imported name
+  // with an empty value. 'ccm' (bare) now correctly means the KEY-COUNT
+  // column and points at ccm_keys; only "Contract Compliance Manager" /
+  // "Compliance Manager" / "CCM Manager" / "CCM Mgr" (below) set the name.
   'am key': 'am_keys',
   'am keys': 'am_keys',
   'am key(s)': 'am_keys',
+  'am': 'am_keys',
   'ccm key': 'ccm_keys',
   'ccm keys': 'ccm_keys',
   'ccm key(s)': 'ccm_keys',
+  'ccm': 'ccm_keys',
   'contractor key': 'contractor_keys',
   'contractor keys': 'contractor_keys',
   'contractor key(s)': 'contractor_keys',
   'ic key': 'contractor_keys',
   'ic keys': 'contractor_keys',
   'ic key(s)': 'contractor_keys',
+  'ic': 'contractor_keys',
+  'office': 'office_keys',
   // Shared columns
   'keys y/n': 'keys_yn',
   'keys': 'keys_yn',
@@ -133,37 +146,61 @@ interface ParseResult {
   // key-count columns to import empty).
   unmappedHeaders: string[];
   mappedHeaders: string[];
+  // Two DIFFERENT sheet columns that both resolved to the same destination
+  // field (e.g. a manager-NAME column and an unrelated short KEY-COUNT column
+  // both pointing at the same field via an ambiguous alias). This is the bug
+  // class that caused "Contract Compliance Manager" to import blank: a later
+  // blank "CCM" key-count column silently overwrote it. Reported so it's
+  // visible even if a future alias addition reintroduces a collision.
+  fieldCollisions: { field: string; headers: string[] }[];
 }
 
 function parseRows(buffer: Buffer, mimetype: string): ParseResult {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const raw: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-  if (raw.length < 2) return { rows: [], unmappedHeaders: [], mappedHeaders: [] };
+  if (raw.length < 2) return { rows: [], unmappedHeaders: [], mappedHeaders: [], fieldCollisions: [] };
 
   const headers = (raw[0] as any[]).map((h) => normalizeHeader(h));
   const fieldMap: Record<number, string> = {};
   const unmappedHeaders: string[] = [];
   const mappedHeaders: string[] = [];
+  const headersByField: Record<string, { idx: number; label: string }[]> = {};
   headers.forEach((h, i) => {
     if (!h) return; // blank trailing column — not a real header, don't report it
     if (COLUMN_MAP[h]) {
-      fieldMap[i] = COLUMN_MAP[h];
-      mappedHeaders.push(String(raw[0][i]).trim());
+      const field = COLUMN_MAP[h];
+      fieldMap[i] = field;
+      const label = String(raw[0][i]).trim();
+      mappedHeaders.push(label);
+      (headersByField[field] ??= []).push({ idx: i, label });
     } else {
       unmappedHeaders.push(String(raw[0][i]).trim());
     }
   });
 
+  // Surface any destination field claimed by more than one distinct header.
+  const fieldCollisions = Object.entries(headersByField)
+    .filter(([, hs]) => hs.length > 1)
+    .map(([field, hs]) => ({ field, headers: hs.map((h) => h.label) }));
+
   const rows = raw.slice(1).map((row) => {
     const obj: Record<string, any> = {};
-    Object.entries(fieldMap).forEach(([idx, field]) => {
-      obj[field] = (row as any[])[Number(idx)] ?? '';
-    });
+    // Group indices by destination field so a collision prefers the first
+    // NON-BLANK value across the colliding columns for this row, instead of
+    // blindly letting the last column (by index) win and zero out real data.
+    for (const [field, entries] of Object.entries(headersByField)) {
+      let value: any = '';
+      for (const { idx } of entries) {
+        const cell = (row as any[])[idx];
+        if (cell !== undefined && cell !== null && String(cell).trim() !== '') { value = cell; break; }
+      }
+      obj[field] = value;
+    }
     return obj;
   }).filter((r) => Object.values(r).some((v) => String(v).trim() !== ''));
 
-  return { rows, unmappedHeaders, mappedHeaders };
+  return { rows, unmappedHeaders, mappedHeaders, fieldCollisions };
 }
 
 interface ParsedRow {
@@ -248,8 +285,9 @@ router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Res
   let rawRows: Record<string, any>[];
   let unmappedHeaders: string[];
   let mappedHeaders: string[];
+  let fieldCollisions: { field: string; headers: string[] }[];
   try {
-    ({ rows: rawRows, unmappedHeaders, mappedHeaders } = parseRows(req.file.buffer, req.file.mimetype));
+    ({ rows: rawRows, unmappedHeaders, mappedHeaders, fieldCollisions } = parseRows(req.file.buffer, req.file.mimetype));
   } catch (e: any) {
     return res.status(400).json({ error: 'Could not parse file: ' + e.message });
   }
@@ -288,7 +326,7 @@ router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Res
     valid.push({ ...data, _row: row });
   });
 
-  res.json({ valid, warnings, errors, total: rawRows.length, unmappedHeaders, mappedHeaders });
+  res.json({ valid, warnings, errors, total: rawRows.length, unmappedHeaders, mappedHeaders, fieldCollisions });
 });
 
 // ── POST /api/accounts/import/confirm — insert validated rows ────────────────

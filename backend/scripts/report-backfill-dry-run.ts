@@ -121,6 +121,10 @@ async function main() {
   } else {
     console.log('All columns recognized — no mapping gap in this file.');
   }
+  if (preview.fieldCollisions?.length > 0) {
+    console.log(`\n⚠ ${preview.fieldCollisions.length} field(s) claimed by more than one column (first non-blank per row wins, but disambiguate the sheet if possible):`);
+    for (const c of preview.fieldCollisions) console.log(`  ${c.field}: ${c.headers.join(' + ')}`);
+  }
 
   console.log(`\nSheet rows: ${preview.total} total | ${preview.valid.length} new | ${preview.warnings.length} match an existing bc_client_number | ${preview.errors.length} invalid`);
 

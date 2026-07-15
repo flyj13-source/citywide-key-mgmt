@@ -948,3 +948,133 @@ describe('UPDATE-MODE IMPORT DRY-RUN', () => {
     expect(res.body.wouldFill.account_manager ?? 0).toBe(0); // populated → not filled
   });
 });
+
+// ═══════════════════════════════════════ REAL SHEET HEADER REGRESSION ═══════
+// Reproduces the actual production import bug: the real registry sheet has
+// BOTH a manager-NAME column ("Contract Compliance Manager") AND a separate,
+// later, short KEY-COUNT column ("CCM") — plus "IC"/"AM"/"Office" key-count
+// columns. A bare 'ccm' alias used to point at ccm_manager, colliding with the
+// name column; the blank "CCM" key-count column silently overwrote the real
+// name on import. This suite locks in the fix with the sheet's EXACT header
+// row, in order, verified from the source file.
+describe('REAL SHEET HEADERS — CCM name vs CCM/IC/AM/Office key-count columns', () => {
+  const REAL_HEADERS = [
+    'Client Name', 'BC Client Number', 'Independent Contractor', 'BC Vendor Number',
+    'Account Manager', 'Contract Compliance Manager', 'Keys Y/N', 'Security App Y/N',
+    'Metal Keys', 'Key Cards', 'Key Fobs', 'Dispenser Key',
+    'Lockbox Code', 'Door Code', 'Alarm Code',
+    'IC', 'AM', 'CCM', 'Office', 'Notes',
+  ];
+
+  function buildRealSheet(): Buffer {
+    const aoa: any[][] = [REAL_HEADERS];
+    aoa.push([
+      'Riverside Plaza', 'RS-EXACT-1', 'ALVES CLEANING SERVICES INC', '02014100020',
+      'John Smith', 'Matthew Wagnac', 'Y', 'Y',
+      '3', '2', '1', '0',
+      '4417', '1234', '5678',
+      '2', '1', '1', '1', 'VIP account',
+    ]);
+    aoa.push([
+      'Harbor Towers', 'RS-EXACT-2', 'SHARP CLEANING CORP', '02014100044',
+      'Jane Doe', 'Daniel Bordenave', '', '',
+      '1', '0', '0', '1',
+      '', '', '',
+      '1', '0', '0', '0', '',
+    ]);
+    aoa.push([
+      'Beacon Mall', 'RS-EXACT-3', 'HOWARD CLEANING SERVICES', '02014100209',
+      '', '', '', '',
+      '', '', '', '',
+      '', '', '',
+      '', '', '', '', '',
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Registry');
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  }
+
+  it('all 20 headers map with zero collisions; ccm_manager populated; IC/AM/CCM/Office route to the correct key-count fields', async () => {
+    const preview = await auth(request(app).post('/api/accounts/import'))
+      .attach('file', buildRealSheet(), 'real-headers.xlsx');
+    expect(preview.status).toBe(200);
+
+    // Every header recognized, nothing unmapped, and — critically — no two
+    // different headers collide on the same destination field.
+    expect(preview.body.unmappedHeaders).toEqual([]);
+    expect(preview.body.mappedHeaders.length).toBe(20);
+    expect(preview.body.fieldCollisions).toEqual([]);
+
+    expect(preview.body.total).toBe(3);
+    expect(preview.body.valid.length).toBe(3);
+    expect(preview.body.errors.length).toBe(0);
+
+    const row1 = preview.body.valid.find((r: any) => r.bc_client_number === 'RS-EXACT-1');
+    // The name column populated ccm_manager — NOT blanked by the "CCM" key-count column.
+    expect(row1.account_manager).toBe('John Smith');
+    expect(row1.ccm_manager).toBe('Matthew Wagnac');
+    // IC / AM / CCM / Office key-count columns route to the correct fields —
+    // not confused with account_manager / ccm_manager.
+    expect(row1.contractor_keys).toBe(2);
+    expect(row1.am_keys).toBe(1);
+    expect(row1.ccm_keys).toBe(1);
+    expect(row1.office_keys).toBe(1);
+
+    const row2 = preview.body.valid.find((r: any) => r.bc_client_number === 'RS-EXACT-2');
+    expect(row2.ccm_manager).toBe('Daniel Bordenave');
+
+    // Confirm the insert, then verify what actually landed in the DB —
+    // byte-identical to what the preview reported, nothing lost on write.
+    const confirm = await auth(request(app).post('/api/accounts/import/confirm'))
+      .send({ rows: preview.body.valid });
+    expect(confirm.body.inserted).toBe(3);
+
+    const db = openDb();
+    const stored: any = Object.assign({}, db.prepare(
+      'SELECT account_manager, ccm_manager, contractor_keys, am_keys, ccm_keys, office_keys FROM accounts WHERE bc_client_number = ?'
+    ).get('RS-EXACT-1'));
+    db.close();
+    expect(stored.account_manager).toBe('John Smith');
+    expect(stored.ccm_manager).toBe('Matthew Wagnac');
+    expect(stored.contractor_keys).toBe(2);
+    expect(stored.am_keys).toBe(1);
+    expect(stored.ccm_keys).toBe(1);
+    expect(stored.office_keys).toBe(1);
+  });
+
+  it('update-mode backfills ccm_manager where NULL, never touches an already-populated row, never duplicates', async () => {
+    const already = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'Already Has CCM', bc_client_number: 'RS-UPD-1',
+      ccm_manager: 'Existing Manager Name',
+    });
+    const missing = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'Missing CCM', bc_client_number: 'RS-UPD-2',
+    });
+
+    const aoa = [
+      ['Client Name', 'BC Client Number', 'Contract Compliance Manager'],
+      ['Already Has CCM', 'RS-UPD-1', 'Should Not Overwrite'],
+      ['Missing CCM', 'RS-UPD-2', 'Newly Backfilled Name'],
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'S');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const preview = await auth(request(app).post('/api/accounts/import')).attach('file', buf, 'upd.xlsx');
+    // Both bc_client_numbers already exist → both land in `warnings`, not `valid`.
+    expect(preview.body.warnings.length).toBe(2);
+    expect(preview.body.valid.length).toBe(0);
+
+    const confirm = await auth(request(app).post('/api/accounts/import/confirm')).send({
+      rows: preview.body.warnings.map((w: any) => w.data),
+      mode: 'upsert',
+    });
+    expect(confirm.body.inserted).toBe(0); // never duplicates
+    expect(confirm.body.updated).toBe(2);
+
+    const already2 = (await auth(request(app).get(`/api/accounts/${already.body.id}`))).body;
+    const missing2 = (await auth(request(app).get(`/api/accounts/${missing.body.id}`))).body;
+    expect(already2.ccm_manager).toBe('Existing Manager Name'); // untouched
+    expect(missing2.ccm_manager).toBe('Newly Backfilled Name'); // backfilled
+  });
+});
