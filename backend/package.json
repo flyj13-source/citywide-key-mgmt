@@ -17,7 +17,8 @@
     "persist:snapshot": "ts-node scripts/persistence-check.ts snapshot",
     "gauntlet:write": "ts-node scripts/gauntlet.ts write",
     "gauntlet:verify": "ts-node scripts/gauntlet.ts verify",
-    "gauntlet:full": "ts-node scripts/gauntlet.ts full"
+    "gauntlet:full": "ts-node scripts/gauntlet.ts full",
+    "gauntlet:cleanup": "ts-node scripts/gauntlet.ts cleanup"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",

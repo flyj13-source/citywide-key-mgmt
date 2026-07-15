@@ -257,6 +257,74 @@ describe('IMPORT', () => {
     expect(distinctVendors).toBe(12);
     db.close();
   });
+
+  // Regression coverage for the real-world silent-mapping-gap bug: AM mapped
+  // but CCM Manager / Keys Y/N / Security App Y/N / Metal Keys / Key Cards /
+  // Key Fobs / Dispenser Key all landed NULL/0. The preview response now
+  // reports which headers matched vs. didn't, so this becomes visible instead
+  // of silent.
+  it('preview reports mappedHeaders and unmappedHeaders', async () => {
+    const aoa = [
+      ['Client Name', 'BC Client Number', 'Account Manager', 'Some Unrecognized Column'],
+      ['Diagnostics Co', 'DIAG-1', 'AM Person', 'garbage'],
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'S');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const res = await auth(request(app).post('/api/accounts/import')).attach('file', buf, 'diag.xlsx');
+    expect(res.status).toBe(200);
+    expect(res.body.mappedHeaders).toEqual(expect.arrayContaining(['Client Name', 'BC Client Number', 'Account Manager']));
+    expect(res.body.unmappedHeaders).toEqual(['Some Unrecognized Column']);
+  });
+
+  it('header matching is robust to NBSP, double spaces, trailing colon, and mixed case', async () => {
+    const HEADERS_MESSY = [
+      'Client Name', 'BC Client Number',
+      'Contract Compliance Manager', // NBSP instead of regular spaces
+      'Keys  Y/N', // double space
+      'METAL KEYS:', // uppercase + trailing colon
+      ' Key Cards ', // leading/trailing whitespace
+      'key   fobs', // multi-space, lowercase
+      'Dispenser Key',
+    ];
+    const aoa = [
+      HEADERS_MESSY,
+      ['Messy Header Co', 'MESSY-1', 'CCM Person X', 'Y', '5', '3', 'Y', '1'],
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'S');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const preview = await auth(request(app).post('/api/accounts/import')).attach('file', buf, 'messy.xlsx');
+    expect(preview.status).toBe(200);
+    expect(preview.body.unmappedHeaders).toEqual([]);
+
+    const confirm = await auth(request(app).post('/api/accounts/import/confirm')).send({ rows: preview.body.valid });
+    expect(confirm.body.inserted).toBe(1);
+
+    const db = openDb();
+    const row: any = Object.assign({}, db.prepare(
+      'SELECT ccm_manager, keys_yn, metal_keys, key_cards, has_fob, dispenser_keys FROM accounts WHERE bc_client_number = ?'
+    ).get('MESSY-1'));
+    db.close();
+    expect(row.ccm_manager).toBe('CCM Person X');
+    expect(row.keys_yn).toBe(1);
+    expect(row.metal_keys).toBe(5);
+    expect(row.key_cards).toBe(3);
+    expect(row.has_fob).toBe(1);
+    expect(row.dispenser_keys).toBe(1);
+  });
+
+  it('preview 400s with unmappedHeaders when NO headers match at all', async () => {
+    const aoa = [['Totally Unknown A', 'Totally Unknown B'], ['x', 'y']];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'S');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const res = await auth(request(app).post('/api/accounts/import')).attach('file', buf, 'bad.xlsx');
+    expect(res.status).toBe(400);
+    expect(res.body.unmappedHeaders).toEqual(['Totally Unknown A', 'Totally Unknown B']);
+  });
 });
 
 // ═══════════════════════════════════════ VAULT ══════════════════════════════

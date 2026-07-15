@@ -10,6 +10,9 @@
  *                              then delete the sentinel.
  *   npm run gauntlet:full    → write → trigger the deploy via the Render API →
  *                              poll until the new build is live → verify. One shot.
+ *   npm run gauntlet:cleanup → find + delete ANY stray sentinel (current or
+ *                              legacy PERSIST-CHECK naming), no snapshot needed.
+ *                              Use this if a write/full ran but verify never did.
  *
  * Auth: ALWAYS the test account (never Cara). Config via env:
  *   PERSIST_URL         base URL (default https://citywide-backend-0xuj.onrender.com)
@@ -77,8 +80,63 @@ async function findSentinel(token: string): Promise<any | null> {
   return body.accounts.find((a) => a.ic_company_name === SENTINEL_NAME) || null;
 }
 
+// Names used by this script AND its now-superseded predecessor
+// (scripts/persistence-check.ts, which wrote ic_company_name='PERSIST-CHECK').
+// A sentinel is orphaned whenever `write` ran but `verify` never got to its
+// cleanup step (crash, forgotten follow-up, or a `full` that failed mid-poll).
+const KNOWN_SENTINEL_NAMES = [SENTINEL_NAME, 'PERSIST-CHECK'];
+
+async function findAllSentinels(token: string): Promise<any[]> {
+  const found: any[] = [];
+  for (const name of KNOWN_SENTINEL_NAMES) {
+    const res = await fetch(`${BASE}/api/accounts?search=${encodeURIComponent(name)}&limit=100`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) die(`Sentinel search failed (HTTP ${res.status}).`);
+    const body = (await res.json()) as { accounts: any[] };
+    found.push(...body.accounts.filter((a) => a.ic_company_name === name));
+  }
+  return found;
+}
+
+async function deleteAccount(token: string, id: number): Promise<boolean> {
+  const res = await fetch(`${BASE}/api/accounts/${id}`, {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ confirm: 'DELETE' }),
+  });
+  return res.ok;
+}
+
+// ── Standalone cleanup — no snapshot required. Finds every stray sentinel
+// (current + legacy naming) and deletes it. Safe to run any time; safe to run
+// repeatedly (no-op once prod is clean). This is the fix for the class of bug
+// where `write` ran but a matching `verify` never did. ─────────────────────
+async function cleanup() {
+  const token = await login();
+  const strays = await findAllSentinels(token);
+  if (strays.length === 0) {
+    pass('No stray sentinels found — prod is clean.');
+    return;
+  }
+  console.log(`Found ${strays.length} stray sentinel(s):`);
+  for (const s of strays) console.log(`  id=${s.id} name="${s.ic_company_name}" bc_client_number=${s.bc_client_number} notes="${s.notes}"`);
+  let deleted = 0;
+  for (const s of strays) {
+    if (await deleteAccount(token, s.id)) deleted++;
+    else console.warn(`  ! could not delete id=${s.id}`);
+  }
+  if (deleted === strays.length) pass(`Deleted ${deleted} stray sentinel(s). Prod is clean.`);
+  else die(`Deleted ${deleted}/${strays.length} — some could not be removed, check above.`);
+}
+
 async function write() {
   const token = await login();
+  // Warn (don't block) if a previous write's sentinel was never cleaned up —
+  // re-running write would otherwise leave TWO orphans instead of one.
+  const stale = await findAllSentinels(token);
+  if (stale.length > 0) {
+    console.warn(`⚠ ${stale.length} pre-existing sentinel(s) found before this write — a prior verify/cleanup never ran. Run "npm run gauntlet:cleanup" after this to sweep them all.`);
+  }
   const timestamp = new Date().toISOString();
   const res = await fetch(`${BASE}/api/accounts`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -180,8 +238,9 @@ async function main() {
     case 'write': await write(); return;
     case 'verify': await verify(); return;
     case 'full': await full(); return;
+    case 'cleanup': await cleanup(); return;
     default:
-      console.error('Usage: gauntlet.ts <write|verify|full>');
+      console.error('Usage: gauntlet.ts <write|verify|full|cleanup>');
       process.exit(1);
   }
 }

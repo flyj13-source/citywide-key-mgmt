@@ -76,7 +76,34 @@ const COLUMN_MAP: Record<string, string> = {
   'alarm code': 'alarm_code',
   'notes': 'notes',
   'status': 'status',
+  // Extra real-world aliases — abbreviated manager titles, singular key-type
+  // headers, common typos. Defensive: doesn't replace exact matches above.
+  'contract compliance mgr': 'ccm_manager',
+  'compliance mgr': 'ccm_manager',
+  'ccm manager': 'ccm_manager',
+  'ccm mgr': 'ccm_manager',
+  'account mgr': 'account_manager',
+  'am manager': 'account_manager',
+  'metal key': 'metal_keys',
+  'key card': 'key_cards',
+  'key fob': 'has_fob',
+  'security app y/n?': 'security_app_yn',
+  'keys y/n?': 'keys_yn',
 };
+
+// Normalizes a raw header cell for matching: trim, collapse internal
+// whitespace (incl. non-breaking spaces) to a single space, drop a trailing
+// colon, lowercase. Applied to BOTH the sheet's header row and (implicitly,
+// since COLUMN_MAP keys are already in this form) the lookup table, so stray
+// double-spaces / NBSP / trailing punctuation don't cause a silent miss.
+function normalizeHeader(raw: any): string {
+  return String(raw ?? '')
+    .replace(/\u00A0/g, ' ') // non-breaking space → regular space
+    .trim()
+    .replace(/:\s*$/, '') // drop a trailing colon (e.g. "CCM Manager:")
+    .replace(/\s+/g, ' ') // collapse double/multi spaces
+    .toLowerCase();
+}
 
 function parseYN(val: any): number {
   if (val === null || val === undefined || val === '') return 0;
@@ -98,25 +125,45 @@ function parseCount(val: any): number {
   return isNaN(n) ? 0 : n;
 }
 
-function parseRows(buffer: Buffer, mimetype: string): Record<string, any>[] {
+interface ParseResult {
+  rows: Record<string, any>[];
+  // Header cells that didn't match anything in COLUMN_MAP — surfaced to the
+  // preview response so a mapping gap is VISIBLE instead of silently landing
+  // as null/0 for every row (the failure mode that caused ccm_manager and the
+  // key-count columns to import empty).
+  unmappedHeaders: string[];
+  mappedHeaders: string[];
+}
+
+function parseRows(buffer: Buffer, mimetype: string): ParseResult {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const raw: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-  if (raw.length < 2) return [];
+  if (raw.length < 2) return { rows: [], unmappedHeaders: [], mappedHeaders: [] };
 
-  const headers = (raw[0] as any[]).map((h) => String(h ?? '').trim().toLowerCase());
+  const headers = (raw[0] as any[]).map((h) => normalizeHeader(h));
   const fieldMap: Record<number, string> = {};
+  const unmappedHeaders: string[] = [];
+  const mappedHeaders: string[] = [];
   headers.forEach((h, i) => {
-    if (COLUMN_MAP[h]) fieldMap[i] = COLUMN_MAP[h];
+    if (!h) return; // blank trailing column — not a real header, don't report it
+    if (COLUMN_MAP[h]) {
+      fieldMap[i] = COLUMN_MAP[h];
+      mappedHeaders.push(String(raw[0][i]).trim());
+    } else {
+      unmappedHeaders.push(String(raw[0][i]).trim());
+    }
   });
 
-  return raw.slice(1).map((row) => {
+  const rows = raw.slice(1).map((row) => {
     const obj: Record<string, any> = {};
     Object.entries(fieldMap).forEach(([idx, field]) => {
       obj[field] = (row as any[])[Number(idx)] ?? '';
     });
     return obj;
   }).filter((r) => Object.values(r).some((v) => String(v).trim() !== ''));
+
+  return { rows, unmappedHeaders, mappedHeaders };
 }
 
 interface ParsedRow {
@@ -199,13 +246,21 @@ router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Res
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   let rawRows: Record<string, any>[];
+  let unmappedHeaders: string[];
+  let mappedHeaders: string[];
   try {
-    rawRows = parseRows(req.file.buffer, req.file.mimetype);
+    ({ rows: rawRows, unmappedHeaders, mappedHeaders } = parseRows(req.file.buffer, req.file.mimetype));
   } catch (e: any) {
     return res.status(400).json({ error: 'Could not parse file: ' + e.message });
   }
 
-  if (rawRows.length === 0) return res.status(400).json({ error: 'No data rows found — check column headers' });
+  if (mappedHeaders.length === 0) {
+    return res.status(400).json({
+      error: 'No recognized column headers found — check the header row',
+      unmappedHeaders,
+    });
+  }
+  if (rawRows.length === 0) return res.status(400).json({ error: 'No data rows found — check column headers', unmappedHeaders });
 
   const existingBcClient = new Set(
     (db.prepare('SELECT bc_client_number FROM accounts WHERE bc_client_number IS NOT NULL AND COALESCE(archived, 0) = 0').all() as any[])
@@ -233,7 +288,7 @@ router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Res
     valid.push({ ...data, _row: row });
   });
 
-  res.json({ valid, warnings, errors, total: rawRows.length });
+  res.json({ valid, warnings, errors, total: rawRows.length, unmappedHeaders, mappedHeaders });
 });
 
 // ── POST /api/accounts/import/confirm — insert validated rows ────────────────

@@ -4,7 +4,7 @@ import { previewImport, confirmImport, downloadImportTemplate } from '../lib/api
 
 type Step = 'upload' | 'preview' | 'done';
 
-interface ImportResult { valid: any[]; warnings: any[]; errors: any[]; total: number; }
+interface ImportResult { valid: any[]; warnings: any[]; errors: any[]; total: number; unmappedHeaders?: string[]; }
 
 export default function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [step, setStep] = useState<Step>('upload');
@@ -96,6 +96,18 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
       {/* Step 2 — Preview */}
       {step === 'preview' && result && (
         <div className="space-y-4">
+          {/* Unmapped-column warning — the exact class of bug that silently
+              landed CCM Manager / Keys Y/N / role counts as null before this
+              was surfaced. Never hide a column the sheet has that we couldn't
+              map. */}
+          {(result.unmappedHeaders?.length ?? 0) > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded p-3 text-xs text-amber-800">
+              <span className="font-semibold">⚠ {result.unmappedHeaders!.length} column{result.unmappedHeaders!.length !== 1 ? 's' : ''} not recognized — will be ignored:</span>{' '}
+              {result.unmappedHeaders!.join(', ')}
+              <div className="mt-1 text-amber-700">Rename to match the template, or the data in these columns won't be imported.</div>
+            </div>
+          )}
+
           {/* Counts */}
           <div className="flex gap-3">
             <div className="flex-1 bg-green-50 border border-green-200 rounded p-3 text-center">
