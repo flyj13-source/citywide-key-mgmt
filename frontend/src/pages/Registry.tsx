@@ -17,26 +17,23 @@ const emptyForm = {
   ccm_manager: '',
   keys_yn: false,
   security_app_yn: false,
+  // Client-site Key Inventory row totals — auto-computed from the holder grid
+  // below (see GRID_TYPES/GRID_HOLDERS), sent through as a legacy-preserve
+  // fallback for rows that predate the grid.
   metal_keys: 0,
   key_cards: 0,
   has_fob: 0,
   dispenser_keys: 0,
-  office_keys: 0,
-  ic_office_keys: 0,
-  am_office_keys: 0,
-  ccm_office_keys: 0,
+  // Holder × type grid — 16 cells. Office is a HOLDER, not a type.
+  am_metal: 0, am_card: 0, am_fob: 0, am_dispenser: 0,
+  ccm_metal: 0, ccm_card: 0, ccm_fob: 0, ccm_dispenser: 0,
+  contractor_metal: 0, contractor_card: 0, contractor_fob: 0, contractor_dispenser: 0,
+  office_metal: 0, office_card: 0, office_fob: 0, office_dispenser: 0,
+  // Column totals (computed server-side from the grid; sent as fallback)
   am_keys: 0,
   ccm_keys: 0,
   contractor_keys: 0,
-  am_metal_keys: 0,
-  am_key_cards: 0,
-  am_key_fobs: 0,
-  ccm_metal_keys: 0,
-  ccm_key_cards: 0,
-  ccm_key_fobs: 0,
-  contractor_metal_keys: 0,
-  contractor_key_cards: 0,
-  contractor_key_fobs: 0,
+  office_keys_held: 0,
   lockbox_code: '',
   door_code: '',
   alarm_code: '',
@@ -75,23 +72,23 @@ function CountBadge({ value }: { value: number }) {
   );
 }
 
-export function roleBreakdownText(metal: number, card: number, fob: number, office: number): string {
+export function roleBreakdownText(metal: number, card: number, fob: number, dispenser: number): string {
   const parts: string[] = [];
   if (metal) parts.push(`${metal} metal`);
   if (card) parts.push(`${card} card`);
   if (fob) parts.push(`${fob} fob`);
-  if (office) parts.push(`${office} office`);
+  if (dispenser) parts.push(`${dispenser} dispenser`);
   return parts.length ? parts.join(' · ') : 'No type breakdown recorded';
 }
 
-// A role-total pill. Click to expand the metal/card/fob/office breakdown in an
-// inline popover (hover title kept as a fallback). Own state so only this pill
-// re-renders — the memoized table is untouched.
-function RolePill({ value, metal, card, fob, office }: {
-  value: number; metal: number; card: number; fob: number; office: number;
+// A holder-column-total pill. Click to expand the metal/card/fob/dispenser
+// breakdown in an inline popover (hover title kept as a fallback). Own state
+// so only this pill re-renders — the memoized table is untouched.
+function RolePill({ value, metal, card, fob, dispenser }: {
+  value: number; metal: number; card: number; fob: number; dispenser: number;
 }) {
   const [open, setOpen] = useState(false);
-  const text = roleBreakdownText(metal || 0, card || 0, fob || 0, office || 0);
+  const text = roleBreakdownText(metal || 0, card || 0, fob || 0, dispenser || 0);
   if (!value) return <span className="text-gray-300">—</span>;
   return (
     <span className="relative inline-block">
@@ -158,35 +155,48 @@ function FormField({ label, hint, children }: { label: string; hint?: string; ch
   );
 }
 
-// Role × type key grid rows: [metal, card, fob, office].
-const ROLE_ROWS: { label: string; keys: string[] }[] = [
-  { label: 'AM', keys: ['am_metal_keys', 'am_key_cards', 'am_key_fobs', 'am_office_keys'] },
-  { label: 'CCM', keys: ['ccm_metal_keys', 'ccm_key_cards', 'ccm_key_fobs', 'ccm_office_keys'] },
-  { label: 'Contractor / IC', keys: ['contractor_metal_keys', 'contractor_key_cards', 'contractor_key_fobs', 'ic_office_keys'] },
+// Holder × type key grid — TRANSPOSED model. Rows are key TYPES, columns are
+// HOLDERS (Office is a holder, like AM/CCM/Contractor — not a type). A cell's
+// field name is `${holder.key}_${type.key}` (e.g. am_metal, office_dispenser),
+// matching the backend's 16-column schema exactly.
+const GRID_HOLDERS: { key: string; label: string }[] = [
+  { key: 'am', label: 'AM' },
+  { key: 'ccm', label: 'CCM' },
+  { key: 'contractor', label: 'Contractor/IC' },
+  { key: 'office', label: 'Office' },
+];
+const GRID_TYPES: { key: string; label: string }[] = [
+  { key: 'metal', label: 'Metal' },
+  { key: 'card', label: 'Key Card' },
+  { key: 'fob', label: 'Key Fob' },
+  { key: 'dispenser', label: 'Dispenser' },
 ];
 
-function RoleGridRow({
-  row, form, numF, rowTotal,
+function GridTypeRow({
+  type, form, numF, rowTotal,
 }: {
-  row: { label: string; keys: string[] };
+  type: { key: string; label: string };
   form: Record<string, any>;
   numF: (key: string) => (e: React.ChangeEvent<HTMLInputElement>) => void;
   rowTotal: number;
 }) {
   return (
     <>
-      <div className="text-xs font-semibold text-[#1a1a1a] whitespace-nowrap pr-2">{row.label}</div>
-      {row.keys.map((k) => (
-        <input
-          key={k}
-          type="number"
-          min={0}
-          className="input text-center px-1 focus:ring-[#C0272D] focus:border-[#C0272D]"
-          value={form[k] ?? 0}
-          onChange={numF(k)}
-          aria-label={`${row.label} ${k}`}
-        />
-      ))}
+      <div className="text-xs font-semibold text-[#1a1a1a] whitespace-nowrap pr-2">{type.label}</div>
+      {GRID_HOLDERS.map((h) => {
+        const k = `${h.key}_${type.key}`;
+        return (
+          <input
+            key={k}
+            type="number"
+            min={0}
+            className="input text-center px-1 focus:ring-[#C0272D] focus:border-[#C0272D]"
+            value={form[k] ?? 0}
+            onChange={numF(k)}
+            aria-label={`${h.label} ${type.label}`}
+          />
+        );
+      })}
       <div className="text-sm font-bold text-[#C0272D] text-center pl-2 tabular-nums min-w-[2rem]">{rowTotal}</div>
     </>
   );
@@ -309,39 +319,51 @@ function AccountFormModal({
         </div>
 
         <div>
-          <SectionLabel>Key Inventory</SectionLabel>
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: 'Metal Keys', key: 'metal_keys' },
-              { label: 'Key Cards', key: 'key_cards' },
-              { label: 'Key Fobs', key: 'has_fob' },
-              { label: 'Dispenser Key', key: 'dispenser_keys' },
-              { label: 'Office Keys', key: 'office_keys' },
-            ].map(({ label, key }) => (
-              <FormField key={key} label={label}>
-                <input type="number" min={0} className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={(form as any)[key] ?? 0} onChange={numF(key)} />
-              </FormField>
+          <SectionLabel>Role Key Counts</SectionLabel>
+          {/* Holder × type grid. Rows = key types, columns = holders (Office is
+              a holder). Row totals (right) and the bottom TOTAL row (column
+              sums) are computed live, read-only. */}
+          <div className="grid grid-cols-[auto_repeat(4,1fr)_auto] gap-x-2 gap-y-2 items-center">
+            <div />
+            {GRID_HOLDERS.map((h) => (
+              <div key={h.key} className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 text-center">{h.label}</div>
             ))}
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 text-center pl-1">Total</div>
+            {GRID_TYPES.map((type) => {
+              const rowTotal = GRID_HOLDERS.reduce((s, h) => s + (Number((form as any)[`${h.key}_${type.key}`]) || 0), 0);
+              return (
+                <GridTypeRow key={type.key} type={type} form={form} numF={numF} rowTotal={rowTotal} />
+              );
+            })}
+            <div className="text-xs font-bold text-[#1a1a1a] whitespace-nowrap pr-2 border-t border-gray-200 pt-2 mt-1">TOTAL</div>
+            {GRID_HOLDERS.map((h) => {
+              const colTotal = GRID_TYPES.reduce((s, type) => s + (Number((form as any)[`${h.key}_${type.key}`]) || 0), 0);
+              return (
+                <div key={h.key} className="text-sm font-bold text-[#1a1a1a] text-center tabular-nums border-t border-gray-200 pt-2 mt-1">{colTotal}</div>
+              );
+            })}
+            <div className="text-sm font-extrabold text-[#C0272D] text-center pl-2 tabular-nums border-t border-gray-200 pt-2 mt-1">
+              {GRID_HOLDERS.reduce((s, h) => s + GRID_TYPES.reduce((s2, type) => s2 + (Number((form as any)[`${h.key}_${type.key}`]) || 0), 0), 0)}
+            </div>
           </div>
+          <p className="text-[11px] text-gray-400 mt-2">
+            Row totals = keys of that type across all holders. Column totals (AM / CCM / Contractor-IC / Office Keys) = total keys that holder has, all types.
+          </p>
         </div>
 
         <div>
-          <SectionLabel>Role Key Counts</SectionLabel>
-          {/* Role × type grid. Row total (metal + card + fob + office) shown live. */}
-          <div className="grid grid-cols-[auto_repeat(4,1fr)_auto] gap-x-2 gap-y-2 items-center">
-            <div />
-            {['Metal', 'Key Card', 'Key Fob', 'Office'].map((h) => (
-              <div key={h} className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 text-center">{h}</div>
-            ))}
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 text-center pl-1">Total</div>
-            {ROLE_ROWS.map((row) => {
-              const rowTotal = row.keys.reduce((s, k) => s + (Number((form as any)[k]) || 0), 0);
+          <SectionLabel>Key Inventory <span className="normal-case font-normal text-gray-400 tracking-normal">— client-site totals, auto-computed from Role Key Counts above</span></SectionLabel>
+          <div className="grid grid-cols-4 gap-3">
+            {GRID_TYPES.map((type) => {
+              const rowTotal = GRID_HOLDERS.reduce((s, h) => s + (Number((form as any)[`${h.key}_${type.key}`]) || 0), 0);
               return (
-                <RoleGridRow key={row.label} row={row} form={form} numF={numF} rowTotal={rowTotal} />
+                <div key={type.key}>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">{type.label}</label>
+                  <div className="input flex items-center justify-center bg-gray-50 text-gray-700 font-semibold tabular-nums">{rowTotal}</div>
+                </div>
               );
             })}
           </div>
-          <p className="text-[11px] text-gray-400 mt-2">Role totals (AM / CCM / IC Keys) are computed from Metal + Key Card + Key Fob.</p>
         </div>
 
         <div>
@@ -420,11 +442,11 @@ const RegistryTable = memo(function RegistryTable({
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Cards</th>
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Key Fobs</th>
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Dispenser Key</th>
-            <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Office Keys</th>
             {tab === 'customer' && <>
               <th className="text-center px-3 py-3 font-medium whitespace-nowrap">IC Keys</th>
               <th className="text-center px-3 py-3 font-medium whitespace-nowrap">AM Keys</th>
               <th className="text-center px-3 py-3 font-medium whitespace-nowrap">CCM Keys</th>
+              <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Office Keys</th>
             </>}
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Lockbox Code</th>
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Door Code</th>
@@ -484,11 +506,11 @@ const RegistryTable = memo(function RegistryTable({
                 <td className="px-3 py-3 text-center"><CountBadge value={a.key_cards} /></td>
                 <td className="px-3 py-3 text-center"><CountBadge value={a.has_fob} /></td>
                 <td className="px-3 py-3 text-center"><CountBadge value={a.dispenser_keys} /></td>
-                <td className="px-3 py-3 text-center"><CountBadge value={a.office_keys} /></td>
                 {tab === 'customer' && <>
-                  <td className="px-3 py-3 text-center"><RolePill value={a.contractor_keys} metal={a.contractor_metal_keys} card={a.contractor_key_cards} fob={a.contractor_key_fobs} office={a.ic_office_keys} /></td>
-                  <td className="px-3 py-3 text-center"><RolePill value={a.am_keys} metal={a.am_metal_keys} card={a.am_key_cards} fob={a.am_key_fobs} office={a.am_office_keys} /></td>
-                  <td className="px-3 py-3 text-center"><RolePill value={a.ccm_keys} metal={a.ccm_metal_keys} card={a.ccm_key_cards} fob={a.ccm_key_fobs} office={a.ccm_office_keys} /></td>
+                  <td className="px-3 py-3 text-center"><RolePill value={a.contractor_keys} metal={a.contractor_metal} card={a.contractor_card} fob={a.contractor_fob} dispenser={a.contractor_dispenser} /></td>
+                  <td className="px-3 py-3 text-center"><RolePill value={a.am_keys} metal={a.am_metal} card={a.am_card} fob={a.am_fob} dispenser={a.am_dispenser} /></td>
+                  <td className="px-3 py-3 text-center"><RolePill value={a.ccm_keys} metal={a.ccm_metal} card={a.ccm_card} fob={a.ccm_fob} dispenser={a.ccm_dispenser} /></td>
+                  <td className="px-3 py-3 text-center"><RolePill value={a.office_keys_held} metal={a.office_metal} card={a.office_card} fob={a.office_fob} dispenser={a.office_dispenser} /></td>
                 </>}
                 <td className="px-3 py-3 text-center text-xs font-mono text-gray-600">{a.lockbox_code || '—'}</td>
                 <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
@@ -580,14 +602,13 @@ const PERSONAL_COLS: { key: string; label: string }[] = [
   { key: 'personal_metal', label: 'Metal' },
   { key: 'personal_cards', label: 'Cards' },
   { key: 'personal_fobs', label: 'Fobs' },
-  { key: 'office_held', label: 'Office' },
+  { key: 'personal_dispenser', label: 'Dispenser' },
 ];
 const CLIENT_COLS: { key: string; label: string }[] = [
   { key: 'metal_keys', label: 'Metal' },
   { key: 'key_cards', label: 'Cards' },
   { key: 'key_fobs', label: 'Fobs' },
   { key: 'dispenser_keys', label: 'Dispenser' },
-  { key: 'office_keys', label: 'Office' },
 ];
 const RED_BORDER = 'border-l-2 border-[#C0272D]';
 
@@ -633,7 +654,7 @@ function RosterTable({
             <th rowSpan={2} className="text-left px-4 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('person')}>{personLabel}{arrow('person')}</th>
             <th rowSpan={2} className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('clients_managed')}>Clients Managed{arrow('clients_managed')}</th>
             <th colSpan={5} className={`text-center px-3 py-2 font-bold uppercase tracking-wide whitespace-nowrap ${RED_BORDER}`}>Personally Holds</th>
-            <th colSpan={6} className="text-center px-3 py-2 font-medium uppercase tracking-wide whitespace-nowrap text-white/50 border-l border-white/20">Across Their Clients</th>
+            <th colSpan={5} className="text-center px-3 py-2 font-medium uppercase tracking-wide whitespace-nowrap text-white/50 border-l border-white/20">Across Their Clients</th>
           </tr>
           {/* Column header row */}
           <tr className="bg-[#1a1a1a] text-white text-xs">
@@ -649,9 +670,9 @@ function RosterTable({
         </thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+            <tr><td colSpan={12} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
           ) : sorted.length === 0 ? (
-            <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
+            <tr><td colSpan={12} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
           ) : sorted.map((p, i) => {
             const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
             return (
@@ -858,10 +879,12 @@ export default function Registry() {
   };
 
   // When drilled in, the client list uses the Customer column layout.
-  // col counts incl. leading checkbox + Office Keys: customer=22, all=17, ic=16
+  // col counts incl. leading checkbox: customer=22 (site Metal/Card/Fob/Dispenser
+  // + IC/AM/CCM/Office role pills), all=16, ic=15 (no role pills — Office is a
+  // holder concept that only applies to customer accounts).
   const tableTab: TabType = drill ? 'customer' : tab;
   // Base counts include the leading checkbox column; drop it without delete rights.
-  const baseColSpan = tableTab === 'customer' ? 22 : tableTab === 'all' ? 17 : 16;
+  const baseColSpan = tableTab === 'customer' ? 22 : tableTab === 'all' ? 16 : 15;
   const colSpan = canDelete ? baseColSpan : baseColSpan - 1;
 
   return (

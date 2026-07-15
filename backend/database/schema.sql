@@ -42,6 +42,27 @@ CREATE TABLE IF NOT EXISTS accounts (
   contractor_metal_keys INTEGER DEFAULT 0,
   contractor_key_cards INTEGER DEFAULT 0,
   contractor_key_fobs INTEGER DEFAULT 0,
+  -- Holder × type grid (TRANSPOSED model — Office is now a HOLDER, like AM/
+  -- CCM/Contractor, not a key TYPE). Rows are types (Metal/Card/Fob/Dispenser);
+  -- these 16 cells are the columns (AM/CCM/Contractor/Office). Column totals
+  -- (am_keys/ccm_keys/contractor_keys/office_keys_held) are COMPUTED from these.
+  am_metal INTEGER DEFAULT 0,
+  am_card INTEGER DEFAULT 0,
+  am_fob INTEGER DEFAULT 0,
+  am_dispenser INTEGER DEFAULT 0,
+  ccm_metal INTEGER DEFAULT 0,
+  ccm_card INTEGER DEFAULT 0,
+  ccm_fob INTEGER DEFAULT 0,
+  ccm_dispenser INTEGER DEFAULT 0,
+  contractor_metal INTEGER DEFAULT 0,
+  contractor_card INTEGER DEFAULT 0,
+  contractor_fob INTEGER DEFAULT 0,
+  contractor_dispenser INTEGER DEFAULT 0,
+  office_metal INTEGER DEFAULT 0,
+  office_card INTEGER DEFAULT 0,
+  office_fob INTEGER DEFAULT 0,
+  office_dispenser INTEGER DEFAULT 0,
+  office_keys_held INTEGER DEFAULT 0,
   key_code TEXT,
   lockbox TEXT,
   ic_name TEXT,

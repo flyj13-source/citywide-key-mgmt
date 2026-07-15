@@ -5,7 +5,7 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
 import { logAudit } from '../lib/audit';
 import { encrypt } from '../lib/crypto';
-import { roleTotal } from '../lib/roleKeys';
+import { gridTotal } from '../lib/roleKeys';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -35,6 +35,13 @@ const COLUMN_MAP: Record<string, string> = {
   // with an empty value. 'ccm' (bare) now correctly means the KEY-COUNT
   // column and points at ccm_keys; only "Contract Compliance Manager" /
   // "Compliance Manager" / "CCM Manager" / "CCM Mgr" (below) set the name.
+  // Flat holder-total columns — "hold as unspecified": a bare "AM"/"CCM"/"IC"/
+  // "Office" header sets that holder's TOTAL directly (via gridTotal's legacy-
+  // preserve path) WITHOUT fabricating a type breakdown. We deliberately do NOT
+  // distribute the number across Metal/Card/Fob/Dispenser — a flat "AM: 3" says
+  // "AM has 3 keys of some type," not "AM has 0.75 of each type." The real
+  // breakdown, if ever entered later (in the app or a future sheet with the
+  // per-cell headers below), becomes authoritative and this total is recomputed.
   'am key': 'am_keys',
   'am keys': 'am_keys',
   'am key(s)': 'am_keys',
@@ -50,8 +57,14 @@ const COLUMN_MAP: Record<string, string> = {
   'ic keys': 'contractor_keys',
   'ic key(s)': 'contractor_keys',
   'ic': 'contractor_keys',
-  'office': 'office_keys',
-  // Shared columns
+  // "Office" is now a HOLDER (like AM/CCM/IC), not a key TYPE — a bare
+  // "Office" column sets the Office holder's total (office_keys_held), same
+  // hold-as-unspecified rule as above. It no longer means "site office key
+  // count" (that concept is retired; see office_keys migration in db.ts).
+  'office': 'office_keys_held',
+  'office key': 'office_keys_held',
+  'office keys': 'office_keys_held',
+  // Shared client-site columns (Key Inventory — row totals of the grid)
   'keys y/n': 'keys_yn',
   'keys': 'keys_yn',
   'security app y/n': 'security_app_yn',
@@ -62,27 +75,29 @@ const COLUMN_MAP: Record<string, string> = {
   'fob': 'has_fob',
   'dispenser key': 'dispenser_keys',
   'dispenser keys': 'dispenser_keys',
-  'office key': 'office_keys',
-  'office keys': 'office_keys',
-  'ic office key': 'ic_office_keys',
-  'ic office keys': 'ic_office_keys',
-  'am office key': 'am_office_keys',
-  'am office keys': 'am_office_keys',
-  'ccm office key': 'ccm_office_keys',
-  'ccm office keys': 'ccm_office_keys',
-  // Optional per-role per-type breakdown (case-insensitive, singular/plural).
-  'am metal': 'am_metal_keys', 'am metal key': 'am_metal_keys', 'am metal keys': 'am_metal_keys',
-  'am card': 'am_key_cards', 'am key card': 'am_key_cards', 'am key cards': 'am_key_cards',
-  'am fob': 'am_key_fobs', 'am key fob': 'am_key_fobs', 'am key fobs': 'am_key_fobs',
-  'ccm metal': 'ccm_metal_keys', 'ccm metal key': 'ccm_metal_keys', 'ccm metal keys': 'ccm_metal_keys',
-  'ccm card': 'ccm_key_cards', 'ccm key card': 'ccm_key_cards', 'ccm key cards': 'ccm_key_cards',
-  'ccm fob': 'ccm_key_fobs', 'ccm key fob': 'ccm_key_fobs', 'ccm key fobs': 'ccm_key_fobs',
-  'contractor metal': 'contractor_metal_keys', 'contractor metal key': 'contractor_metal_keys', 'contractor metal keys': 'contractor_metal_keys',
-  'ic metal': 'contractor_metal_keys', 'ic metal key': 'contractor_metal_keys',
-  'contractor card': 'contractor_key_cards', 'contractor key card': 'contractor_key_cards', 'contractor key cards': 'contractor_key_cards',
-  'ic card': 'contractor_key_cards', 'ic key card': 'contractor_key_cards',
-  'contractor fob': 'contractor_key_fobs', 'contractor key fob': 'contractor_key_fobs', 'contractor key fobs': 'contractor_key_fobs',
-  'ic fob': 'contractor_key_fobs', 'ic key fob': 'contractor_key_fobs',
+  // Optional per-holder per-type breakdown — the grid's 16 cells. Rows are
+  // types (Metal/Card/Fob/Dispenser); each holder (AM/CCM/Contractor·IC/
+  // Office) gets its own column. Case-insensitive, singular/plural.
+  'am metal': 'am_metal', 'am metal key': 'am_metal', 'am metal keys': 'am_metal',
+  'am card': 'am_card', 'am key card': 'am_card', 'am key cards': 'am_card',
+  'am fob': 'am_fob', 'am key fob': 'am_fob', 'am key fobs': 'am_fob',
+  'am dispenser': 'am_dispenser', 'am dispenser key': 'am_dispenser', 'am dispenser keys': 'am_dispenser',
+  'ccm metal': 'ccm_metal', 'ccm metal key': 'ccm_metal', 'ccm metal keys': 'ccm_metal',
+  'ccm card': 'ccm_card', 'ccm key card': 'ccm_card', 'ccm key cards': 'ccm_card',
+  'ccm fob': 'ccm_fob', 'ccm key fob': 'ccm_fob', 'ccm key fobs': 'ccm_fob',
+  'ccm dispenser': 'ccm_dispenser', 'ccm dispenser key': 'ccm_dispenser', 'ccm dispenser keys': 'ccm_dispenser',
+  'contractor metal': 'contractor_metal', 'contractor metal key': 'contractor_metal', 'contractor metal keys': 'contractor_metal',
+  'ic metal': 'contractor_metal', 'ic metal key': 'contractor_metal',
+  'contractor card': 'contractor_card', 'contractor key card': 'contractor_card', 'contractor key cards': 'contractor_card',
+  'ic card': 'contractor_card', 'ic key card': 'contractor_card',
+  'contractor fob': 'contractor_fob', 'contractor key fob': 'contractor_fob', 'contractor key fobs': 'contractor_fob',
+  'ic fob': 'contractor_fob', 'ic key fob': 'contractor_fob',
+  'contractor dispenser': 'contractor_dispenser', 'contractor dispenser key': 'contractor_dispenser', 'contractor dispenser keys': 'contractor_dispenser',
+  'ic dispenser': 'contractor_dispenser', 'ic dispenser key': 'contractor_dispenser',
+  'office metal': 'office_metal', 'office metal key': 'office_metal', 'office metal keys': 'office_metal',
+  'office card': 'office_card', 'office key card': 'office_card', 'office key cards': 'office_card',
+  'office fob': 'office_fob', 'office key fob': 'office_fob', 'office key fobs': 'office_fob',
+  'office dispenser': 'office_dispenser', 'office dispenser key': 'office_dispenser', 'office dispenser keys': 'office_dispenser',
   'lockbox code': 'lockbox_code',
   'lockbox': 'lockbox_code',
   'door code': 'door_code',
@@ -212,26 +227,24 @@ interface ParsedRow {
   ccm_manager: string;
   keys_yn: number;
   security_app_yn: number;
+  // Client-site totals (Key Inventory row totals). If the grid below has data
+  // for a type, its row sum overrides these; otherwise these (flat/legacy
+  // values) are preserved — see gridTotal() usage at the call sites.
   metal_keys: number;
   key_cards: number;
   has_fob: number;
   dispenser_keys: number;
-  office_keys: number;
-  ic_office_keys: number;
-  am_office_keys: number;
-  ccm_office_keys: number;
+  // Holder × type grid — TRANSPOSED: rows are types, these 16 are the columns.
+  am_metal: number; am_card: number; am_fob: number; am_dispenser: number;
+  ccm_metal: number; ccm_card: number; ccm_fob: number; ccm_dispenser: number;
+  contractor_metal: number; contractor_card: number; contractor_fob: number; contractor_dispenser: number;
+  office_metal: number; office_card: number; office_fob: number; office_dispenser: number;
+  // Column totals — computed from the grid, or the flat "hold as unspecified"
+  // total when no per-type breakdown was given.
   am_keys: number;
   ccm_keys: number;
   contractor_keys: number;
-  am_metal_keys: number;
-  am_key_cards: number;
-  am_key_fobs: number;
-  ccm_metal_keys: number;
-  ccm_key_cards: number;
-  ccm_key_fobs: number;
-  contractor_metal_keys: number;
-  contractor_key_cards: number;
-  contractor_key_fobs: number;
+  office_keys_held: number;
   lockbox_code: string;
   door_code: string;
   alarm_code: string;
@@ -240,6 +253,15 @@ interface ParsedRow {
 }
 
 function normalizeRow(raw: Record<string, any>): ParsedRow {
+  const am_metal = parseCount(raw.am_metal), am_card = parseCount(raw.am_card),
+    am_fob = parseCount(raw.am_fob), am_dispenser = parseCount(raw.am_dispenser);
+  const ccm_metal = parseCount(raw.ccm_metal), ccm_card = parseCount(raw.ccm_card),
+    ccm_fob = parseCount(raw.ccm_fob), ccm_dispenser = parseCount(raw.ccm_dispenser);
+  const contractor_metal = parseCount(raw.contractor_metal), contractor_card = parseCount(raw.contractor_card),
+    contractor_fob = parseCount(raw.contractor_fob), contractor_dispenser = parseCount(raw.contractor_dispenser);
+  const office_metal = parseCount(raw.office_metal), office_card = parseCount(raw.office_card),
+    office_fob = parseCount(raw.office_fob), office_dispenser = parseCount(raw.office_dispenser);
+
   return {
     ic_company_name: String(raw.ic_company_name ?? '').trim(),
     bc_client_number: String(raw.bc_client_number ?? '').trim(),
@@ -249,27 +271,22 @@ function normalizeRow(raw: Record<string, any>): ParsedRow {
     ccm_manager: String(raw.ccm_manager ?? '').trim(),
     keys_yn: parseYN(raw.keys_yn),
     security_app_yn: parseYN(raw.security_app_yn),
-    metal_keys: parseNum(raw.metal_keys),
-    key_cards: parseNum(raw.key_cards),
-    has_fob: parseYN(raw.has_fob),
-    dispenser_keys: parseNum(raw.dispenser_keys),
-    office_keys: parseCount(raw.office_keys),
-    ic_office_keys: parseCount(raw.ic_office_keys),
-    am_office_keys: parseCount(raw.am_office_keys),
-    ccm_office_keys: parseCount(raw.ccm_office_keys),
-    am_metal_keys: parseCount(raw.am_metal_keys),
-    am_key_cards: parseCount(raw.am_key_cards),
-    am_key_fobs: parseCount(raw.am_key_fobs),
-    ccm_metal_keys: parseCount(raw.ccm_metal_keys),
-    ccm_key_cards: parseCount(raw.ccm_key_cards),
-    ccm_key_fobs: parseCount(raw.ccm_key_fobs),
-    contractor_metal_keys: parseCount(raw.contractor_metal_keys),
-    contractor_key_cards: parseCount(raw.contractor_key_cards),
-    contractor_key_fobs: parseCount(raw.contractor_key_fobs),
-    // Totals: computed from a breakdown when present, else the flat role total.
-    am_keys: roleTotal(parseCount(raw.am_metal_keys), parseCount(raw.am_key_cards), parseCount(raw.am_key_fobs), parseCount(raw.am_keys)),
-    ccm_keys: roleTotal(parseCount(raw.ccm_metal_keys), parseCount(raw.ccm_key_cards), parseCount(raw.ccm_key_fobs), parseCount(raw.ccm_keys)),
-    contractor_keys: roleTotal(parseCount(raw.contractor_metal_keys), parseCount(raw.contractor_key_cards), parseCount(raw.contractor_key_fobs), parseCount(raw.contractor_keys)),
+    // Client-site row totals: the grid (summed across all 4 holders for this
+    // type) wins if present, else the flat/legacy value is preserved.
+    metal_keys: gridTotal(am_metal, ccm_metal, contractor_metal, office_metal, parseNum(raw.metal_keys)),
+    key_cards: gridTotal(am_card, ccm_card, contractor_card, office_card, parseNum(raw.key_cards)),
+    has_fob: gridTotal(am_fob, ccm_fob, contractor_fob, office_fob, parseCount(raw.has_fob)),
+    dispenser_keys: gridTotal(am_dispenser, ccm_dispenser, contractor_dispenser, office_dispenser, parseNum(raw.dispenser_keys)),
+    am_metal, am_card, am_fob, am_dispenser,
+    ccm_metal, ccm_card, ccm_fob, ccm_dispenser,
+    contractor_metal, contractor_card, contractor_fob, contractor_dispenser,
+    office_metal, office_card, office_fob, office_dispenser,
+    // Column totals: computed from a breakdown when present, else the flat
+    // "hold as unspecified" holder total.
+    am_keys: gridTotal(am_metal, am_card, am_fob, am_dispenser, parseCount(raw.am_keys)),
+    ccm_keys: gridTotal(ccm_metal, ccm_card, ccm_fob, ccm_dispenser, parseCount(raw.ccm_keys)),
+    contractor_keys: gridTotal(contractor_metal, contractor_card, contractor_fob, contractor_dispenser, parseCount(raw.contractor_keys)),
+    office_keys_held: gridTotal(office_metal, office_card, office_fob, office_dispenser, parseCount(raw.office_keys_held)),
     lockbox_code: String(raw.lockbox_code ?? '').trim(),
     door_code: String(raw.door_code ?? '').trim(),
     alarm_code: String(raw.alarm_code ?? '').trim(),
@@ -350,16 +367,16 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
       ic_company_name, bc_client_number, bc_vendor_number,
       ic_name, account_manager, ccm_manager,
       keys_yn, security_app_yn,
-      metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
-      ic_office_keys, am_office_keys, ccm_office_keys,
-      am_keys, ccm_keys, contractor_keys,
-      am_metal_keys, am_key_cards, am_key_fobs,
-      ccm_metal_keys, ccm_key_cards, ccm_key_fobs,
-      contractor_metal_keys, contractor_key_cards, contractor_key_fobs,
+      metal_keys, key_cards, has_fob, dispenser_keys,
+      am_metal, am_card, am_fob, am_dispenser,
+      ccm_metal, ccm_card, ccm_fob, ccm_dispenser,
+      contractor_metal, contractor_card, contractor_fob, contractor_dispenser,
+      office_metal, office_card, office_fob, office_dispenser,
+      am_keys, ccm_keys, contractor_keys, office_keys_held,
       lockbox_code,
       door_code_encrypted, door_code_iv, alarm_code_encrypted, alarm_code_iv,
       notes, status, record_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer')
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer')
   `);
 
   // Upsert UPDATE: fills NULL/blank text fields and zero numeric fields only
@@ -375,22 +392,26 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
       key_cards         = CASE WHEN key_cards = 0         THEN ? ELSE key_cards END,
       has_fob           = CASE WHEN has_fob = 0           THEN ? ELSE has_fob END,
       dispenser_keys    = CASE WHEN dispenser_keys = 0    THEN ? ELSE dispenser_keys END,
-      office_keys       = CASE WHEN office_keys = 0       THEN ? ELSE office_keys END,
-      ic_office_keys    = CASE WHEN ic_office_keys = 0    THEN ? ELSE ic_office_keys END,
-      am_office_keys    = CASE WHEN am_office_keys = 0    THEN ? ELSE am_office_keys END,
-      ccm_office_keys   = CASE WHEN ccm_office_keys = 0   THEN ? ELSE ccm_office_keys END,
+      am_metal          = CASE WHEN am_metal = 0          THEN ? ELSE am_metal END,
+      am_card           = CASE WHEN am_card = 0           THEN ? ELSE am_card END,
+      am_fob            = CASE WHEN am_fob = 0            THEN ? ELSE am_fob END,
+      am_dispenser      = CASE WHEN am_dispenser = 0      THEN ? ELSE am_dispenser END,
+      ccm_metal         = CASE WHEN ccm_metal = 0         THEN ? ELSE ccm_metal END,
+      ccm_card          = CASE WHEN ccm_card = 0          THEN ? ELSE ccm_card END,
+      ccm_fob           = CASE WHEN ccm_fob = 0           THEN ? ELSE ccm_fob END,
+      ccm_dispenser     = CASE WHEN ccm_dispenser = 0     THEN ? ELSE ccm_dispenser END,
+      contractor_metal     = CASE WHEN contractor_metal = 0     THEN ? ELSE contractor_metal END,
+      contractor_card      = CASE WHEN contractor_card = 0      THEN ? ELSE contractor_card END,
+      contractor_fob        = CASE WHEN contractor_fob = 0      THEN ? ELSE contractor_fob END,
+      contractor_dispenser = CASE WHEN contractor_dispenser = 0 THEN ? ELSE contractor_dispenser END,
+      office_metal      = CASE WHEN office_metal = 0      THEN ? ELSE office_metal END,
+      office_card       = CASE WHEN office_card = 0       THEN ? ELSE office_card END,
+      office_fob        = CASE WHEN office_fob = 0        THEN ? ELSE office_fob END,
+      office_dispenser  = CASE WHEN office_dispenser = 0  THEN ? ELSE office_dispenser END,
       am_keys           = CASE WHEN am_keys = 0           THEN ? ELSE am_keys END,
       ccm_keys          = CASE WHEN ccm_keys = 0          THEN ? ELSE ccm_keys END,
       contractor_keys   = CASE WHEN contractor_keys = 0   THEN ? ELSE contractor_keys END,
-      am_metal_keys     = CASE WHEN am_metal_keys = 0     THEN ? ELSE am_metal_keys END,
-      am_key_cards      = CASE WHEN am_key_cards = 0      THEN ? ELSE am_key_cards END,
-      am_key_fobs       = CASE WHEN am_key_fobs = 0       THEN ? ELSE am_key_fobs END,
-      ccm_metal_keys    = CASE WHEN ccm_metal_keys = 0    THEN ? ELSE ccm_metal_keys END,
-      ccm_key_cards     = CASE WHEN ccm_key_cards = 0     THEN ? ELSE ccm_key_cards END,
-      ccm_key_fobs      = CASE WHEN ccm_key_fobs = 0      THEN ? ELSE ccm_key_fobs END,
-      contractor_metal_keys = CASE WHEN contractor_metal_keys = 0 THEN ? ELSE contractor_metal_keys END,
-      contractor_key_cards  = CASE WHEN contractor_key_cards = 0  THEN ? ELSE contractor_key_cards END,
-      contractor_key_fobs   = CASE WHEN contractor_key_fobs = 0   THEN ? ELSE contractor_key_fobs END,
+      office_keys_held  = CASE WHEN office_keys_held = 0  THEN ? ELSE office_keys_held END,
       lockbox_code      = CASE WHEN (lockbox_code IS NULL OR lockbox_code = '')  THEN ? ELSE lockbox_code END,
       notes             = CASE WHEN (notes IS NULL OR notes = '')                THEN ? ELSE notes END
     WHERE bc_client_number = ? AND record_type = 'customer'
@@ -425,12 +446,12 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
             r.ic_name || null, r.bc_vendor_number || null,
             r.account_manager || null, r.ccm_manager || null,
             r.keys_yn, r.security_app_yn,
-            r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys, r.office_keys,
-            r.ic_office_keys, r.am_office_keys, r.ccm_office_keys,
-            r.am_keys, r.ccm_keys, r.contractor_keys,
-            r.am_metal_keys, r.am_key_cards, r.am_key_fobs,
-            r.ccm_metal_keys, r.ccm_key_cards, r.ccm_key_fobs,
-            r.contractor_metal_keys, r.contractor_key_cards, r.contractor_key_fobs,
+            r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys,
+            r.am_metal, r.am_card, r.am_fob, r.am_dispenser,
+            r.ccm_metal, r.ccm_card, r.ccm_fob, r.ccm_dispenser,
+            r.contractor_metal, r.contractor_card, r.contractor_fob, r.contractor_dispenser,
+            r.office_metal, r.office_card, r.office_fob, r.office_dispenser,
+            r.am_keys, r.ccm_keys, r.contractor_keys, r.office_keys_held,
             r.lockbox_code || null, r.notes || null,
             r.bc_client_number,
           );
@@ -440,12 +461,12 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
             r.ic_company_name, r.bc_client_number || null, r.bc_vendor_number || null,
             r.ic_name || null, r.account_manager || null, r.ccm_manager || null,
             r.keys_yn, r.security_app_yn,
-            r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys, r.office_keys,
-            r.ic_office_keys ?? 0, r.am_office_keys ?? 0, r.ccm_office_keys ?? 0,
-            r.am_keys ?? 0, r.ccm_keys ?? 0, r.contractor_keys ?? 0,
-            r.am_metal_keys ?? 0, r.am_key_cards ?? 0, r.am_key_fobs ?? 0,
-            r.ccm_metal_keys ?? 0, r.ccm_key_cards ?? 0, r.ccm_key_fobs ?? 0,
-            r.contractor_metal_keys ?? 0, r.contractor_key_cards ?? 0, r.contractor_key_fobs ?? 0,
+            r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys,
+            r.am_metal ?? 0, r.am_card ?? 0, r.am_fob ?? 0, r.am_dispenser ?? 0,
+            r.ccm_metal ?? 0, r.ccm_card ?? 0, r.ccm_fob ?? 0, r.ccm_dispenser ?? 0,
+            r.contractor_metal ?? 0, r.contractor_card ?? 0, r.contractor_fob ?? 0, r.contractor_dispenser ?? 0,
+            r.office_metal ?? 0, r.office_card ?? 0, r.office_fob ?? 0, r.office_dispenser ?? 0,
+            r.am_keys ?? 0, r.ccm_keys ?? 0, r.contractor_keys ?? 0, r.office_keys_held ?? 0,
             r.lockbox_code || null,
             door_enc, door_iv, alarm_enc, alarm_iv,
             r.notes || null, r.status || 'active'
@@ -485,10 +506,12 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
 // would be back-filled (DB empty/0, sheet has a value). Writes nothing.
 const BACKFILL_TEXT = ['ic_name', 'bc_vendor_number', 'account_manager', 'ccm_manager', 'lockbox_code', 'notes'];
 const BACKFILL_NUM = [
-  'keys_yn', 'security_app_yn', 'metal_keys', 'key_cards', 'has_fob', 'dispenser_keys', 'office_keys',
-  'ic_office_keys', 'am_office_keys', 'ccm_office_keys', 'am_keys', 'ccm_keys', 'contractor_keys',
-  'am_metal_keys', 'am_key_cards', 'am_key_fobs', 'ccm_metal_keys', 'ccm_key_cards', 'ccm_key_fobs',
-  'contractor_metal_keys', 'contractor_key_cards', 'contractor_key_fobs',
+  'keys_yn', 'security_app_yn', 'metal_keys', 'key_cards', 'has_fob', 'dispenser_keys',
+  'am_keys', 'ccm_keys', 'contractor_keys', 'office_keys_held',
+  'am_metal', 'am_card', 'am_fob', 'am_dispenser',
+  'ccm_metal', 'ccm_card', 'ccm_fob', 'ccm_dispenser',
+  'contractor_metal', 'contractor_card', 'contractor_fob', 'contractor_dispenser',
+  'office_metal', 'office_card', 'office_fob', 'office_dispenser',
 ];
 router.post('/dry-run', requireAuth, (req: AuthRequest, res: Response) => {
   const { rows } = req.body as { rows: ParsedRow[] };
@@ -527,13 +550,14 @@ router.get('/template', requireAuth, (_req: AuthRequest, res: Response) => {
     'Client Name', 'BC Client Number', 'Independent Contractor', 'BC Vendor Number',
     'Account Manager', 'Contract Compliance Manager',
     'Keys Y/N', 'Security App Y/N',
-    'Metal Keys', 'Key Cards', 'Key Fobs', 'Dispenser Key', 'Office Key',
-    'AM Key', 'CCM Key', 'Contractor Key',
-    'IC Office Key', 'AM Office Key', 'CCM Office Key',
-    // Optional per-role per-type breakdown (leave blank to use the totals above)
-    'AM Metal', 'AM Card', 'AM Fob',
-    'CCM Metal', 'CCM Card', 'CCM Fob',
-    'Contractor Metal', 'Contractor Card', 'Contractor Fob',
+    'Metal Keys', 'Key Cards', 'Key Fobs', 'Dispenser Key',
+    'AM Key', 'CCM Key', 'Contractor Key', 'Office Key',
+    // Optional per-holder per-type breakdown (leave blank to use the totals
+    // above) — rows are types, these are the holder columns.
+    'AM Metal', 'AM Card', 'AM Fob', 'AM Dispenser',
+    'CCM Metal', 'CCM Card', 'CCM Fob', 'CCM Dispenser',
+    'Contractor Metal', 'Contractor Card', 'Contractor Fob', 'Contractor Dispenser',
+    'Office Metal', 'Office Card', 'Office Fob', 'Office Dispenser',
     'Lockbox Code', 'Door Code', 'Alarm Code', 'Notes',
   ];
   const ws = XLSX.utils.aoa_to_sheet([headers, []]);

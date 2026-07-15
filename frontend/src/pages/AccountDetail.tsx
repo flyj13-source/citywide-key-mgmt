@@ -13,13 +13,13 @@ function MetricCard({ label, value }: { label: string; value: number | string })
   );
 }
 
-// One role row in the Key Holders card: total first, then per-type chips.
-// The "N keys" total is the role's metal+card+fob; office is shown as a chip.
-function RoleHolder({ title, name, total, metal, card, fob, office }: {
+// One holder row in the Key Holders card: total first, then per-type chips.
+// The "N keys" total is that holder's column total (metal+card+fob+dispenser).
+function RoleHolder({ title, name, total, metal, card, fob, dispenser }: {
   title: string; name?: string; total: number;
-  metal: number; card: number; fob: number; office: number;
+  metal: number; card: number; fob: number; dispenser: number;
 }) {
-  const chips = ([[metal, 'metal'], [card, 'card'], [fob, 'fob'], [office, 'office']] as [number, string][])
+  const chips = ([[metal, 'metal'], [card, 'card'], [fob, 'fob'], [dispenser, 'dispenser']] as [number, string][])
     .filter(([n]) => (n || 0) > 0);
   return (
     <div className="py-2">
@@ -129,29 +129,35 @@ export default function AccountDetail() {
               <MetricCard label="AM Keys" value={account.am_keys ?? 0} />
               <MetricCard label="CCM Keys" value={account.ccm_keys ?? 0} />
               <MetricCard label="Contractor Keys" value={account.contractor_keys ?? 0} />
+              <MetricCard label="Office Keys" value={account.office_keys_held ?? 0} />
             </>}
           </div>
         </div>
 
         {/* Key Holders by Role */}
-        {account.record_type === 'customer' && (account.am_keys > 0 || account.ccm_keys > 0 || account.contractor_keys > 0 || account.ic_name || account.account_manager || account.ccm_manager) && (
+        {account.record_type === 'customer' && (account.am_keys > 0 || account.ccm_keys > 0 || account.contractor_keys > 0 || account.office_keys_held > 0 || account.ic_name || account.account_manager || account.ccm_manager) && (
           <div className="card p-4">
             <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">Key Holders by Role</h2>
             <div className="divide-y divide-gray-100 text-sm">
               {(account.ic_name || account.contractor_keys > 0) && (
                 <RoleHolder title="Independent Contractor" name={account.ic_name}
-                  total={account.contractor_keys} metal={account.contractor_metal_keys}
-                  card={account.contractor_key_cards} fob={account.contractor_key_fobs} office={account.ic_office_keys} />
+                  total={account.contractor_keys} metal={account.contractor_metal}
+                  card={account.contractor_card} fob={account.contractor_fob} dispenser={account.contractor_dispenser} />
               )}
               {(account.account_manager || account.am_keys > 0) && (
                 <RoleHolder title="Account Manager" name={account.account_manager}
-                  total={account.am_keys} metal={account.am_metal_keys}
-                  card={account.am_key_cards} fob={account.am_key_fobs} office={account.am_office_keys} />
+                  total={account.am_keys} metal={account.am_metal}
+                  card={account.am_card} fob={account.am_fob} dispenser={account.am_dispenser} />
               )}
               {(account.ccm_manager || account.ccm_keys > 0) && (
                 <RoleHolder title="Contract Compliance Mgr" name={account.ccm_manager}
-                  total={account.ccm_keys} metal={account.ccm_metal_keys}
-                  card={account.ccm_key_cards} fob={account.ccm_key_fobs} office={account.ccm_office_keys} />
+                  total={account.ccm_keys} metal={account.ccm_metal}
+                  card={account.ccm_card} fob={account.ccm_fob} dispenser={account.ccm_dispenser} />
+              )}
+              {account.office_keys_held > 0 && (
+                <RoleHolder title="Office"
+                  total={account.office_keys_held} metal={account.office_metal}
+                  card={account.office_card} fob={account.office_fob} dispenser={account.office_dispenser} />
               )}
             </div>
           </div>

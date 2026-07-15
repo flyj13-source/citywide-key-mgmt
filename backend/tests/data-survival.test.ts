@@ -53,6 +53,9 @@ beforeAll(async () => {
 // ════════════════════════════════ INPUT ROUND-TRIP ══════════════════════════
 describe('INPUT ROUND-TRIP — typed data survives a DB reopen', () => {
   // Plaintext scalar fields that must come back byte-identical from the file.
+  // Grid cells are deliberately diagonal (one type per holder) so the derived
+  // row totals (Key Inventory) and column totals (AM/CCM/IC/Office Keys) are
+  // trivial to hand-check without cells summing across each other.
   const CUSTOMER = {
     record_type: 'customer',
     ic_company_name: 'Beacon Hill Medical Plaza',
@@ -62,9 +65,7 @@ describe('INPUT ROUND-TRIP — typed data survives a DB reopen', () => {
     account_manager: 'Maria Lopez',
     ccm_manager: 'James Chen',
     keys_yn: 1, security_app_yn: 1,
-    metal_keys: 7, key_cards: 4, has_fob: 1, dispenser_keys: 2, office_keys: 9,
-    ic_office_keys: 3, am_office_keys: 4, ccm_office_keys: 2,
-    am_keys: 5, ccm_keys: 6, contractor_keys: 8,
+    am_metal: 5, ccm_card: 6, contractor_fob: 8, office_dispenser: 9,
     lockbox_code: '4417',
     notes: 'VIP — front desk 24/7 · loading dock B',
   };
@@ -74,10 +75,15 @@ describe('INPUT ROUND-TRIP — typed data survives a DB reopen', () => {
   const scalarCols = [
     'ic_company_name', 'bc_client_number', 'ic_name', 'bc_vendor_number',
     'account_manager', 'ccm_manager', 'keys_yn', 'security_app_yn',
-    'metal_keys', 'key_cards', 'has_fob', 'dispenser_keys', 'office_keys',
-    'ic_office_keys', 'am_office_keys', 'ccm_office_keys',
-    'am_keys', 'ccm_keys', 'contractor_keys', 'lockbox_code', 'notes',
+    'am_metal', 'ccm_card', 'contractor_fob', 'office_dispenser',
+    'lockbox_code', 'notes',
   ];
+  // Derived row totals (Key Inventory) + column totals, computed from the
+  // diagonal grid above.
+  const DERIVED = {
+    metal_keys: 5, key_cards: 6, has_fob: 8, dispenser_keys: 9,
+    am_keys: 5, ccm_keys: 6, contractor_keys: 8, office_keys_held: 9,
+  };
 
   it('customer: every field byte-identical after close + reopen', async () => {
     const created = await auth(request(app).post('/api/accounts'))
@@ -92,6 +98,9 @@ describe('INPUT ROUND-TRIP — typed data survives a DB reopen', () => {
 
     for (const col of scalarCols) {
       expect(row[col], `field ${col}`).toBe((CUSTOMER as any)[col]);
+    }
+    for (const [col, expected] of Object.entries(DERIVED)) {
+      expect(row[col], `derived field ${col}`).toBe(expected);
     }
     // Codes are stored ENCRYPTED (plaintext must be absent from the bytes)…
     expect(row.door_code_encrypted).toBeTruthy();
@@ -110,6 +119,7 @@ describe('INPUT ROUND-TRIP — typed data survives a DB reopen', () => {
     // And the API GET returns the same values.
     const got = (await auth(request(app).get(`/api/accounts/${id}`))).body;
     for (const col of scalarCols) expect(got[col]).toBe((CUSTOMER as any)[col]);
+    for (const [col, expected] of Object.entries(DERIVED)) expect(got[col]).toBe(expected);
   });
 
   it('IC vendor: every field byte-identical after close + reopen', async () => {
@@ -118,8 +128,7 @@ describe('INPUT ROUND-TRIP — typed data survives a DB reopen', () => {
       ic_company_name: 'SHARP CLEANING CORPORATION',
       bc_vendor_number: '02014100044',
       keys_yn: 1, security_app_yn: 0,
-      metal_keys: 3, key_cards: 1, has_fob: 1, dispenser_keys: 0, office_keys: 2,
-      ic_office_keys: 2, am_office_keys: 0, ccm_office_keys: 0,
+      metal_keys: 3, key_cards: 1, has_fob: 1, dispenser_keys: 0,
       lockbox_code: '28', notes: 'Vendor keys held at CW office',
     };
     const created = await auth(request(app).post('/api/accounts')).send(IC);
@@ -188,12 +197,12 @@ describe('IMPORT ROUND-TRIP — 600-row sheet survives a reopen', () => {
     // Spot-check 5 rows field-by-field against what the sheet declared.
     for (const i of [10, 137, 299, 450, 599]) {
       const r: any = Object.assign({}, db.prepare(
-        'SELECT ic_company_name, bc_client_number, account_manager, ccm_manager, office_keys, contractor_keys FROM accounts WHERE bc_client_number = ?'
+        'SELECT ic_company_name, bc_client_number, account_manager, ccm_manager, office_keys_held, contractor_keys FROM accounts WHERE bc_client_number = ?'
       ).get(`${MARK}-${i}`));
       expect(r.ic_company_name).toBe(`${MARK} Client ${i}`);
       expect(r.account_manager).toBe(`AM ${i % 8}`);
       expect(r.ccm_manager).toBe(`CCM ${i % 8}`);
-      expect(r.office_keys).toBe(i % 4);
+      expect(r.office_keys_held).toBe(i % 4);
       expect(r.contractor_keys).toBe(i % 6);
     }
     db.close();

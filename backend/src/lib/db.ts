@@ -65,6 +65,24 @@ const needed: [string, string][] = [
   ['contractor_metal_keys', 'INTEGER DEFAULT 0'],
   ['contractor_key_cards', 'INTEGER DEFAULT 0'],
   ['contractor_key_fobs', 'INTEGER DEFAULT 0'],
+  // Holder × type grid (TRANSPOSED — Office is a HOLDER, not a type).
+  ['am_metal', 'INTEGER DEFAULT 0'],
+  ['am_card', 'INTEGER DEFAULT 0'],
+  ['am_fob', 'INTEGER DEFAULT 0'],
+  ['am_dispenser', 'INTEGER DEFAULT 0'],
+  ['ccm_metal', 'INTEGER DEFAULT 0'],
+  ['ccm_card', 'INTEGER DEFAULT 0'],
+  ['ccm_fob', 'INTEGER DEFAULT 0'],
+  ['ccm_dispenser', 'INTEGER DEFAULT 0'],
+  ['contractor_metal', 'INTEGER DEFAULT 0'],
+  ['contractor_card', 'INTEGER DEFAULT 0'],
+  ['contractor_fob', 'INTEGER DEFAULT 0'],
+  ['contractor_dispenser', 'INTEGER DEFAULT 0'],
+  ['office_metal', 'INTEGER DEFAULT 0'],
+  ['office_card', 'INTEGER DEFAULT 0'],
+  ['office_fob', 'INTEGER DEFAULT 0'],
+  ['office_dispenser', 'INTEGER DEFAULT 0'],
+  ['office_keys_held', 'INTEGER DEFAULT 0'],
   ['lockbox_code', 'TEXT'],
   ['door_access_code_encrypted', 'TEXT'],
   ['door_access_code_iv', 'TEXT'],
@@ -81,9 +99,55 @@ const needed: [string, string][] = [
 ];
 
 const existing = cols();
+const freshlyAddedGridCols = needed
+  .filter(([col]) => col.match(/^(am_metal|am_card|am_fob|am_dispenser|ccm_metal|ccm_card|ccm_fob|ccm_dispenser|contractor_metal|contractor_card|contractor_fob|contractor_dispenser|office_metal|office_card|office_fob|office_dispenser)$/))
+  .some(([col]) => !existing.includes(col));
 for (const [col, def] of needed) {
   if (!existing.includes(col))
     db.exec(`ALTER TABLE accounts ADD COLUMN ${col} ${def}`);
+}
+
+// ── One-time data migration: role×type grid TRANSPOSE (Office becomes a
+// HOLDER, not a key TYPE). Runs only the first time the new grid columns are
+// added to this DB, and each copy is itself guarded (only fires when the
+// destination is still 0 and the source has data) — so it is safe even if
+// this branch ever re-runs, and it NEVER overwrites data someone has already
+// entered into the new fields. Nothing is dropped; old columns stay in place.
+if (freshlyAddedGridCols) {
+  // 1) Old 9-cell role×type breakdown (am_metal_keys/am_key_cards/am_key_fobs,
+  //    same for ccm_/contractor_) → the new am_metal/am_card/am_fob, etc.
+  //    Same underlying data, just renamed fields; am_dispenser/ccm_dispenser/
+  //    contractor_dispenser have no prior equivalent and stay 0.
+  for (const role of ['am', 'ccm', 'contractor']) {
+    db.exec(`
+      UPDATE accounts SET
+        ${role}_metal = ${role}_metal_keys,
+        ${role}_card  = ${role}_key_cards,
+        ${role}_fob   = ${role}_key_fobs
+      WHERE ${role}_metal = 0 AND ${role}_card = 0 AND ${role}_fob = 0
+        AND (${role}_metal_keys > 0 OR ${role}_key_cards > 0 OR ${role}_key_fobs > 0)
+    `);
+  }
+  // 2) Legacy site-level office_keys (Office used to be a TYPE, one flat count)
+  //    → office_metal. Ambiguous by nature (no prior type breakdown existed for
+  //    office keys), so it lands entirely in the "metal" cell as the most common
+  //    physical form — reported to the user rather than silently guessed at.
+  db.exec(`
+    UPDATE accounts SET office_metal = office_keys
+    WHERE office_metal = 0 AND office_keys > 0
+  `);
+  const migrated = Object.assign({}, db.prepare(
+    "SELECT COUNT(*) AS c FROM accounts WHERE office_metal > 0 AND office_metal = office_keys"
+  ).get()).c as number;
+  if (migrated > 0) {
+    console.log(`✓ [migration] Copied legacy office_keys → office_metal for ${migrated} row(s) (ambiguous type, defaulted to "metal")`);
+  }
+  // NOTE: the old per-role office bolt-on columns (ic_office_keys/am_office_keys/
+  // ccm_office_keys — "office-type keys attributed to role X") are intentionally
+  // NOT migrated into the new grid. They represented a different concept (a
+  // role's office-key count) than the new model (keys the Office HOLDER itself
+  // has, by type) and conflating them would fabricate data. Those columns are
+  // left in place, untouched, and no longer read by the app.
 }
 
 // bc_vendor_number must NOT be unique — one IC serves many clients (same vendor# on many rows).

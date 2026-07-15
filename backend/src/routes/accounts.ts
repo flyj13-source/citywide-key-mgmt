@@ -3,7 +3,7 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
 import { logAudit } from '../lib/audit';
 import { encrypt } from '../lib/crypto';
-import { roleTotal, num } from '../lib/roleKeys';
+import { gridTotal, num } from '../lib/roleKeys';
 
 const router = Router();
 
@@ -63,12 +63,17 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
     ic_company_name, bc_vendor_number, bc_client_number,
     ic_name, account_manager, ccm_manager,
     keys_yn, security_app_yn,
-    metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
-    ic_office_keys, am_office_keys, ccm_office_keys,
-    am_keys, ccm_keys, contractor_keys,
-    am_metal_keys, am_key_cards, am_key_fobs,
-    ccm_metal_keys, ccm_key_cards, ccm_key_fobs,
-    contractor_metal_keys, contractor_key_cards, contractor_key_fobs,
+    // Client-site totals (Key Inventory) — accepted as a legacy/explicit
+    // fallback; normally auto-computed from the holder grid below.
+    metal_keys, key_cards, has_fob, dispenser_keys,
+    // Holder × type grid — TRANSPOSED: rows are types, these are the columns.
+    am_metal, am_card, am_fob, am_dispenser,
+    ccm_metal, ccm_card, ccm_fob, ccm_dispenser,
+    contractor_metal, contractor_card, contractor_fob, contractor_dispenser,
+    office_metal, office_card, office_fob, office_dispenser,
+    // Column totals — accepted as a legacy/explicit fallback; normally
+    // auto-computed from the grid.
+    am_keys, ccm_keys, contractor_keys, office_keys_held,
     lockbox_code, door_code, alarm_code, door_access_code,
     notes, status, record_type,
   } = req.body;
@@ -82,38 +87,50 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
 
   const rtype = record_type === 'customer' ? 'customer' : 'ic';
 
-  // Totals are computed from the per-type breakdown (preserving legacy totals).
-  const amTotal = roleTotal(am_metal_keys, am_key_cards, am_key_fobs, am_keys);
-  const ccmTotal = roleTotal(ccm_metal_keys, ccm_key_cards, ccm_key_fobs, ccm_keys);
-  const contractorTotal = roleTotal(contractor_metal_keys, contractor_key_cards, contractor_key_fobs, contractor_keys);
+  // COLUMN totals (one holder, all 4 types) — computed from the grid,
+  // preserving a legacy/explicit total when no grid cells were entered.
+  const amTotal = gridTotal(am_metal, am_card, am_fob, am_dispenser, am_keys);
+  const ccmTotal = gridTotal(ccm_metal, ccm_card, ccm_fob, ccm_dispenser, ccm_keys);
+  const contractorTotal = gridTotal(contractor_metal, contractor_card, contractor_fob, contractor_dispenser, contractor_keys);
+  const officeTotal = gridTotal(office_metal, office_card, office_fob, office_dispenser, office_keys_held);
+
+  // ROW totals (one type, all 4 holders) — this IS the client-site Key
+  // Inventory. Collapsed into the grid: if any holder has this type entered,
+  // the row sum is authoritative; otherwise the explicit/legacy site total
+  // (from an old import, or untouched) is preserved so existing data is never
+  // zeroed.
+  const metalRow = gridTotal(am_metal, ccm_metal, contractor_metal, office_metal, metal_keys);
+  const cardRow = gridTotal(am_card, ccm_card, contractor_card, office_card, key_cards);
+  const fobRow = gridTotal(am_fob, ccm_fob, contractor_fob, office_fob, has_fob);
+  const dispenserRow = gridTotal(am_dispenser, ccm_dispenser, contractor_dispenser, office_dispenser, dispenser_keys);
 
   const result = db.prepare(`
     INSERT INTO accounts (
       ic_company_name, bc_vendor_number, bc_client_number,
       ic_name, account_manager, ccm_manager,
       keys_yn, security_app_yn,
-      metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
-      ic_office_keys, am_office_keys, ccm_office_keys,
-      am_keys, ccm_keys, contractor_keys,
-      am_metal_keys, am_key_cards, am_key_fobs,
-      ccm_metal_keys, ccm_key_cards, ccm_key_fobs,
-      contractor_metal_keys, contractor_key_cards, contractor_key_fobs,
+      metal_keys, key_cards, has_fob, dispenser_keys,
+      am_metal, am_card, am_fob, am_dispenser,
+      ccm_metal, ccm_card, ccm_fob, ccm_dispenser,
+      contractor_metal, contractor_card, contractor_fob, contractor_dispenser,
+      office_metal, office_card, office_fob, office_dispenser,
+      am_keys, ccm_keys, contractor_keys, office_keys_held,
       lockbox_code,
       door_code_encrypted, door_code_iv,
       alarm_code_encrypted, alarm_code_iv,
       door_access_code_encrypted, door_access_code_iv,
       notes, status, record_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     ic_company_name, bc_vendor_number || null, bc_client_number || null,
     ic_name || null, account_manager || null, ccm_manager || null,
     keys_yn ? 1 : 0, security_app_yn ? 1 : 0,
-    metal_keys || 0, key_cards || 0, has_fob ? 1 : 0, dispenser_keys || 0, office_keys || 0,
-    ic_office_keys || 0, am_office_keys || 0, ccm_office_keys || 0,
-    amTotal, ccmTotal, contractorTotal,
-    num(am_metal_keys), num(am_key_cards), num(am_key_fobs),
-    num(ccm_metal_keys), num(ccm_key_cards), num(ccm_key_fobs),
-    num(contractor_metal_keys), num(contractor_key_cards), num(contractor_key_fobs),
+    metalRow, cardRow, fobRow, dispenserRow,
+    num(am_metal), num(am_card), num(am_fob), num(am_dispenser),
+    num(ccm_metal), num(ccm_card), num(ccm_fob), num(ccm_dispenser),
+    num(contractor_metal), num(contractor_card), num(contractor_fob), num(contractor_dispenser),
+    num(office_metal), num(office_card), num(office_fob), num(office_dispenser),
+    amTotal, ccmTotal, contractorTotal, officeTotal,
     lockbox_code || null,
     door_enc, door_iv,
     alarm_enc, alarm_iv,
@@ -149,17 +166,16 @@ router.get('/customer-lookup/:bcNumber', requireAuth, (req: AuthRequest, res: Re
 });
 
 // Key-holder stats for the dashboard "Keys Personally Held" card.
-// Each role's total = their regular role keys + their share of office keys.
+// Office is now an independent HOLDER (like AM/CCM/IC), not a bolt-on to the
+// other roles — so each holder's personal total is simply their own column
+// total from the grid (am_keys/ccm_keys/contractor_keys/office_keys_held).
 router.get('/key-holder-stats', requireAuth, (_req: AuthRequest, res: Response) => {
   const row = db.prepare(`
     SELECT
       COALESCE(SUM(am_keys), 0)          AS am_total,
       COALESCE(SUM(ccm_keys), 0)         AS ccm_total,
       COALESCE(SUM(contractor_keys), 0)  AS contractor_total,
-      COALESCE(SUM(office_keys), 0)      AS office_total,
-      COALESCE(SUM(ic_office_keys), 0)   AS ic_office_total,
-      COALESCE(SUM(am_office_keys), 0)   AS am_office_total,
-      COALESCE(SUM(ccm_office_keys), 0)  AS ccm_office_total
+      COALESCE(SUM(office_keys_held), 0) AS office_total
     FROM accounts
     WHERE record_type = 'customer'
       AND COALESCE(archived, 0) = 0
@@ -167,12 +183,11 @@ router.get('/key-holder-stats', requireAuth, (_req: AuthRequest, res: Response) 
   `).get() as any;
   const r = Object.assign({}, row);
   res.json({
-    // Regular role totals + site office total (kept for compatibility)
     am_total: r.am_total, ccm_total: r.ccm_total, contractor_total: r.contractor_total, office_total: r.office_total,
-    // Personally-held = role keys + that role's office keys
-    ic_personal: r.contractor_total + r.ic_office_total,
-    am_personal: r.am_total + r.am_office_total,
-    ccm_personal: r.ccm_total + r.ccm_office_total,
+    ic_personal: r.contractor_total,
+    am_personal: r.am_total,
+    ccm_personal: r.ccm_total,
+    office_personal: r.office_total,
   });
 });
 
@@ -190,49 +205,63 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     ic_company_name, bc_vendor_number, bc_client_number,
     ic_name, account_manager, ccm_manager,
     keys_yn, security_app_yn,
-    metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
-    ic_office_keys, am_office_keys, ccm_office_keys,
-    am_keys, ccm_keys, contractor_keys,
-    am_metal_keys, am_key_cards, am_key_fobs,
-    ccm_metal_keys, ccm_key_cards, ccm_key_fobs,
-    contractor_metal_keys, contractor_key_cards, contractor_key_fobs,
+    metal_keys, key_cards, has_fob, dispenser_keys,
+    am_metal, am_card, am_fob, am_dispenser,
+    ccm_metal, ccm_card, ccm_fob, ccm_dispenser,
+    contractor_metal, contractor_card, contractor_fob, contractor_dispenser,
+    office_metal, office_card, office_fob, office_dispenser,
+    am_keys, ccm_keys, contractor_keys, office_keys_held,
     lockbox_code, door_code, alarm_code, door_access_code,
     notes, status,
   } = req.body;
 
-  // Read the existing row so we can preserve legacy totals (breakdown 0) yet
-  // honor an intentional clear-to-zero of a role that previously had a breakdown.
+  // Read the existing row so we can preserve legacy totals (grid cells all 0)
+  // yet honor an intentional clear-to-zero of a cell that previously had data.
   const prev: any = Object.assign({}, db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) || {});
-  const amTotal = roleTotal(am_metal_keys, am_key_cards, am_key_fobs, am_keys,
-    num(prev.am_metal_keys) + num(prev.am_key_cards) + num(prev.am_key_fobs), prev.am_keys);
-  const ccmTotal = roleTotal(ccm_metal_keys, ccm_key_cards, ccm_key_fobs, ccm_keys,
-    num(prev.ccm_metal_keys) + num(prev.ccm_key_cards) + num(prev.ccm_key_fobs), prev.ccm_keys);
-  const contractorTotal = roleTotal(contractor_metal_keys, contractor_key_cards, contractor_key_fobs, contractor_keys,
-    num(prev.contractor_metal_keys) + num(prev.contractor_key_cards) + num(prev.contractor_key_fobs), prev.contractor_keys);
+
+  // COLUMN totals (one holder, all 4 types).
+  const amTotal = gridTotal(am_metal, am_card, am_fob, am_dispenser, am_keys,
+    num(prev.am_metal) + num(prev.am_card) + num(prev.am_fob) + num(prev.am_dispenser), prev.am_keys);
+  const ccmTotal = gridTotal(ccm_metal, ccm_card, ccm_fob, ccm_dispenser, ccm_keys,
+    num(prev.ccm_metal) + num(prev.ccm_card) + num(prev.ccm_fob) + num(prev.ccm_dispenser), prev.ccm_keys);
+  const contractorTotal = gridTotal(contractor_metal, contractor_card, contractor_fob, contractor_dispenser, contractor_keys,
+    num(prev.contractor_metal) + num(prev.contractor_card) + num(prev.contractor_fob) + num(prev.contractor_dispenser), prev.contractor_keys);
+  const officeTotal = gridTotal(office_metal, office_card, office_fob, office_dispenser, office_keys_held,
+    num(prev.office_metal) + num(prev.office_card) + num(prev.office_fob) + num(prev.office_dispenser), prev.office_keys_held);
+
+  // ROW totals (one type, all 4 holders) = the client-site Key Inventory.
+  const metalRow = gridTotal(am_metal, ccm_metal, contractor_metal, office_metal, metal_keys,
+    num(prev.am_metal) + num(prev.ccm_metal) + num(prev.contractor_metal) + num(prev.office_metal), prev.metal_keys);
+  const cardRow = gridTotal(am_card, ccm_card, contractor_card, office_card, key_cards,
+    num(prev.am_card) + num(prev.ccm_card) + num(prev.contractor_card) + num(prev.office_card), prev.key_cards);
+  const fobRow = gridTotal(am_fob, ccm_fob, contractor_fob, office_fob, has_fob,
+    num(prev.am_fob) + num(prev.ccm_fob) + num(prev.contractor_fob) + num(prev.office_fob), prev.has_fob);
+  const dispenserRow = gridTotal(am_dispenser, ccm_dispenser, contractor_dispenser, office_dispenser, dispenser_keys,
+    num(prev.am_dispenser) + num(prev.ccm_dispenser) + num(prev.contractor_dispenser) + num(prev.office_dispenser), prev.dispenser_keys);
 
   db.prepare(`
     UPDATE accounts SET
       ic_company_name=?, bc_vendor_number=?, bc_client_number=?,
       ic_name=?, account_manager=?, ccm_manager=?,
       keys_yn=?, security_app_yn=?,
-      metal_keys=?, key_cards=?, has_fob=?, dispenser_keys=?, office_keys=?,
-      ic_office_keys=?, am_office_keys=?, ccm_office_keys=?,
-      am_keys=?, ccm_keys=?, contractor_keys=?,
-      am_metal_keys=?, am_key_cards=?, am_key_fobs=?,
-      ccm_metal_keys=?, ccm_key_cards=?, ccm_key_fobs=?,
-      contractor_metal_keys=?, contractor_key_cards=?, contractor_key_fobs=?,
+      metal_keys=?, key_cards=?, has_fob=?, dispenser_keys=?,
+      am_metal=?, am_card=?, am_fob=?, am_dispenser=?,
+      ccm_metal=?, ccm_card=?, ccm_fob=?, ccm_dispenser=?,
+      contractor_metal=?, contractor_card=?, contractor_fob=?, contractor_dispenser=?,
+      office_metal=?, office_card=?, office_fob=?, office_dispenser=?,
+      am_keys=?, ccm_keys=?, contractor_keys=?, office_keys_held=?,
       lockbox_code=?, notes=?, status=?
     WHERE id=?
   `).run(
     ic_company_name, bc_vendor_number || null, bc_client_number || null,
     ic_name || null, account_manager || null, ccm_manager || null,
     keys_yn ? 1 : 0, security_app_yn ? 1 : 0,
-    metal_keys ?? 0, key_cards ?? 0, has_fob ? 1 : 0, dispenser_keys ?? 0, office_keys ?? 0,
-    ic_office_keys ?? 0, am_office_keys ?? 0, ccm_office_keys ?? 0,
-    amTotal, ccmTotal, contractorTotal,
-    num(am_metal_keys), num(am_key_cards), num(am_key_fobs),
-    num(ccm_metal_keys), num(ccm_key_cards), num(ccm_key_fobs),
-    num(contractor_metal_keys), num(contractor_key_cards), num(contractor_key_fobs),
+    metalRow, cardRow, fobRow, dispenserRow,
+    num(am_metal), num(am_card), num(am_fob), num(am_dispenser),
+    num(ccm_metal), num(ccm_card), num(ccm_fob), num(ccm_dispenser),
+    num(contractor_metal), num(contractor_card), num(contractor_fob), num(contractor_dispenser),
+    num(office_metal), num(office_card), num(office_fob), num(office_dispenser),
+    amTotal, ccmTotal, contractorTotal, officeTotal,
     lockbox_code || null, notes || null, status || 'active',
     req.params.id,
   );

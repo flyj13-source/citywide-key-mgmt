@@ -518,22 +518,23 @@ describe('DASHBOARD HYGIENE', () => {
   });
 });
 
-// ═══════════════════════════════════════ OFFICE KEYS & ROSTERS ══════════════
-describe('OFFICE KEYS + PEOPLE ROSTERS', () => {
-  it('office_keys round-trips through create → get', async () => {
+// ═══════════════════ OFFICE-AS-HOLDER (TRANSPOSED GRID) & ROSTERS ═══════════
+describe('OFFICE AS A HOLDER + PEOPLE ROSTERS', () => {
+  it('office_keys_held round-trips through create → get', async () => {
     const res = await auth(request(app).post('/api/accounts')).send({
-      record_type: 'customer', ic_company_name: 'OFFICE KEY SITE', office_keys: 9,
+      record_type: 'customer', ic_company_name: 'OFFICE KEY SITE', office_metal: 9,
     });
     expect(res.status).toBe(201);
     const a = (await auth(request(app).get(`/api/accounts/${res.body.id}`))).body;
-    expect(a.office_keys).toBe(9);
+    expect(a.office_metal).toBe(9);
+    expect(a.office_keys_held).toBe(9);
   });
 
-  it('import maps Office Key + role-office columns (Y→1, numeric→as-is, blank→0)', async () => {
-    const HEADERS = ['Client Name', 'BC Client Number', 'Office Key', 'IC Office Key', 'AM Office Key', 'CCM Office Key'];
+  it('import maps flat "Office" column and per-cell "Office Metal"/"Office Fob" headers', async () => {
+    const HEADERS = ['Client Name', 'BC Client Number', 'Office Key', 'Office Metal', 'Office Fob'];
     const rows = [
-      ['OFFICE IMP A', 'BCC-OK-A', '3', '1', 'Y', ''],   // office 3, ic 1, am Y→1, ccm blank→0
-      ['OFFICE IMP B', 'BCC-OK-B', 'Y', '', '2', '5'],   // office Y→1, ic blank→0, am 2, ccm 5
+      ['OFFICE IMP A', 'BCC-OK-A', '3', '2', '1'],  // per-cell breakdown present → wins over flat total
+      ['OFFICE IMP B', 'BCC-OK-B', 'Y', '', ''],    // no breakdown → flat "Office Key" Y→1 held as unspecified
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([HEADERS, ...rows]), 'S');
@@ -546,53 +547,60 @@ describe('OFFICE KEYS + PEOPLE ROSTERS', () => {
 
     const db = openDb();
     const get = (name: string) => Object.assign({}, db.prepare(
-      'SELECT office_keys, ic_office_keys, am_office_keys, ccm_office_keys FROM accounts WHERE ic_company_name = ?'
+      'SELECT office_metal, office_fob, office_keys_held FROM accounts WHERE ic_company_name = ?'
     ).get(name)) as any;
-    expect(get('OFFICE IMP A')).toMatchObject({ office_keys: 3, ic_office_keys: 1, am_office_keys: 1, ccm_office_keys: 0 });
-    expect(get('OFFICE IMP B')).toMatchObject({ office_keys: 1, ic_office_keys: 0, am_office_keys: 2, ccm_office_keys: 5 });
+    expect(get('OFFICE IMP A')).toMatchObject({ office_metal: 2, office_fob: 1, office_keys_held: 3 });
+    expect(get('OFFICE IMP B')).toMatchObject({ office_metal: 0, office_fob: 0, office_keys_held: 1 });
     db.close();
   });
 
-  it('role-split office keys round-trip through create → get', async () => {
+  it('office holder grid (all 4 types) round-trips through create → get', async () => {
     const res = await auth(request(app).post('/api/accounts')).send({
       record_type: 'customer', ic_company_name: 'ROLE OFFICE SITE',
-      office_keys: 6, ic_office_keys: 1, am_office_keys: 2, ccm_office_keys: 3,
+      office_metal: 6, office_card: 1, office_fob: 2, office_dispenser: 3,
     });
     const a = (await auth(request(app).get(`/api/accounts/${res.body.id}`))).body;
-    expect(a.office_keys).toBe(6);
-    expect(a.ic_office_keys).toBe(1);
-    expect(a.am_office_keys).toBe(2);
-    expect(a.ccm_office_keys).toBe(3);
+    expect(a.office_metal).toBe(6);
+    expect(a.office_card).toBe(1);
+    expect(a.office_fob).toBe(2);
+    expect(a.office_dispenser).toBe(3);
+    expect(a.office_keys_held).toBe(12); // column total: 6+1+2+3
   });
 
   it('AM roster splits PERSONALLY HELD vs ACROSS CLIENTS (spot-check by hand)', async () => {
     const AM = 'ROSTER TESTER AM';
-    // Two clients: known client-level type counts AND known AM-personal counts.
+    // Two clients. Each also has a non-AM holder cell (contractor/office) of
+    // type "metal" — those keys count toward the client-site Key Inventory
+    // (metal_keys) but must NOT count toward AM's own personal total, proving
+    // the two are independently derived from the same grid.
     await auth(request(app).post('/api/accounts')).send({
       record_type: 'customer', ic_company_name: 'RT CLIENT 1', account_manager: AM,
-      metal_keys: 2, key_cards: 1, has_fob: 1, dispenser_keys: 0, office_keys: 3,
-      am_keys: 2, am_office_keys: 1,
+      am_metal: 2, am_card: 1, am_fob: 1, am_dispenser: 0,
+      contractor_metal: 5,
     });
     await auth(request(app).post('/api/accounts')).send({
       record_type: 'customer', ic_company_name: 'RT CLIENT 2', account_manager: AM,
-      metal_keys: 4, key_cards: 0, has_fob: 0, dispenser_keys: 5, office_keys: 1,
-      am_keys: 3, am_office_keys: 4,
+      am_metal: 3, am_card: 0, am_fob: 2, am_dispenser: 2,
+      office_metal: 1,
     });
 
     const roster = (await auth(request(app).get('/api/managers/account-managers'))).body.managers;
     const row = roster.find((m: any) => m.person === AM);
     expect(row).toBeTruthy();
     expect(row.clients_managed).toBe(2);
-    // PERSONALLY HOLDS
-    expect(row.keys_held).toBe(5);        // am_keys 2 + 3
-    expect(row.office_held).toBe(5);      // am_office_keys 1 + 4
-    // ACROSS THEIR CLIENTS
-    expect(row.metal_keys).toBe(6);       // 2 + 4
+    // PERSONALLY HOLDS (this role's holder-grid columns only)
+    expect(row.personal_metal).toBe(5);      // 2+3
+    expect(row.personal_cards).toBe(1);      // 1+0
+    expect(row.personal_fobs).toBe(3);       // 1+2
+    expect(row.personal_dispenser).toBe(2);  // 0+2
+    expect(row.keys_held).toBe(11);          // am_keys column totals: 4 + 7
+    // ACROSS THEIR CLIENTS (client-site Key Inventory row totals — includes
+    // the contractor/office metal cells too, so metal_keys > personal_metal)
+    expect(row.metal_keys).toBe(11);      // (2+5) + (3+1)
     expect(row.key_cards).toBe(1);        // 1 + 0
-    expect(row.key_fobs).toBe(1);         // 1 + 0
-    expect(row.dispenser_keys).toBe(5);   // 0 + 5
-    expect(row.office_keys).toBe(4);      // 3 + 1
-    expect(row.total_client_keys).toBe(17); // 6+1+1+5+4
+    expect(row.key_fobs).toBe(3);         // 1 + 2
+    expect(row.dispenser_keys).toBe(2);   // 0 + 2
+    expect(row.total_client_keys).toBe(17); // 11+1+3+2
   });
 
   it('AM roster is sorted by keys_held desc by default', async () => {
@@ -604,33 +612,36 @@ describe('OFFICE KEYS + PEOPLE ROSTERS', () => {
 
   it('CCM roster groups by ccm_manager with personal + client split', async () => {
     const CCM = 'ROSTER TESTER CCM';
+    // contractor_metal adds to the client-site metal total but not to the
+    // CCM's own personal total — same split proof as the AM test above.
     await auth(request(app).post('/api/accounts')).send({
       record_type: 'customer', ic_company_name: 'RT CCM CLIENT', ccm_manager: CCM,
-      metal_keys: 7, office_keys: 2, ccm_keys: 4, ccm_office_keys: 3,
+      ccm_metal: 4, contractor_metal: 3,
     });
     const roster = (await auth(request(app).get('/api/managers/ccms'))).body.managers;
     const row = roster.find((m: any) => m.person === CCM);
     expect(row).toBeTruthy();
     expect(row.clients_managed).toBe(1);
-    expect(row.keys_held).toBe(4);          // ccm_keys
-    expect(row.office_held).toBe(3);        // ccm_office_keys
-    expect(row.metal_keys).toBe(7);
-    expect(row.office_keys).toBe(2);
-    expect(row.total_client_keys).toBe(9);  // 7 + 2
+    expect(row.keys_held).toBe(4);          // ccm_keys column total (= ccm_metal)
+    expect(row.personal_metal).toBe(4);
+    expect(row.metal_keys).toBe(7);         // client-site row total: ccm_metal + contractor_metal
+    expect(row.total_client_keys).toBe(7);
   });
 
-  it('dashboard personally-held totals = role keys + role office keys', async () => {
+  it('dashboard personally-held totals = each holder\'s own column total (AM/CCM/IC/Office)', async () => {
     const before = (await auth(request(app).get('/api/accounts/key-holder-stats'))).body;
     await auth(request(app).post('/api/accounts')).send({
       record_type: 'customer', ic_company_name: 'PERSONAL HELD SITE',
-      contractor_keys: 10, ic_office_keys: 2,
-      am_keys: 5, am_office_keys: 1,
-      ccm_keys: 3, ccm_office_keys: 4,
+      contractor_metal: 10,
+      am_metal: 5,
+      ccm_metal: 3,
+      office_metal: 2,
     });
     const after = (await auth(request(app).get('/api/accounts/key-holder-stats'))).body;
-    expect(after.ic_personal - before.ic_personal).toBe(12);  // 10 + 2
-    expect(after.am_personal - before.am_personal).toBe(6);   // 5 + 1
-    expect(after.ccm_personal - before.ccm_personal).toBe(7); // 3 + 4
+    expect(after.ic_personal - before.ic_personal).toBe(10);
+    expect(after.am_personal - before.am_personal).toBe(5);
+    expect(after.ccm_personal - before.ccm_personal).toBe(3);
+    expect(after.office_personal - before.office_personal).toBe(2);
   });
 });
 
@@ -776,79 +787,91 @@ describe('CHECKOUT ACCOUNT SEARCH', () => {
   });
 });
 
-// ═══════════════════════════════════════ ROLE KEY TYPES ═════════════════════
-describe('ROLE KEY TYPE BREAKDOWN', () => {
-  it('grid saves all 9 fields round-trip and computes role totals', async () => {
+// ═══════════════════ HOLDER GRID (16-CELL TRANSPOSED MODEL) ═════════════════
+// Rows are key TYPES (Metal/Card/Fob/Dispenser), columns are HOLDERS
+// (AM/CCM/Contractor-IC/Office). A cell field name is `${holder}_${type}`.
+describe('HOLDER GRID (16-CELL) — ROW + COLUMN TOTALS', () => {
+  it('all 16 grid cells round-trip; row totals + column totals compute correctly', async () => {
     const payload = {
-      record_type: 'customer', ic_company_name: 'ROLE TYPE SITE',
-      am_metal_keys: 2, am_key_cards: 1, am_key_fobs: 1, am_office_keys: 1,
-      ccm_metal_keys: 0, ccm_key_cards: 3, ccm_key_fobs: 0, ccm_office_keys: 2,
-      contractor_metal_keys: 4, contractor_key_cards: 0, contractor_key_fobs: 1, ic_office_keys: 0,
+      record_type: 'customer', ic_company_name: 'GRID SITE',
+      am_metal: 2, am_card: 1, am_fob: 1, am_dispenser: 0,
+      ccm_metal: 0, ccm_card: 3, ccm_fob: 0, ccm_dispenser: 1,
+      contractor_metal: 4, contractor_card: 0, contractor_fob: 1, contractor_dispenser: 2,
+      office_metal: 1, office_card: 1, office_fob: 1, office_dispenser: 1,
     };
     const res = await auth(request(app).post('/api/accounts')).send(payload);
     expect(res.status).toBe(201);
     const a = (await auth(request(app).get(`/api/accounts/${res.body.id}`))).body;
 
-    // all 9 breakdown fields round-trip
-    for (const k of ['am_metal_keys','am_key_cards','am_key_fobs','ccm_metal_keys','ccm_key_cards','ccm_key_fobs','contractor_metal_keys','contractor_key_cards','contractor_key_fobs']) {
+    // all 16 grid cells round-trip byte-identical
+    for (const k of Object.keys(payload)) {
+      if (k === 'record_type' || k === 'ic_company_name') continue;
       expect(a[k], k).toBe((payload as any)[k]);
     }
-    // totals are computed = metal + card + fob (office excluded from the role total)
-    expect(a.am_keys).toBe(4);          // 2+1+1
-    expect(a.ccm_keys).toBe(3);         // 0+3+0
-    expect(a.contractor_keys).toBe(5);  // 4+0+1
+
+    // COLUMN totals (one holder, all 4 types)
+    expect(a.am_keys).toBe(4);          // 2+1+1+0
+    expect(a.ccm_keys).toBe(4);         // 0+3+0+1
+    expect(a.contractor_keys).toBe(7);  // 4+0+1+2
+    expect(a.office_keys_held).toBe(4); // 1+1+1+1
+
+    // ROW totals (one type, all 4 holders) = the client-site Key Inventory
+    expect(a.metal_keys).toBe(7);       // 2+0+4+1
+    expect(a.key_cards).toBe(5);        // 1+3+0+1
+    expect(a.has_fob).toBe(3);          // 1+0+1+1
+    expect(a.dispenser_keys).toBe(4);   // 0+1+2+1
   });
 
-  it('legacy total is preserved when the breakdown is empty, recomputed when entered', async () => {
-    // legacy-style write: flat total, no breakdown
+  it('legacy total is preserved when the grid is empty, recomputed when entered', async () => {
+    // legacy-style write: flat column total, no grid breakdown
     const created = await auth(request(app).post('/api/accounts')).send({
-      record_type: 'customer', ic_company_name: 'LEGACY ROLE SITE', am_keys: 5,
+      record_type: 'customer', ic_company_name: 'LEGACY GRID SITE', am_keys: 5,
     });
     const id = created.body.id;
     let a = (await auth(request(app).get(`/api/accounts/${id}`))).body;
     expect(a.am_keys).toBe(5);
-    expect(a.am_metal_keys).toBe(0);
+    expect(a.am_metal).toBe(0);
 
-    // edit something else, breakdown still 0 → total must NOT be zeroed
+    // edit something else, grid still empty → total must NOT be zeroed
     await auth(request(app).put(`/api/accounts/${id}`)).send({
-      ic_company_name: 'LEGACY ROLE SITE', am_keys: 5,
-      am_metal_keys: 0, am_key_cards: 0, am_key_fobs: 0,
+      ic_company_name: 'LEGACY GRID SITE', am_keys: 5,
+      am_metal: 0, am_card: 0, am_fob: 0, am_dispenser: 0,
     });
     a = (await auth(request(app).get(`/api/accounts/${id}`))).body;
     expect(a.am_keys).toBe(5);
 
-    // now enter a breakdown → total recomputes
+    // now enter a grid breakdown → total recomputes from the cells
     await auth(request(app).put(`/api/accounts/${id}`)).send({
-      ic_company_name: 'LEGACY ROLE SITE', am_metal_keys: 2, am_key_cards: 1, am_key_fobs: 0,
+      ic_company_name: 'LEGACY GRID SITE', am_metal: 2, am_card: 1, am_fob: 0, am_dispenser: 0,
     });
     a = (await auth(request(app).get(`/api/accounts/${id}`))).body;
     expect(a.am_keys).toBe(3);
 
-    // clearing a previously-set breakdown honors the intentional zero
+    // clearing a previously-set grid honors the intentional zero
     await auth(request(app).put(`/api/accounts/${id}`)).send({
-      ic_company_name: 'LEGACY ROLE SITE', am_metal_keys: 0, am_key_cards: 0, am_key_fobs: 0,
+      ic_company_name: 'LEGACY GRID SITE', am_metal: 0, am_card: 0, am_fob: 0, am_dispenser: 0,
     });
     a = (await auth(request(app).get(`/api/accounts/${id}`))).body;
     expect(a.am_keys).toBe(0);
   });
 
   it('AM roster personal per-type sums match a hand-check', async () => {
-    const AM = 'ROLE HANDCHECK AM';
+    const AM = 'GRID HANDCHECK AM';
     await auth(request(app).post('/api/accounts')).send({
-      record_type: 'customer', ic_company_name: 'RH 1', account_manager: AM,
-      am_metal_keys: 2, am_key_cards: 1, am_key_fobs: 1, am_office_keys: 1,
+      record_type: 'customer', ic_company_name: 'GH 1', account_manager: AM,
+      am_metal: 2, am_card: 1, am_fob: 1, am_dispenser: 1,
     });
     await auth(request(app).post('/api/accounts')).send({
-      record_type: 'customer', ic_company_name: 'RH 2', account_manager: AM,
-      am_metal_keys: 3, am_key_cards: 0, am_key_fobs: 2, am_office_keys: 2,
+      record_type: 'customer', ic_company_name: 'GH 2', account_manager: AM,
+      am_metal: 3, am_card: 0, am_fob: 2, am_dispenser: 2,
     });
     const row = (await auth(request(app).get('/api/managers/account-managers'))).body.managers.find((m: any) => m.person === AM);
-    expect(row.personal_metal).toBe(5);   // 2+3
-    expect(row.personal_cards).toBe(1);   // 1+0
-    expect(row.personal_fobs).toBe(3);    // 1+2
-    expect(row.office_held).toBe(3);      // 1+2
-    expect(row.keys_held).toBe(9);        // (2+1+1)+(3+0+2)
-    expect(row.total_held).toBe(12);      // 9 + 3 office
+    expect(row.personal_metal).toBe(5);      // 2+3
+    expect(row.personal_cards).toBe(1);      // 1+0
+    expect(row.personal_fobs).toBe(3);       // 1+2
+    expect(row.personal_dispenser).toBe(3);  // 1+2
+    expect(row.keys_held).toBe(12);          // (2+1+1+1)+(3+0+2+2)
+    expect(row.total_held).toBe(12);
   });
 });
 
@@ -920,7 +943,7 @@ describe('UPDATE-MODE IMPORT DRY-RUN', () => {
     });
 
     const rows = [
-      { ic_company_name: 'DRYRUN CO', bc_client_number: 'DRYRUN-1', account_manager: 'New AM', ccm_manager: 'New CCM', am_keys: 3, office_keys: 2 },
+      { ic_company_name: 'DRYRUN CO', bc_client_number: 'DRYRUN-1', account_manager: 'New AM', ccm_manager: 'New CCM', am_keys: 3, office_keys_held: 2 },
       { ic_company_name: 'GHOST', bc_client_number: 'DRYRUN-NONE', account_manager: 'X' }, // unmatched
     ];
     const res = await auth(request(app).post('/api/accounts/import/dry-run')).send({ rows });
@@ -930,7 +953,7 @@ describe('UPDATE-MODE IMPORT DRY-RUN', () => {
     expect(res.body.wouldFill.account_manager).toBe(1);
     expect(res.body.wouldFill.ccm_manager).toBe(1);
     expect(res.body.wouldFill.am_keys).toBe(1);
-    expect(res.body.wouldFill.office_keys).toBe(1);
+    expect(res.body.wouldFill.office_keys_held).toBe(1);
 
     // dry-run wrote nothing: the row's account_manager is still empty
     const got = (await auth(request(app).get('/api/accounts?type=customer&search=DRYRUN CO&limit=1'))).body.accounts[0];
@@ -1018,7 +1041,7 @@ describe('REAL SHEET HEADERS — CCM name vs CCM/IC/AM/Office key-count columns'
     expect(row1.contractor_keys).toBe(2);
     expect(row1.am_keys).toBe(1);
     expect(row1.ccm_keys).toBe(1);
-    expect(row1.office_keys).toBe(1);
+    expect(row1.office_keys_held).toBe(1);
 
     const row2 = preview.body.valid.find((r: any) => r.bc_client_number === 'RS-EXACT-2');
     expect(row2.ccm_manager).toBe('Daniel Bordenave');
@@ -1031,7 +1054,7 @@ describe('REAL SHEET HEADERS — CCM name vs CCM/IC/AM/Office key-count columns'
 
     const db = openDb();
     const stored: any = Object.assign({}, db.prepare(
-      'SELECT account_manager, ccm_manager, contractor_keys, am_keys, ccm_keys, office_keys FROM accounts WHERE bc_client_number = ?'
+      'SELECT account_manager, ccm_manager, contractor_keys, am_keys, ccm_keys, office_keys_held FROM accounts WHERE bc_client_number = ?'
     ).get('RS-EXACT-1'));
     db.close();
     expect(stored.account_manager).toBe('John Smith');
@@ -1039,7 +1062,7 @@ describe('REAL SHEET HEADERS — CCM name vs CCM/IC/AM/Office key-count columns'
     expect(stored.contractor_keys).toBe(2);
     expect(stored.am_keys).toBe(1);
     expect(stored.ccm_keys).toBe(1);
-    expect(stored.office_keys).toBe(1);
+    expect(stored.office_keys_held).toBe(1);
   });
 
   it('update-mode backfills ccm_manager where NULL, never touches an already-populated row, never duplicates', async () => {
