@@ -706,3 +706,79 @@ describe('CHECKOUT ACCOUNT SEARCH', () => {
     expect(after.accounts.map((a: any) => a.ic_company_name)).toContain('ZORP CHECKOUT VENDOR');
   });
 });
+
+// ═══════════════════════════════════════ ROLE KEY TYPES ═════════════════════
+describe('ROLE KEY TYPE BREAKDOWN', () => {
+  it('grid saves all 9 fields round-trip and computes role totals', async () => {
+    const payload = {
+      record_type: 'customer', ic_company_name: 'ROLE TYPE SITE',
+      am_metal_keys: 2, am_key_cards: 1, am_key_fobs: 1, am_office_keys: 1,
+      ccm_metal_keys: 0, ccm_key_cards: 3, ccm_key_fobs: 0, ccm_office_keys: 2,
+      contractor_metal_keys: 4, contractor_key_cards: 0, contractor_key_fobs: 1, ic_office_keys: 0,
+    };
+    const res = await auth(request(app).post('/api/accounts')).send(payload);
+    expect(res.status).toBe(201);
+    const a = (await auth(request(app).get(`/api/accounts/${res.body.id}`))).body;
+
+    // all 9 breakdown fields round-trip
+    for (const k of ['am_metal_keys','am_key_cards','am_key_fobs','ccm_metal_keys','ccm_key_cards','ccm_key_fobs','contractor_metal_keys','contractor_key_cards','contractor_key_fobs']) {
+      expect(a[k], k).toBe((payload as any)[k]);
+    }
+    // totals are computed = metal + card + fob (office excluded from the role total)
+    expect(a.am_keys).toBe(4);          // 2+1+1
+    expect(a.ccm_keys).toBe(3);         // 0+3+0
+    expect(a.contractor_keys).toBe(5);  // 4+0+1
+  });
+
+  it('legacy total is preserved when the breakdown is empty, recomputed when entered', async () => {
+    // legacy-style write: flat total, no breakdown
+    const created = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'LEGACY ROLE SITE', am_keys: 5,
+    });
+    const id = created.body.id;
+    let a = (await auth(request(app).get(`/api/accounts/${id}`))).body;
+    expect(a.am_keys).toBe(5);
+    expect(a.am_metal_keys).toBe(0);
+
+    // edit something else, breakdown still 0 → total must NOT be zeroed
+    await auth(request(app).put(`/api/accounts/${id}`)).send({
+      ic_company_name: 'LEGACY ROLE SITE', am_keys: 5,
+      am_metal_keys: 0, am_key_cards: 0, am_key_fobs: 0,
+    });
+    a = (await auth(request(app).get(`/api/accounts/${id}`))).body;
+    expect(a.am_keys).toBe(5);
+
+    // now enter a breakdown → total recomputes
+    await auth(request(app).put(`/api/accounts/${id}`)).send({
+      ic_company_name: 'LEGACY ROLE SITE', am_metal_keys: 2, am_key_cards: 1, am_key_fobs: 0,
+    });
+    a = (await auth(request(app).get(`/api/accounts/${id}`))).body;
+    expect(a.am_keys).toBe(3);
+
+    // clearing a previously-set breakdown honors the intentional zero
+    await auth(request(app).put(`/api/accounts/${id}`)).send({
+      ic_company_name: 'LEGACY ROLE SITE', am_metal_keys: 0, am_key_cards: 0, am_key_fobs: 0,
+    });
+    a = (await auth(request(app).get(`/api/accounts/${id}`))).body;
+    expect(a.am_keys).toBe(0);
+  });
+
+  it('AM roster personal per-type sums match a hand-check', async () => {
+    const AM = 'ROLE HANDCHECK AM';
+    await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'RH 1', account_manager: AM,
+      am_metal_keys: 2, am_key_cards: 1, am_key_fobs: 1, am_office_keys: 1,
+    });
+    await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer', ic_company_name: 'RH 2', account_manager: AM,
+      am_metal_keys: 3, am_key_cards: 0, am_key_fobs: 2, am_office_keys: 2,
+    });
+    const row = (await auth(request(app).get('/api/managers/account-managers'))).body.managers.find((m: any) => m.person === AM);
+    expect(row.personal_metal).toBe(5);   // 2+3
+    expect(row.personal_cards).toBe(1);   // 1+0
+    expect(row.personal_fobs).toBe(3);    // 1+2
+    expect(row.office_held).toBe(3);      // 1+2
+    expect(row.keys_held).toBe(9);        // (2+1+1)+(3+0+2)
+    expect(row.total_held).toBe(12);      // 9 + 3 office
+  });
+});

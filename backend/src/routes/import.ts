@@ -5,6 +5,7 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
 import { logAudit } from '../lib/audit';
 import { encrypt } from '../lib/crypto';
+import { roleTotal } from '../lib/roleKeys';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -56,6 +57,19 @@ const COLUMN_MAP: Record<string, string> = {
   'am office keys': 'am_office_keys',
   'ccm office key': 'ccm_office_keys',
   'ccm office keys': 'ccm_office_keys',
+  // Optional per-role per-type breakdown (case-insensitive, singular/plural).
+  'am metal': 'am_metal_keys', 'am metal key': 'am_metal_keys', 'am metal keys': 'am_metal_keys',
+  'am card': 'am_key_cards', 'am key card': 'am_key_cards', 'am key cards': 'am_key_cards',
+  'am fob': 'am_key_fobs', 'am key fob': 'am_key_fobs', 'am key fobs': 'am_key_fobs',
+  'ccm metal': 'ccm_metal_keys', 'ccm metal key': 'ccm_metal_keys', 'ccm metal keys': 'ccm_metal_keys',
+  'ccm card': 'ccm_key_cards', 'ccm key card': 'ccm_key_cards', 'ccm key cards': 'ccm_key_cards',
+  'ccm fob': 'ccm_key_fobs', 'ccm key fob': 'ccm_key_fobs', 'ccm key fobs': 'ccm_key_fobs',
+  'contractor metal': 'contractor_metal_keys', 'contractor metal key': 'contractor_metal_keys', 'contractor metal keys': 'contractor_metal_keys',
+  'ic metal': 'contractor_metal_keys', 'ic metal key': 'contractor_metal_keys',
+  'contractor card': 'contractor_key_cards', 'contractor key card': 'contractor_key_cards', 'contractor key cards': 'contractor_key_cards',
+  'ic card': 'contractor_key_cards', 'ic key card': 'contractor_key_cards',
+  'contractor fob': 'contractor_key_fobs', 'contractor key fob': 'contractor_key_fobs', 'contractor key fobs': 'contractor_key_fobs',
+  'ic fob': 'contractor_key_fobs', 'ic key fob': 'contractor_key_fobs',
   'lockbox code': 'lockbox_code',
   'lockbox': 'lockbox_code',
   'door code': 'door_code',
@@ -125,6 +139,15 @@ interface ParsedRow {
   am_keys: number;
   ccm_keys: number;
   contractor_keys: number;
+  am_metal_keys: number;
+  am_key_cards: number;
+  am_key_fobs: number;
+  ccm_metal_keys: number;
+  ccm_key_cards: number;
+  ccm_key_fobs: number;
+  contractor_metal_keys: number;
+  contractor_key_cards: number;
+  contractor_key_fobs: number;
   lockbox_code: string;
   door_code: string;
   alarm_code: string;
@@ -150,9 +173,19 @@ function normalizeRow(raw: Record<string, any>): ParsedRow {
     ic_office_keys: parseCount(raw.ic_office_keys),
     am_office_keys: parseCount(raw.am_office_keys),
     ccm_office_keys: parseCount(raw.ccm_office_keys),
-    am_keys: parseCount(raw.am_keys),
-    ccm_keys: parseCount(raw.ccm_keys),
-    contractor_keys: parseCount(raw.contractor_keys),
+    am_metal_keys: parseCount(raw.am_metal_keys),
+    am_key_cards: parseCount(raw.am_key_cards),
+    am_key_fobs: parseCount(raw.am_key_fobs),
+    ccm_metal_keys: parseCount(raw.ccm_metal_keys),
+    ccm_key_cards: parseCount(raw.ccm_key_cards),
+    ccm_key_fobs: parseCount(raw.ccm_key_fobs),
+    contractor_metal_keys: parseCount(raw.contractor_metal_keys),
+    contractor_key_cards: parseCount(raw.contractor_key_cards),
+    contractor_key_fobs: parseCount(raw.contractor_key_fobs),
+    // Totals: computed from a breakdown when present, else the flat role total.
+    am_keys: roleTotal(parseCount(raw.am_metal_keys), parseCount(raw.am_key_cards), parseCount(raw.am_key_fobs), parseCount(raw.am_keys)),
+    ccm_keys: roleTotal(parseCount(raw.ccm_metal_keys), parseCount(raw.ccm_key_cards), parseCount(raw.ccm_key_fobs), parseCount(raw.ccm_keys)),
+    contractor_keys: roleTotal(parseCount(raw.contractor_metal_keys), parseCount(raw.contractor_key_cards), parseCount(raw.contractor_key_fobs), parseCount(raw.contractor_keys)),
     lockbox_code: String(raw.lockbox_code ?? '').trim(),
     door_code: String(raw.door_code ?? '').trim(),
     alarm_code: String(raw.alarm_code ?? '').trim(),
@@ -227,10 +260,13 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
       metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
       ic_office_keys, am_office_keys, ccm_office_keys,
       am_keys, ccm_keys, contractor_keys,
+      am_metal_keys, am_key_cards, am_key_fobs,
+      ccm_metal_keys, ccm_key_cards, ccm_key_fobs,
+      contractor_metal_keys, contractor_key_cards, contractor_key_fobs,
       lockbox_code,
       door_code_encrypted, door_code_iv, alarm_code_encrypted, alarm_code_iv,
       notes, status, record_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer')
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer')
   `);
 
   // Upsert UPDATE: fills NULL/blank text fields and zero numeric fields only
@@ -253,6 +289,15 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
       am_keys           = CASE WHEN am_keys = 0           THEN ? ELSE am_keys END,
       ccm_keys          = CASE WHEN ccm_keys = 0          THEN ? ELSE ccm_keys END,
       contractor_keys   = CASE WHEN contractor_keys = 0   THEN ? ELSE contractor_keys END,
+      am_metal_keys     = CASE WHEN am_metal_keys = 0     THEN ? ELSE am_metal_keys END,
+      am_key_cards      = CASE WHEN am_key_cards = 0      THEN ? ELSE am_key_cards END,
+      am_key_fobs       = CASE WHEN am_key_fobs = 0       THEN ? ELSE am_key_fobs END,
+      ccm_metal_keys    = CASE WHEN ccm_metal_keys = 0    THEN ? ELSE ccm_metal_keys END,
+      ccm_key_cards     = CASE WHEN ccm_key_cards = 0     THEN ? ELSE ccm_key_cards END,
+      ccm_key_fobs      = CASE WHEN ccm_key_fobs = 0      THEN ? ELSE ccm_key_fobs END,
+      contractor_metal_keys = CASE WHEN contractor_metal_keys = 0 THEN ? ELSE contractor_metal_keys END,
+      contractor_key_cards  = CASE WHEN contractor_key_cards = 0  THEN ? ELSE contractor_key_cards END,
+      contractor_key_fobs   = CASE WHEN contractor_key_fobs = 0   THEN ? ELSE contractor_key_fobs END,
       lockbox_code      = CASE WHEN (lockbox_code IS NULL OR lockbox_code = '')  THEN ? ELSE lockbox_code END,
       notes             = CASE WHEN (notes IS NULL OR notes = '')                THEN ? ELSE notes END
     WHERE bc_client_number = ? AND record_type = 'customer'
@@ -290,6 +335,9 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
             r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys, r.office_keys,
             r.ic_office_keys, r.am_office_keys, r.ccm_office_keys,
             r.am_keys, r.ccm_keys, r.contractor_keys,
+            r.am_metal_keys, r.am_key_cards, r.am_key_fobs,
+            r.ccm_metal_keys, r.ccm_key_cards, r.ccm_key_fobs,
+            r.contractor_metal_keys, r.contractor_key_cards, r.contractor_key_fobs,
             r.lockbox_code || null, r.notes || null,
             r.bc_client_number,
           );
@@ -302,6 +350,9 @@ router.post('/confirm', requireAuth, (req: AuthRequest, res: Response) => {
             r.metal_keys, r.key_cards, r.has_fob, r.dispenser_keys, r.office_keys,
             r.ic_office_keys ?? 0, r.am_office_keys ?? 0, r.ccm_office_keys ?? 0,
             r.am_keys ?? 0, r.ccm_keys ?? 0, r.contractor_keys ?? 0,
+            r.am_metal_keys ?? 0, r.am_key_cards ?? 0, r.am_key_fobs ?? 0,
+            r.ccm_metal_keys ?? 0, r.ccm_key_cards ?? 0, r.ccm_key_fobs ?? 0,
+            r.contractor_metal_keys ?? 0, r.contractor_key_cards ?? 0, r.contractor_key_fobs ?? 0,
             r.lockbox_code || null,
             door_enc, door_iv, alarm_enc, alarm_iv,
             r.notes || null, r.status || 'active'
@@ -346,6 +397,10 @@ router.get('/template', requireAuth, (_req: AuthRequest, res: Response) => {
     'Metal Keys', 'Key Cards', 'Key Fobs', 'Dispenser Key', 'Office Key',
     'AM Key', 'CCM Key', 'Contractor Key',
     'IC Office Key', 'AM Office Key', 'CCM Office Key',
+    // Optional per-role per-type breakdown (leave blank to use the totals above)
+    'AM Metal', 'AM Card', 'AM Fob',
+    'CCM Metal', 'CCM Card', 'CCM Fob',
+    'Contractor Metal', 'Contractor Card', 'Contractor Fob',
     'Lockbox Code', 'Door Code', 'Alarm Code', 'Notes',
   ];
   const ws = XLSX.utils.aoa_to_sheet([headers, []]);

@@ -31,6 +31,17 @@ CREATE TABLE IF NOT EXISTS accounts (
   am_keys INTEGER DEFAULT 0,
   ccm_keys INTEGER DEFAULT 0,
   contractor_keys INTEGER DEFAULT 0,
+  -- Per-role per-type breakdown. The role totals above are COMPUTED as the sum
+  -- of these three (plus the office split, tracked separately).
+  am_metal_keys INTEGER DEFAULT 0,
+  am_key_cards INTEGER DEFAULT 0,
+  am_key_fobs INTEGER DEFAULT 0,
+  ccm_metal_keys INTEGER DEFAULT 0,
+  ccm_key_cards INTEGER DEFAULT 0,
+  ccm_key_fobs INTEGER DEFAULT 0,
+  contractor_metal_keys INTEGER DEFAULT 0,
+  contractor_key_cards INTEGER DEFAULT 0,
+  contractor_key_fobs INTEGER DEFAULT 0,
   key_code TEXT,
   lockbox TEXT,
   ic_name TEXT,

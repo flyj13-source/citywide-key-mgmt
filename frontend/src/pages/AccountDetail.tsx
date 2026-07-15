@@ -13,6 +13,38 @@ function MetricCard({ label, value }: { label: string; value: number | string })
   );
 }
 
+// One role row in the Key Holders card: total first, then per-type chips.
+// The "N keys" total is the role's metal+card+fob; office is shown as a chip.
+function RoleHolder({ title, name, total, metal, card, fob, office }: {
+  title: string; name?: string; total: number;
+  metal: number; card: number; fob: number; office: number;
+}) {
+  const chips = ([[metal, 'metal'], [card, 'card'], [fob, 'fob'], [office, 'office']] as [number, string][])
+    .filter(([n]) => (n || 0) > 0);
+  return (
+    <div className="py-2">
+      <div className="flex items-center justify-between">
+        <div>
+          <span className="font-medium text-cw-text">{title}</span>
+          {name && <span className="ml-2 text-cw-muted text-xs">{name}</span>}
+        </div>
+        <span className={`font-semibold ${total > 0 ? 'text-[#1a1a1a]' : 'text-gray-300'}`}>
+          {total > 0 ? `${total} key${total !== 1 ? 's' : ''}` : '—'}
+        </span>
+      </div>
+      {chips.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {chips.map(([n, label]) => (
+            <span key={label} className="inline-flex items-center rounded-full bg-gray-100 text-gray-700 text-[10px] font-medium px-1.5 py-0.5">
+              {n} {label}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CodeReveal({ accountId, type, hasCode }: { accountId: number; type: 'door' | 'alarm' | 'door_access'; hasCode: boolean }) {
   const [revealed, setRevealed] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -107,37 +139,19 @@ export default function AccountDetail() {
             <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">Key Holders by Role</h2>
             <div className="divide-y divide-gray-100 text-sm">
               {(account.ic_name || account.contractor_keys > 0) && (
-                <div className="flex items-center justify-between py-2">
-                  <div>
-                    <span className="font-medium text-cw-text">Independent Contractor</span>
-                    {account.ic_name && <span className="ml-2 text-cw-muted text-xs">{account.ic_name}</span>}
-                  </div>
-                  <span className={`font-semibold ${account.contractor_keys > 0 ? 'text-[#1a1a1a]' : 'text-gray-300'}`}>
-                    {account.contractor_keys > 0 ? `${account.contractor_keys} key${account.contractor_keys !== 1 ? 's' : ''}` : '—'}
-                  </span>
-                </div>
+                <RoleHolder title="Independent Contractor" name={account.ic_name}
+                  total={account.contractor_keys} metal={account.contractor_metal_keys}
+                  card={account.contractor_key_cards} fob={account.contractor_key_fobs} office={account.ic_office_keys} />
               )}
               {(account.account_manager || account.am_keys > 0) && (
-                <div className="flex items-center justify-between py-2">
-                  <div>
-                    <span className="font-medium text-cw-text">Account Manager</span>
-                    {account.account_manager && <span className="ml-2 text-cw-muted text-xs">{account.account_manager}</span>}
-                  </div>
-                  <span className={`font-semibold ${account.am_keys > 0 ? 'text-[#1a1a1a]' : 'text-gray-300'}`}>
-                    {account.am_keys > 0 ? `${account.am_keys} key${account.am_keys !== 1 ? 's' : ''}` : '—'}
-                  </span>
-                </div>
+                <RoleHolder title="Account Manager" name={account.account_manager}
+                  total={account.am_keys} metal={account.am_metal_keys}
+                  card={account.am_key_cards} fob={account.am_key_fobs} office={account.am_office_keys} />
               )}
               {(account.ccm_manager || account.ccm_keys > 0) && (
-                <div className="flex items-center justify-between py-2">
-                  <div>
-                    <span className="font-medium text-cw-text">Contract Compliance Mgr</span>
-                    {account.ccm_manager && <span className="ml-2 text-cw-muted text-xs">{account.ccm_manager}</span>}
-                  </div>
-                  <span className={`font-semibold ${account.ccm_keys > 0 ? 'text-[#1a1a1a]' : 'text-gray-300'}`}>
-                    {account.ccm_keys > 0 ? `${account.ccm_keys} key${account.ccm_keys !== 1 ? 's' : ''}` : '—'}
-                  </span>
-                </div>
+                <RoleHolder title="Contract Compliance Mgr" name={account.ccm_manager}
+                  total={account.ccm_keys} metal={account.ccm_metal_keys}
+                  card={account.ccm_key_cards} fob={account.ccm_key_fobs} office={account.ccm_office_keys} />
               )}
             </div>
           </div>

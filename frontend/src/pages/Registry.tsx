@@ -28,6 +28,15 @@ const emptyForm = {
   am_keys: 0,
   ccm_keys: 0,
   contractor_keys: 0,
+  am_metal_keys: 0,
+  am_key_cards: 0,
+  am_key_fobs: 0,
+  ccm_metal_keys: 0,
+  ccm_key_cards: 0,
+  ccm_key_fobs: 0,
+  contractor_metal_keys: 0,
+  contractor_key_cards: 0,
+  contractor_key_fobs: 0,
   lockbox_code: '',
   door_code: '',
   alarm_code: '',
@@ -62,6 +71,26 @@ function CountBadge({ value }: { value: number }) {
   return (
     <span className="inline-flex items-center justify-center min-w-[1.5rem] h-6 px-1.5 rounded-full bg-[#1a1a1a] text-white text-xs font-semibold">
       {value}
+    </span>
+  );
+}
+
+export function roleBreakdownText(metal: number, card: number, fob: number, office: number): string {
+  const parts: string[] = [];
+  if (metal) parts.push(`${metal} metal`);
+  if (card) parts.push(`${card} card`);
+  if (fob) parts.push(`${fob} fob`);
+  if (office) parts.push(`${office} office`);
+  return parts.length ? parts.join(' · ') : 'No type breakdown recorded';
+}
+
+// A role-total pill whose hover tooltip reveals the metal/card/fob/office split.
+function RolePill({ value, metal, card, fob, office }: {
+  value: number; metal: number; card: number; fob: number; office: number;
+}) {
+  return (
+    <span title={roleBreakdownText(metal || 0, card || 0, fob || 0, office || 0)} className={value ? 'cursor-help' : ''}>
+      <CountBadge value={value} />
     </span>
   );
 }
@@ -105,6 +134,40 @@ function FormField({ label, hint, children }: { label: string; hint?: string; ch
       </label>
       {children}
     </div>
+  );
+}
+
+// Role × type key grid rows: [metal, card, fob, office].
+const ROLE_ROWS: { label: string; keys: string[] }[] = [
+  { label: 'AM', keys: ['am_metal_keys', 'am_key_cards', 'am_key_fobs', 'am_office_keys'] },
+  { label: 'CCM', keys: ['ccm_metal_keys', 'ccm_key_cards', 'ccm_key_fobs', 'ccm_office_keys'] },
+  { label: 'Contractor / IC', keys: ['contractor_metal_keys', 'contractor_key_cards', 'contractor_key_fobs', 'ic_office_keys'] },
+];
+
+function RoleGridRow({
+  row, form, numF, rowTotal,
+}: {
+  row: { label: string; keys: string[] };
+  form: Record<string, any>;
+  numF: (key: string) => (e: React.ChangeEvent<HTMLInputElement>) => void;
+  rowTotal: number;
+}) {
+  return (
+    <>
+      <div className="text-xs font-semibold text-[#1a1a1a] whitespace-nowrap pr-2">{row.label}</div>
+      {row.keys.map((k) => (
+        <input
+          key={k}
+          type="number"
+          min={0}
+          className="input text-center px-1 focus:ring-[#C0272D] focus:border-[#C0272D]"
+          value={form[k] ?? 0}
+          onChange={numF(k)}
+          aria-label={`${row.label} ${k}`}
+        />
+      ))}
+      <div className="text-sm font-bold text-[#C0272D] text-center pl-2 tabular-nums min-w-[2rem]">{rowTotal}</div>
+    </>
   );
 }
 
@@ -243,31 +306,21 @@ function AccountFormModal({
 
         <div>
           <SectionLabel>Role Key Counts</SectionLabel>
-          {isCustomer && (
-            <div className="grid grid-cols-3 gap-3 mb-3">
-              {[
-                { label: 'AM Keys', key: 'am_keys' },
-                { label: 'CCM Keys', key: 'ccm_keys' },
-                { label: 'Contractor Keys', key: 'contractor_keys' },
-              ].map(({ label, key }) => (
-                <FormField key={key} label={label}>
-                  <input type="number" min={0} className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={(form as any)[key] ?? 0} onChange={numF(key)} />
-                </FormField>
-              ))}
-            </div>
-          )}
-          {/* Office keys split by who holds them — applies to both Customer and IC */}
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { label: 'IC Office', key: 'ic_office_keys' },
-              { label: 'AM Office', key: 'am_office_keys' },
-              { label: 'CCM Office', key: 'ccm_office_keys' },
-            ].map(({ label, key }) => (
-              <FormField key={key} label={label}>
-                <input type="number" min={0} className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={(form as any)[key] ?? 0} onChange={numF(key)} />
-              </FormField>
+          {/* Role × type grid. Row total (metal + card + fob + office) shown live. */}
+          <div className="grid grid-cols-[auto_repeat(4,1fr)_auto] gap-x-2 gap-y-2 items-center">
+            <div />
+            {['Metal', 'Key Card', 'Key Fob', 'Office'].map((h) => (
+              <div key={h} className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 text-center">{h}</div>
             ))}
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 text-center pl-1">Total</div>
+            {ROLE_ROWS.map((row) => {
+              const rowTotal = row.keys.reduce((s, k) => s + (Number((form as any)[k]) || 0), 0);
+              return (
+                <RoleGridRow key={row.label} row={row} form={form} numF={numF} rowTotal={rowTotal} />
+              );
+            })}
           </div>
+          <p className="text-[11px] text-gray-400 mt-2">Role totals (AM / CCM / IC Keys) are computed from Metal + Key Card + Key Fob.</p>
         </div>
 
         <div>
@@ -409,9 +462,9 @@ const RegistryTable = memo(function RegistryTable({
                 <td className="px-3 py-3 text-center"><CountBadge value={a.dispenser_keys} /></td>
                 <td className="px-3 py-3 text-center"><CountBadge value={a.office_keys} /></td>
                 {tab === 'customer' && <>
-                  <td className="px-3 py-3 text-center"><CountBadge value={a.contractor_keys} /></td>
-                  <td className="px-3 py-3 text-center"><CountBadge value={a.am_keys} /></td>
-                  <td className="px-3 py-3 text-center"><CountBadge value={a.ccm_keys} /></td>
+                  <td className="px-3 py-3 text-center"><RolePill value={a.contractor_keys} metal={a.contractor_metal_keys} card={a.contractor_key_cards} fob={a.contractor_key_fobs} office={a.ic_office_keys} /></td>
+                  <td className="px-3 py-3 text-center"><RolePill value={a.am_keys} metal={a.am_metal_keys} card={a.am_key_cards} fob={a.am_key_fobs} office={a.am_office_keys} /></td>
+                  <td className="px-3 py-3 text-center"><RolePill value={a.ccm_keys} metal={a.ccm_metal_keys} card={a.ccm_key_cards} fob={a.ccm_key_fobs} office={a.ccm_office_keys} /></td>
                 </>}
                 <td className="px-3 py-3 text-center text-xs font-mono text-gray-600">{a.lockbox_code || '—'}</td>
                 <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
@@ -493,8 +546,10 @@ function ArchivedTable({
 //   ACROSS THEIR CLIENTS — every key that exists at the clients they manage
 // Sorting is client-side over the small roster (one row per person).
 const PERSONAL_COLS: { key: string; label: string }[] = [
-  { key: 'keys_held', label: 'Keys Held' },
-  { key: 'office_held', label: 'Office Keys Held' },
+  { key: 'personal_metal', label: 'Metal' },
+  { key: 'personal_cards', label: 'Cards' },
+  { key: 'personal_fobs', label: 'Fobs' },
+  { key: 'office_held', label: 'Office' },
 ];
 const CLIENT_COLS: { key: string; label: string }[] = [
   { key: 'metal_keys', label: 'Metal' },
@@ -518,7 +573,7 @@ function RosterTable({
   loading: boolean;
   onSelect: (person: string) => void;
 }) {
-  const [sortKey, setSortKey] = useState('keys_held');
+  const [sortKey, setSortKey] = useState('total_held');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const personLabel = role === 'am' ? 'Account Manager' : 'Contract Compliance Manager';
 
@@ -546,7 +601,7 @@ function RosterTable({
           <tr className="bg-[#1a1a1a] text-white text-[11px]">
             <th rowSpan={2} className="text-left px-4 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('person')}>{personLabel}{arrow('person')}</th>
             <th rowSpan={2} className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('clients_managed')}>Clients Managed{arrow('clients_managed')}</th>
-            <th colSpan={2} className={`text-center px-3 py-2 font-bold uppercase tracking-wide whitespace-nowrap ${RED_BORDER}`}>Personally Holds</th>
+            <th colSpan={5} className={`text-center px-3 py-2 font-bold uppercase tracking-wide whitespace-nowrap ${RED_BORDER}`}>Personally Holds</th>
             <th colSpan={6} className="text-center px-3 py-2 font-medium uppercase tracking-wide whitespace-nowrap text-white/50 border-l border-white/20">Across Their Clients</th>
           </tr>
           {/* Column header row */}
@@ -554,6 +609,7 @@ function RosterTable({
             {PERSONAL_COLS.map((c, idx) => (
               <th key={c.key} className={`text-center px-3 py-2 font-semibold whitespace-nowrap cursor-pointer select-none ${idx === 0 ? RED_BORDER : ''}`} onClick={() => sort(c.key)}>{c.label}{arrow(c.key)}</th>
             ))}
+            <th className="text-center px-3 py-2 font-bold whitespace-nowrap cursor-pointer select-none" onClick={() => sort('total_held')}>Total Held{arrow('total_held')}</th>
             {CLIENT_COLS.map((c, idx) => (
               <th key={c.key} className={`text-center px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none text-white/60 ${idx === 0 ? 'border-l border-white/20' : ''}`} onClick={() => sort(c.key)}>{c.label}{arrow(c.key)}</th>
             ))}
@@ -562,9 +618,9 @@ function RosterTable({
         </thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={10} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+            <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
           ) : sorted.length === 0 ? (
-            <tr><td colSpan={10} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
+            <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
           ) : sorted.map((p, i) => {
             const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
             return (
@@ -576,11 +632,13 @@ function RosterTable({
               >
                 <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap">{p.person}</td>
                 <td className="px-3 py-3 text-center"><CountBadge value={p.clients_managed} /></td>
-                {/* Personally Holds — primary, red-bordered */}
-                <td className={`px-3 py-3 text-center ${RED_BORDER}`}>
-                  <span className="inline-flex items-center justify-center min-w-[1.75rem] h-6 px-2 rounded-full bg-[#C0272D] text-white text-xs font-bold">{p.keys_held}</span>
+                {/* Personally Holds — primary, red-bordered, per type */}
+                {PERSONAL_COLS.map((c, idx) => (
+                  <td key={c.key} className={`px-3 py-3 text-center ${idx === 0 ? RED_BORDER : ''}`}><CountBadge value={p[c.key]} /></td>
+                ))}
+                <td className="px-3 py-3 text-center">
+                  <span className="inline-flex items-center justify-center min-w-[1.75rem] h-6 px-2 rounded-full bg-[#C0272D] text-white text-xs font-bold">{p.total_held}</span>
                 </td>
-                <td className="px-3 py-3 text-center"><CountBadge value={p.office_held} /></td>
                 {/* Across Their Clients — secondary, muted */}
                 {CLIENT_COLS.map((c, idx) => (
                   <td key={c.key} className={`px-3 py-3 text-center ${idx === 0 ? 'border-l border-gray-200' : ''}`}><MutedCount value={p[c.key]} /></td>

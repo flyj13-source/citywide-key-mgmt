@@ -3,6 +3,7 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
 import { logAudit } from '../lib/audit';
 import { encrypt } from '../lib/crypto';
+import { roleTotal, num } from '../lib/roleKeys';
 
 const router = Router();
 
@@ -65,6 +66,9 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
     metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
     ic_office_keys, am_office_keys, ccm_office_keys,
     am_keys, ccm_keys, contractor_keys,
+    am_metal_keys, am_key_cards, am_key_fobs,
+    ccm_metal_keys, ccm_key_cards, ccm_key_fobs,
+    contractor_metal_keys, contractor_key_cards, contractor_key_fobs,
     lockbox_code, door_code, alarm_code, door_access_code,
     notes, status, record_type,
   } = req.body;
@@ -78,6 +82,11 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
 
   const rtype = record_type === 'customer' ? 'customer' : 'ic';
 
+  // Totals are computed from the per-type breakdown (preserving legacy totals).
+  const amTotal = roleTotal(am_metal_keys, am_key_cards, am_key_fobs, am_keys);
+  const ccmTotal = roleTotal(ccm_metal_keys, ccm_key_cards, ccm_key_fobs, ccm_keys);
+  const contractorTotal = roleTotal(contractor_metal_keys, contractor_key_cards, contractor_key_fobs, contractor_keys);
+
   const result = db.prepare(`
     INSERT INTO accounts (
       ic_company_name, bc_vendor_number, bc_client_number,
@@ -86,19 +95,25 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
       metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
       ic_office_keys, am_office_keys, ccm_office_keys,
       am_keys, ccm_keys, contractor_keys,
+      am_metal_keys, am_key_cards, am_key_fobs,
+      ccm_metal_keys, ccm_key_cards, ccm_key_fobs,
+      contractor_metal_keys, contractor_key_cards, contractor_key_fobs,
       lockbox_code,
       door_code_encrypted, door_code_iv,
       alarm_code_encrypted, alarm_code_iv,
       door_access_code_encrypted, door_access_code_iv,
       notes, status, record_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     ic_company_name, bc_vendor_number || null, bc_client_number || null,
     ic_name || null, account_manager || null, ccm_manager || null,
     keys_yn ? 1 : 0, security_app_yn ? 1 : 0,
     metal_keys || 0, key_cards || 0, has_fob ? 1 : 0, dispenser_keys || 0, office_keys || 0,
     ic_office_keys || 0, am_office_keys || 0, ccm_office_keys || 0,
-    am_keys || 0, ccm_keys || 0, contractor_keys || 0,
+    amTotal, ccmTotal, contractorTotal,
+    num(am_metal_keys), num(am_key_cards), num(am_key_fobs),
+    num(ccm_metal_keys), num(ccm_key_cards), num(ccm_key_fobs),
+    num(contractor_metal_keys), num(contractor_key_cards), num(contractor_key_fobs),
     lockbox_code || null,
     door_enc, door_iv,
     alarm_enc, alarm_iv,
@@ -178,9 +193,22 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     metal_keys, key_cards, has_fob, dispenser_keys, office_keys,
     ic_office_keys, am_office_keys, ccm_office_keys,
     am_keys, ccm_keys, contractor_keys,
+    am_metal_keys, am_key_cards, am_key_fobs,
+    ccm_metal_keys, ccm_key_cards, ccm_key_fobs,
+    contractor_metal_keys, contractor_key_cards, contractor_key_fobs,
     lockbox_code, door_code, alarm_code, door_access_code,
     notes, status,
   } = req.body;
+
+  // Read the existing row so we can preserve legacy totals (breakdown 0) yet
+  // honor an intentional clear-to-zero of a role that previously had a breakdown.
+  const prev: any = Object.assign({}, db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) || {});
+  const amTotal = roleTotal(am_metal_keys, am_key_cards, am_key_fobs, am_keys,
+    num(prev.am_metal_keys) + num(prev.am_key_cards) + num(prev.am_key_fobs), prev.am_keys);
+  const ccmTotal = roleTotal(ccm_metal_keys, ccm_key_cards, ccm_key_fobs, ccm_keys,
+    num(prev.ccm_metal_keys) + num(prev.ccm_key_cards) + num(prev.ccm_key_fobs), prev.ccm_keys);
+  const contractorTotal = roleTotal(contractor_metal_keys, contractor_key_cards, contractor_key_fobs, contractor_keys,
+    num(prev.contractor_metal_keys) + num(prev.contractor_key_cards) + num(prev.contractor_key_fobs), prev.contractor_keys);
 
   db.prepare(`
     UPDATE accounts SET
@@ -190,6 +218,9 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
       metal_keys=?, key_cards=?, has_fob=?, dispenser_keys=?, office_keys=?,
       ic_office_keys=?, am_office_keys=?, ccm_office_keys=?,
       am_keys=?, ccm_keys=?, contractor_keys=?,
+      am_metal_keys=?, am_key_cards=?, am_key_fobs=?,
+      ccm_metal_keys=?, ccm_key_cards=?, ccm_key_fobs=?,
+      contractor_metal_keys=?, contractor_key_cards=?, contractor_key_fobs=?,
       lockbox_code=?, notes=?, status=?
     WHERE id=?
   `).run(
@@ -198,7 +229,10 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     keys_yn ? 1 : 0, security_app_yn ? 1 : 0,
     metal_keys ?? 0, key_cards ?? 0, has_fob ? 1 : 0, dispenser_keys ?? 0, office_keys ?? 0,
     ic_office_keys ?? 0, am_office_keys ?? 0, ccm_office_keys ?? 0,
-    am_keys ?? 0, ccm_keys ?? 0, contractor_keys ?? 0,
+    amTotal, ccmTotal, contractorTotal,
+    num(am_metal_keys), num(am_key_cards), num(am_key_fobs),
+    num(ccm_metal_keys), num(ccm_key_cards), num(ccm_key_fobs),
+    num(contractor_metal_keys), num(contractor_key_cards), num(contractor_key_fobs),
     lockbox_code || null, notes || null, status || 'active',
     req.params.id,
   );
