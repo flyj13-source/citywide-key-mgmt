@@ -3,7 +3,10 @@ services:
     name: citywide-backend
     runtime: node
     rootDir: backend
-    buildCommand: npm ci && npm run build
+    # --include=dev so tsc + @types are present even with NODE_ENV=production.
+    # NO seed here — seeding runs at runtime on boot (autoSeedIfEmpty), otherwise
+    # `npm run seed` would try to mkdir the /data mount before it exists at build.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: node dist/index.js
     # Persistent disk — WITHOUT this the SQLite file lives on ephemeral storage
     # and every deploy/restart wipes all data. DB_PATH points the app + seed at
