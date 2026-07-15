@@ -84,13 +84,34 @@ export function roleBreakdownText(metal: number, card: number, fob: number, offi
   return parts.length ? parts.join(' · ') : 'No type breakdown recorded';
 }
 
-// A role-total pill whose hover tooltip reveals the metal/card/fob/office split.
+// A role-total pill. Click to expand the metal/card/fob/office breakdown in an
+// inline popover (hover title kept as a fallback). Own state so only this pill
+// re-renders — the memoized table is untouched.
 function RolePill({ value, metal, card, fob, office }: {
   value: number; metal: number; card: number; fob: number; office: number;
 }) {
+  const [open, setOpen] = useState(false);
+  const text = roleBreakdownText(metal || 0, card || 0, fob || 0, office || 0);
+  if (!value) return <span className="text-gray-300">—</span>;
   return (
-    <span title={roleBreakdownText(metal || 0, card || 0, fob || 0, office || 0)} className={value ? 'cursor-help' : ''}>
-      <CountBadge value={value} />
+    <span className="relative inline-block">
+      <button
+        type="button"
+        title={text}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        onBlur={() => setOpen(false)}
+        className="inline-flex items-center justify-center min-w-[1.5rem] h-6 px-1.5 rounded-full bg-[#1a1a1a] text-white text-xs font-semibold cursor-pointer hover:ring-2 hover:ring-[#C0272D]/50 focus:outline-none focus:ring-2 focus:ring-[#C0272D]"
+      >
+        {value}
+      </button>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute z-30 left-1/2 -translate-x-1/2 mt-1 whitespace-nowrap rounded border border-cw-border bg-white px-2 py-1 text-[11px] text-gray-700 shadow-lg"
+        >
+          {text}
+        </div>
+      )}
     </span>
   );
 }
