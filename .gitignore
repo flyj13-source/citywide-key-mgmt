@@ -40,3 +40,5 @@ handoff/guide.css
 # Persistence-gauntlet local state (Tier 2)
 backend/.persist-sentinel.json
 backend/.persist-snapshot.json
+
+backend/gauntlet-snapshot.json

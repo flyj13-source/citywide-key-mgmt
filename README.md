@@ -105,6 +105,55 @@ To re-enable, set a fresh `TEST_USER_PASSWORD` and redeploy, or
 
 ---
 
+## Proving data survives
+
+Three layers guarantee that typed and imported data never disappears across
+restarts and deploys.
+
+**Layer 1 — root-cause guard (config).** Seeding runs at *runtime* on boot
+(`autoSeedIfEmpty()` in `src/index.ts`), never in Render's `buildCommand`, and
+only when the managers table is empty. Every boot prints one grep-able line:
+
+```
+BOOT: db=<path> onMount=<true|false> tables=<n> customers=<n> ics=<n>
+```
+
+`onMount` must be **true** — the SQLite file must live on the mounted disk
+(`DB_PATH=/data/citywide.db`, disk mounted at `/data`). If it is false the boot
+log prints a red `DATABASE IS EPHEMERAL` warning; fix the disk/`DB_PATH` in the
+Render dashboard before trusting anything else.
+
+**Layer 2 — local integration tests** (`backend/tests/data-survival.test.ts`,
+run by CI on every push):
+
+```bash
+cd backend && npm test
+```
+
+Covers input round-trip (every field byte-identical after the DB file is closed
+and reopened, codes encrypted at rest), import round-trip (600-row sheet → 590
+inserted / 10 bad rows reported → survives reopen), restart simulation (the full
+boot sequence re-runs 3× with counts, rows and the manager password hash
+byte-identical), and archive survival.
+
+**Layer 3 — production gauntlet** (`backend/scripts/gauntlet.ts`). Authenticates
+as the test account only. Requires `TEST_USER_PASSWORD` in `backend/.env`.
+
+```bash
+cd backend
+npm run gauntlet:write     # write a sentinel to prod + snapshot counts
+#   → trigger a deploy, then:
+npm run gauntlet:verify    # sentinel + counts survived? PASS/FAIL, then cleans up
+
+npm run gauntlet:full      # write → trigger the deploy via the Render API
+                           # (RENDER_API_KEY) → poll until live → verify, in one shot
+```
+
+`gauntlet:full` fails loudly if `onMount=false` on prod (the sentinel vanishes on
+the deploy) — which is exactly the failure Layer 1 is meant to prevent.
+
+---
+
 ## Configure M365
 
 1. Copy `.env.example` to `backend/.env`

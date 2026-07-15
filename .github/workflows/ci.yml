@@ -1,15 +1,16 @@
 name: CI
 
-# Runs the Tier 1 API integration suite on every push and PR. A regression
-# turns the commit's check red. Point Render's Auto-Deploy at "wait for CI to
-# pass" so a red X blocks the deploy BEFORE it ships.
+# Runs the API integration suite + the data-survival suite (Layer 2) on every
+# push and PR. A regression turns the commit's check red. Point Render's
+# Auto-Deploy at "wait for CI to pass" so a red X blocks the deploy BEFORE it
+# ships.
 on:
   push:
   pull_request:
 
 jobs:
-  tier1-api-tests:
-    name: Tier 1 — API integration tests
+  tests:
+    name: API + data-survival tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -30,5 +31,5 @@ jobs:
       - name: Type-check / build
         run: npm run build
 
-      - name: Run Tier 1 suite
+      - name: Run test suite (API + data-survival)
         run: npm test
