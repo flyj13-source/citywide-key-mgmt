@@ -19,10 +19,15 @@
     "gauntlet:verify": "ts-node scripts/gauntlet.ts verify",
     "gauntlet:full": "ts-node scripts/gauntlet.ts full",
     "gauntlet:cleanup": "ts-node scripts/gauntlet.ts cleanup",
-    "report:backfill": "ts-node scripts/report-backfill-dry-run.ts"
+    "report:backfill": "ts-node scripts/report-backfill-dry-run.ts",
+    "backup": "ts-node scripts/backup.ts",
+    "backup:test": "ts-node scripts/backup-test.ts",
+    "backup:restore": "ts-node scripts/restore.ts",
+    "backup:trigger": "ts-node scripts/trigger-backup.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",
+    "@aws-sdk/client-s3": "^3.1088.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

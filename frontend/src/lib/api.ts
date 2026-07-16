@@ -72,6 +72,32 @@ export const getKeyHolderStats = () =>
     am_total: number; ccm_total: number; contractor_total: number; office_total: number;
     ic_personal: number; am_personal: number; ccm_personal: number; office_personal: number;
   }>('/accounts/key-holder-stats');
+export interface BackupStatus {
+  latest: {
+    created_at: string;
+    status: string;
+    row_count: number | null;
+    size_bytes: number | null;
+    destination: string | null;
+    message: string | null;
+  } | null;
+  recent: Array<{
+    created_at: string;
+    status: string;
+    row_count: number | null;
+    size_bytes: number | null;
+    destination: string | null;
+    duration_ms: number | null;
+    message: string | null;
+  }>;
+}
+export const getBackupStatus = () => req<BackupStatus>('/backups/status');
+export const runBackupNow = () =>
+  req<{ status: string; rowCount: number | null; destination: string | null; durationMs: number; message?: string }>(
+    '/backups/run',
+    { method: 'POST' }
+  );
+
 export const getAccountManagers = () =>
   req<{ managers: any[] }>('/managers/account-managers');
 export const getCcms = () =>

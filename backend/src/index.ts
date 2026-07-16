@@ -17,6 +17,7 @@ import staffRouter from './routes/staff';
 import reportsRouter from './routes/reports';
 import claudeRouter from './routes/claude';
 import contractorsRouter from './routes/contractors';
+import backupsRouter from './routes/backups';
 
 // Catch crashes before the health check has a chance to respond
 process.on('uncaughtException', (err) => {
@@ -65,6 +66,7 @@ app.use('/api/vault', vaultRouter);
 app.use('/api/audit', auditRouter);
 app.use('/api/staff', staffRouter);
 app.use('/api/reports', reportsRouter);
+app.use('/api/backups', backupsRouter);
 app.use('/api/claude', claudeRouter);
 app.use('/api/contractors', contractorsRouter);
 // Public contractor routes (no JWT)

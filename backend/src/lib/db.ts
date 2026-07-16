@@ -177,6 +177,25 @@ if (!cols().includes('record_type'))
   db.exec("ALTER TABLE accounts ADD COLUMN record_type TEXT DEFAULT 'ic'");
 db.exec("UPDATE accounts SET record_type='ic' WHERE record_type IS NULL");
 
+// Backup run log — one row per scheduled/manual backup. Written by the backup
+// lib (which may open its own connection from the cron path); created here too
+// so the /api/backups/status endpoint can always read it even before the first
+// backup runs. Idempotent.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS backups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL,
+    row_count INTEGER,
+    size_bytes INTEGER,
+    destination TEXT,
+    filename TEXT,
+    duration_ms INTEGER,
+    message TEXT,
+    detail TEXT
+  )
+`);
+
 // is_test flag on managers — marks the dedicated troubleshooting account so its
 // actions can be badged in the audit UI. PRAGMA-guarded: added only if absent.
 const managerCols = (db.prepare('PRAGMA table_info(managers)').all() as any[]).map(

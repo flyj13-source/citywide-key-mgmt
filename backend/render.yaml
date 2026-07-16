@@ -1,4 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared backup secrets — set ONCE here, referenced by both the web service and
+# the cron job (so BACKUP_TRIGGER_TOKEN matches on both sides). Fill these in the
+# Render dashboard under Env Groups → citywide-backup-secrets.
+# ─────────────────────────────────────────────────────────────────────────────
+envVarGroups:
+  - name: citywide-backup-secrets
+    envVars:
+      # openssl rand -hex 32  — encrypts every backup artifact at rest
+      - key: BACKUP_ENCRYPTION_KEY
+        sync: false
+      # openssl rand -hex 32  — shared secret gating POST /api/backups/run
+      - key: BACKUP_TRIGGER_TOKEN
+        sync: false
+      # S3-compatible object storage (Cloudflare R2 recommended)
+      - key: BACKUP_S3_ENDPOINT
+        sync: false
+      - key: BACKUP_S3_BUCKET
+        sync: false
+      - key: BACKUP_S3_KEY
+        sync: false
+      - key: BACKUP_S3_SECRET
+        sync: false
+      - key: BACKUP_ALERT_EMAIL
+        sync: false
+
 services:
+  # ── Web service (owns the persistent disk; runs the actual backup) ──────────
   - type: web
     name: citywide-backend
     runtime: node
@@ -11,11 +38,17 @@ services:
     # Persistent disk — WITHOUT this the SQLite file lives on ephemeral storage
     # and every deploy/restart wipes all data. DB_PATH points the app + seed at
     # the mounted disk; the boot self-check verifies it landed there.
+    #
+    # NOTE: a Render disk attaches to EXACTLY ONE service. That's why the backup
+    # runs inside THIS service (which can read /data/citywide.db) and the cron
+    # job below only TRIGGERS it over HTTP — a separate cron service cannot mount
+    # this disk.
     disk:
       name: citywide-data
       mountPath: /data
       sizeGB: 1
     envVars:
+      - fromGroup: citywide-backup-secrets
       - key: NODE_ENV
         value: production
       - key: PORT
@@ -36,3 +69,21 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
+
+  # ── Scheduled backup trigger (cron) ─────────────────────────────────────────
+  # Runs daily at 06:00 UTC = 02:00 America/New_York during EDT (Mar–Nov), 01:00
+  # during EST (Render cron is UTC-only; either way it's the overnight low-traffic
+  # window). It holds NO disk and NO S3 creds — it just POSTs to the web service,
+  # which performs the snapshot/upload. Exits non-zero (red in the dashboard) if
+  # the backup reports failure.
+  - type: cron
+    name: citywide-backup-cron
+    runtime: node
+    rootDir: backend
+    schedule: "0 6 * * *"
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: node dist/scripts/trigger-backup.js
+    envVars:
+      - fromGroup: citywide-backup-secrets
+      - key: BACKUP_TRIGGER_URL
+        value: https://citywide-backend-0xuj.onrender.com/api/backups/run
