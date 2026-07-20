@@ -18,6 +18,8 @@ import Settings from './pages/Settings';
 import ContractorPortal from './pages/ContractorPortal';
 import ICChange from './pages/ICChange';
 import CustomerLookup from './pages/CustomerLookup';
+import ManagerRoster from './pages/ManagerRoster';
+import ManagerDetail from './pages/ManagerDetail';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   return isAuthenticated() ? <>{children}</> : <Navigate to="/login" replace />;
@@ -32,6 +34,8 @@ export default function App() {
         <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
         <Route path="/registry" element={<RequireAuth><Registry /></RequireAuth>} />
         <Route path="/registry/:accountId" element={<RequireAuth><AccountDetail /></RequireAuth>} />
+        <Route path="/managers" element={<RequireAuth><ManagerRoster /></RequireAuth>} />
+        <Route path="/managers/:id" element={<RequireAuth><ManagerDetail /></RequireAuth>} />
         <Route path="/checkout" element={<RequireAuth><Checkout /></RequireAuth>} />
         <Route path="/vault" element={<RequireAuth><CodeVault /></RequireAuth>} />
         <Route path="/assistant" element={<RequireAuth><ClaudeAssistant /></RequireAuth>} />

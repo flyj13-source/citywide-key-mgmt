@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import db from './db';
 import { encrypt } from './crypto';
+import { backfillStaffManagers } from './backfillStaffManagers';
 
 // Runs at every server startup. Idempotent — only writes when rows are missing.
 // This is the ONLY place seeding happens in production; seed.ts is local-dev-only.
@@ -51,6 +52,7 @@ export function autoSeedIfEmpty(): void {
   const count = (db.prepare('SELECT COUNT(*) as c FROM accounts').get() as any).c as number;
   if (count > 0) {
     console.log(`✓ [seed] Accounts table has ${count} rows — skipping demo data`);
+    seedStaffManagerRoster();
     return;
   }
 
@@ -113,4 +115,35 @@ export function autoSeedIfEmpty(): void {
   );
 
   console.log(`✓ [seed] Inserted ${ics.length} IC vendors + ${customers.length} demo customers`);
+
+  seedStaffManagerRoster();
+}
+
+/**
+ * Backfill the staff manager roster from the clients' account_manager /
+ * ccm_manager text. Idempotent (skips names already on the roster), so it runs
+ * on every boot. Writes a one-line summary + an audit entry the first time it
+ * creates rows, so the distinct-manager count is visible in the Render logs.
+ */
+function seedStaffManagerRoster(): void {
+  try {
+    const r = backfillStaffManagers();
+    if (r.created > 0) {
+      console.log(
+        `✓ [seed] Staff manager roster backfilled: ${r.created} distinct manager(s) created ` +
+        `(AM-only ${r.byType.account_manager}, CCM-only ${r.byType.ccm}, both ${r.byType.both}) ` +
+        `from ${r.distinctNames} distinct name(s) on the client rows`
+      );
+      db.prepare(
+        'INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)'
+      ).run(
+        'staff_managers_backfilled', null, null, 'System',
+        JSON.stringify({ created: r.created, by_type: r.byType, distinct_names: r.distinctNames })
+      );
+    } else {
+      console.log(`✓ [seed] Staff manager roster up to date — ${r.alreadyPresent} manager(s) already present, none added`);
+    }
+  } catch (err) {
+    console.error('[seed] staff manager backfill failed:', err);
+  }
 }

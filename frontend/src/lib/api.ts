@@ -98,6 +98,33 @@ export const runBackupNow = () =>
     { method: 'POST' }
   );
 
+// Staff manager roster (the PEOPLE who manage clients — distinct from login
+// accounts). Metrics (clients_managed / keys_personally_held /
+// total_managed_inventory) are computed server-side.
+export interface StaffManager {
+  id: number;
+  name: string;
+  manager_type: 'account_manager' | 'ccm' | 'both';
+  shift: '1st' | '2nd' | '3rd' | null;
+  day_night: 'day' | 'night' | null;
+  email: string | null;
+  phone: string | null;
+  active: number;
+  login_manager_id: number | null;
+  created_at: string;
+  clients_managed: number;
+  keys_personally_held: number;
+  total_managed_inventory: number;
+}
+export const getStaffManagers = (includeInactive = false) =>
+  req<{ managers: StaffManager[] }>(`/staff-managers${includeInactive ? '?include_inactive=1' : ''}`);
+export const getStaffManager = (id: number) =>
+  req<{ manager: StaffManager; clients: any[] }>(`/staff-managers/${id}`);
+export const createStaffManager = (data: Partial<StaffManager>) =>
+  req<{ manager: StaffManager }>('/staff-managers', { method: 'POST', body: JSON.stringify(data) });
+export const updateStaffManager = (id: number, data: Partial<StaffManager>) =>
+  req<{ manager: StaffManager }>(`/staff-managers/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+
 export const getAccountManagers = () =>
   req<{ managers: any[] }>('/managers/account-managers');
 export const getCcms = () =>

@@ -129,3 +129,24 @@ CREATE TABLE IF NOT EXISTS managers (
   can_delete INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Staff manager roster — the PEOPLE who manage client accounts (Account
+-- Managers / Contract Compliance Managers), as first-class records with a
+-- type, shift, and contact info. This is DISTINCT from the `managers` table
+-- above, which holds LOGIN accounts. A staff member who also has a login is
+-- linked optionally via login_manager_id. Client linkage stays on the account
+-- rows themselves (accounts.account_manager / accounts.ccm_manager TEXT),
+-- matched by name — this table never touches those 577 rows.
+CREATE TABLE IF NOT EXISTS staff_managers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  manager_type TEXT NOT NULL,   -- 'account_manager' | 'ccm' | 'both'
+  shift TEXT,                   -- '1st' | '2nd' | '3rd'
+  day_night TEXT,               -- 'day' | 'night'
+  email TEXT,
+  phone TEXT,
+  active INTEGER DEFAULT 1,
+  login_manager_id INTEGER,     -- optional FK to managers(id) if this person
+                                -- also has a login account
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

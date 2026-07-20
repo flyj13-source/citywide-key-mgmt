@@ -18,6 +18,7 @@ import reportsRouter from './routes/reports';
 import claudeRouter from './routes/claude';
 import contractorsRouter from './routes/contractors';
 import backupsRouter from './routes/backups';
+import staffManagersRouter from './routes/staffManagers';
 
 // Catch crashes before the health check has a chance to respond
 process.on('uncaughtException', (err) => {
@@ -53,7 +54,14 @@ if (process.env.CITYWIDE_DESKTOP === '1') {
 
 // ── Health check — registered first so Railway can reach it immediately ──────
 app.get('/api/health', (_req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  // RENDER_GIT_COMMIT is set automatically by Render to the deployed commit —
+  // surfaced here so a deploy's live hash can be confirmed after each push.
+  const commit = process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || null;
+  res.status(200).json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    commit,
+  });
 });
 
 // ── API routes ────────────────────────────────────────────────────────────────
@@ -61,6 +69,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/accounts/import', importRouter);
 app.use('/api/accounts', accountsRouter);
 app.use('/api/managers', managersRouter);
+app.use('/api/staff-managers', staffManagersRouter);
 app.use('/api/assignments', assignmentsRouter);
 app.use('/api/vault', vaultRouter);
 app.use('/api/audit', auditRouter);

@@ -196,6 +196,26 @@ db.exec(`
   )
 `);
 
+// Staff manager roster — first-class records for the PEOPLE who manage clients
+// (Account Managers / CCMs), separate from the `managers` login table. Created
+// here too (idempotent) so the roster API can always read it even on a DB whose
+// schema.sql predates this feature. Client linkage stays on accounts.* TEXT
+// columns, matched by name — this table never mutates those rows.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS staff_managers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    manager_type TEXT NOT NULL,
+    shift TEXT,
+    day_night TEXT,
+    email TEXT,
+    phone TEXT,
+    active INTEGER DEFAULT 1,
+    login_manager_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
 // is_test flag on managers — marks the dedicated troubleshooting account so its
 // actions can be badged in the audit UI. PRAGMA-guarded: added only if absent.
 const managerCols = (db.prepare('PRAGMA table_info(managers)').all() as any[]).map(

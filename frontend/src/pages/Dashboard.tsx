@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Badge from '../components/Badge';
 import TestPill from '../components/TestPill';
-import { getAccounts, getAssignments, getOverdue, getStaff, getAudit, getKeyHolderStats } from '../lib/api';
+import ManagerModal from '../components/ManagerModal';
+import { getAccounts, getAssignments, getOverdue, getStaff, getAudit, getKeyHolderStats, getStaffManagers, type StaffManager } from '../lib/api';
 
 interface Metric { label: string; value: string | number; sub?: string; color?: string; footer?: React.ReactNode; }
 
@@ -19,6 +20,7 @@ function MetricCard({ label, value, sub, color = '', footer }: Metric) {
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [icCount, setIcCount] = useState(0);
   const [customerCount, setCustomerCount] = useState(0);
   const [activeAssignments, setActiveAssignments] = useState(0);
@@ -27,7 +29,11 @@ export default function Dashboard() {
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
   const [keyStats, setKeyStats] = useState({ ic_personal: 0, am_personal: 0, ccm_personal: 0, office_personal: 0 });
   const [archivedCount, setArchivedCount] = useState(0);
+  const [staffManagers, setStaffManagers] = useState<StaffManager[]>([]);
+  const [showAddManager, setShowAddManager] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  const loadManagers = () => getStaffManagers().then((d) => setStaffManagers(d.managers)).catch(() => {});
 
   useEffect(() => {
     Promise.all([
@@ -40,7 +46,8 @@ export default function Dashboard() {
       getAudit({ limit: '10' }),
       getKeyHolderStats(),
       getAccounts({ limit: '1', type: 'all', archived: '1' }),
-    ]).then(([ic, cust, asgn, overdue, staff, audit, stats, arch]) => {
+      getStaffManagers().catch(() => ({ managers: [] as StaffManager[] })),
+    ]).then(([ic, cust, asgn, overdue, staff, audit, stats, arch, mgrs]) => {
       setIcCount(ic.total);
       setCustomerCount(cust.total);
       setActiveAssignments((asgn as any).total);
@@ -49,8 +56,19 @@ export default function Dashboard() {
       setRecentLogs(audit.logs);
       setKeyStats(stats);
       setArchivedCount(arch.total);
+      setStaffManagers(mgrs.managers);
     }).finally(() => setLoading(false));
   }, []);
+
+  // Manager counts by type + shift (active managers only) for the Managers card.
+  const mgrCounts = {
+    ams: staffManagers.filter((m) => m.manager_type === 'account_manager' || m.manager_type === 'both').length,
+    ccms: staffManagers.filter((m) => m.manager_type === 'ccm' || m.manager_type === 'both').length,
+    shift1: staffManagers.filter((m) => m.shift === '1st').length,
+    shift2: staffManagers.filter((m) => m.shift === '2nd').length,
+    shift3: staffManagers.filter((m) => m.shift === '3rd').length,
+    total: staffManagers.length,
+  };
 
   const actionLabel: Record<string, string> = {
     key_checked_out: 'Key checked out',
@@ -122,6 +140,27 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Managers roster summary — counts by type + shift, click through to roster */}
+        <Link to="/managers" className="card p-5 block hover:border-[#C0272D] transition-colors">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-sm text-cw-text">Managers</h2>
+            <span className="text-xs text-cw-red hover:underline">View roster →</span>
+          </div>
+          {mgrCounts.total === 0 ? (
+            <div className="text-sm text-cw-muted">No managers on the roster yet.</div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+              <span><span className="font-bold text-[#1a1a1a]">{mgrCounts.ams}</span> <span className="text-cw-muted">AMs</span></span>
+              <span className="text-gray-300">·</span>
+              <span><span className="font-bold text-[#1a1a1a]">{mgrCounts.ccms}</span> <span className="text-cw-muted">CCMs</span></span>
+              <span className="text-gray-300">·</span>
+              <span><span className="font-bold text-[#1a1a1a]">{mgrCounts.shift1}</span> <span className="text-cw-muted">1st shift</span></span>
+              <span><span className="font-bold text-[#1a1a1a]">{mgrCounts.shift2}</span> <span className="text-cw-muted">2nd</span></span>
+              <span><span className="font-bold text-[#1a1a1a]">{mgrCounts.shift3}</span> <span className="text-cw-muted">3rd</span></span>
+            </div>
+          )}
+        </Link>
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Overdue Panel */}
           <div className="card">
@@ -179,6 +218,7 @@ export default function Dashboard() {
         <div className="card p-5">
           <h2 className="font-semibold text-sm mb-3">Quick Actions</h2>
           <div className="flex flex-wrap gap-2">
+            <button onClick={() => setShowAddManager(true)} className="btn-primary text-sm">+ Add Manager</button>
             <Link to="/checkout" className="btn-primary text-sm">Check Out Key</Link>
             <Link to="/registry" className="btn-secondary text-sm">View Registry</Link>
             <Link to="/vault" className="btn-secondary text-sm">Open Vault</Link>
@@ -188,6 +228,14 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {showAddManager && (
+        <ManagerModal
+          mode="add"
+          onClose={() => setShowAddManager(false)}
+          onSaved={() => { setShowAddManager(false); loadManagers(); navigate('/managers'); }}
+        />
+      )}
     </Layout>
   );
 }
