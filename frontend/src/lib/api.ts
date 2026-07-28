@@ -136,7 +136,7 @@ export const getCustomerByBcNumber = (bcNumber: string) =>
 export const createAccount = (data: any) =>
   req<any>('/accounts', { method: 'POST', body: JSON.stringify(data) });
 export const updateAccount = (id: number, data: any) =>
-  req<any>(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  req<{ success: true; changed: string[] }>(`/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 export const archiveAccount = (id: number) =>
   req<any>(`/accounts/${id}/archive`, { method: 'POST' });
 export const restoreAccount = (id: number) =>
@@ -167,8 +167,44 @@ export const getAudit = (params?: Record<string, string>) => {
   return req<{ logs: any[]; total: number }>(`/audit${q}`);
 };
 
-// Staff
-export const getStaff = () => req<any[]>('/staff');
+// Unified CW staff roster (managers + field crew). Key aggregates are computed
+// server-side by resolving each person's holdings against the live source data.
+export interface StaffMember {
+  id: number;
+  name: string;
+  role_category: 'manager' | 'crew' | 'both';
+  manager_type: 'account_manager' | 'ccm' | 'both' | null;
+  role_label: string;
+  shift: '1st' | '2nd' | '3rd' | null;
+  day_night: 'day' | 'night' | null;
+  email: string | null;
+  phone: string | null;
+  active: number;
+  login_manager_id: number | null;
+  created_at: string;
+  keys_metal: number;
+  keys_card: number;
+  keys_fob: number;
+  keys_dispenser: number;
+  keys_other: number;
+  total_keys_held: number;
+  accounts_assigned: number;
+}
+export interface StaffDetail extends StaffMember {
+  holdings: any[];
+  accounts: any[];
+}
+export const getStaff = (opts?: { category?: 'all' | 'managers' | 'crew'; includeInactive?: boolean }) => {
+  const p = new URLSearchParams();
+  if (opts?.category && opts.category !== 'all') p.set('category', opts.category);
+  if (opts?.includeInactive) p.set('include_inactive', '1');
+  const q = p.toString();
+  return req<StaffMember[]>(`/staff${q ? `?${q}` : ''}`);
+};
+export const getStaffMember = (id: number) =>
+  req<{ staff: StaffDetail }>(`/staff/${id}`);
+export const updateStaffMember = (id: number, data: Partial<StaffMember>) =>
+  req<{ staff: StaffDetail }>(`/staff/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 
 // Reports
 export const getOverdue = () => req<any[]>('/reports/overdue');

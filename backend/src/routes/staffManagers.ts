@@ -110,9 +110,15 @@ function cleanText(v: any): string | null {
 // ── GET /api/staff-managers — full roster with computed metrics ──────────────
 router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   const includeInactive = req.query.include_inactive === '1' || req.query.include_inactive === 'true';
-  const where = includeInactive ? '1=1' : 'COALESCE(active, 1) = 1';
+  // Managers only — crew rows (role_category='crew') live in the unified
+  // /api/staff roster, not this manager-scoped one. Legacy rows with a NULL
+  // role_category are managers (they predate the crew split).
+  const activeClause = includeInactive ? '1=1' : 'COALESCE(active, 1) = 1';
   const rows = db.prepare(
-    `SELECT * FROM staff_managers WHERE ${where} ORDER BY name ASC`
+    `SELECT * FROM staff_managers
+     WHERE ${activeClause}
+       AND (role_category IS NULL OR role_category IN ('manager', 'both'))
+     ORDER BY name ASC`
   ).all();
   res.json({ managers: rows.map(serialize) });
 });
@@ -191,8 +197,8 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
     ? Number(req.body.login_manager_id) : null;
 
   const result = db.prepare(
-    `INSERT INTO staff_managers (name, manager_type, shift, day_night, email, phone, active, login_manager_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO staff_managers (name, manager_type, role_category, shift, day_night, email, phone, active, login_manager_id)
+     VALUES (?, ?, 'manager', ?, ?, ?, ?, ?, ?)`
   ).run(name, manager_type, shift, day_night, email, phone, active, login_manager_id);
 
   const id = Number(result.lastInsertRowid);

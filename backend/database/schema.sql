@@ -137,10 +137,13 @@ CREATE TABLE IF NOT EXISTS managers (
 -- linked optionally via login_manager_id. Client linkage stays on the account
 -- rows themselves (accounts.account_manager / accounts.ccm_manager TEXT),
 -- matched by name — this table never touches those 577 rows.
+-- Unified City Wide staff roster — ALL staff, not just managers. role_category
+-- widens it to field crew too (see db.ts migration for the full contract).
 CREATE TABLE IF NOT EXISTS staff_managers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
-  manager_type TEXT NOT NULL,   -- 'account_manager' | 'ccm' | 'both'
+  manager_type TEXT NOT NULL,   -- 'account_manager' | 'ccm' | 'both' | 'crew' (crew = sentinel)
+  role_category TEXT,           -- 'manager' | 'crew' | 'both'
   shift TEXT,                   -- '1st' | '2nd' | '3rd'
   day_night TEXT,               -- 'day' | 'night'
   email TEXT,

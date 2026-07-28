@@ -216,6 +216,22 @@ db.exec(`
   )
 `);
 
+// ── Generalize staff_managers into the unified CW-staff roster ───────────────
+// role_category widens the table from managers-only to ALL City Wide staff:
+//   'manager' — an Account Manager / CCM (manager_type holds AM/CCM/both)
+//   'crew'    — field crew, discovered from check-out history (manager_type is
+//               the non-null sentinel 'crew' since the column predates this and
+//               is NOT NULL; it is surfaced to the API/UI as null)
+//   'both'    — a manager who ALSO appears as a crew assignee
+// Every pre-existing row is a manager, so backfill role_category='manager' once.
+const smCols = (db.prepare('PRAGMA table_info(staff_managers)').all() as any[]).map(
+  (c) => Object.assign({}, c).name
+);
+if (!smCols.includes('role_category')) {
+  db.exec("ALTER TABLE staff_managers ADD COLUMN role_category TEXT");
+  db.exec("UPDATE staff_managers SET role_category = 'manager' WHERE role_category IS NULL");
+}
+
 // is_test flag on managers — marks the dedicated troubleshooting account so its
 // actions can be badged in the audit UI. PRAGMA-guarded: added only if absent.
 const managerCols = (db.prepare('PRAGMA table_info(managers)').all() as any[]).map(

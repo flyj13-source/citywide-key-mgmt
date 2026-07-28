@@ -4,9 +4,9 @@ import Layout from '../components/Layout';
 import Modal from '../components/Modal';
 import ImportModal from '../components/ImportModal';
 import { getManager } from '../lib/auth';
-import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount } from '../lib/api';
+import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff } from '../lib/api';
 
-type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'all' | 'archived';
+type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'all' | 'archived';
 
 const emptyForm = {
   ic_company_name: '',
@@ -248,7 +248,7 @@ function AccountFormModal({
 
   const title = mode === 'add'
     ? (isCustomer ? 'Add Customer' : 'Add IC Vendor')
-    : `Edit: ${form.ic_company_name}`;
+    : (isCustomer ? 'Edit Customer' : 'Edit IC Vendor');
   const saveLabel = mode === 'add' ? (isCustomer ? 'Add Customer' : 'Add IC Vendor') : 'Save Changes';
 
   return (
@@ -705,6 +705,155 @@ function RosterTable({
   );
 }
 
+// ── CW Boston Employees roster (managers + field crew) ─────
+// One row per staff member. Keys Held (metal/card/fob/dispenser/other) come
+// pre-aggregated from the backend, resolved against the live source data.
+// Managers hold via their clients' holder grid; crew hold via open check-outs.
+function StaffRoleBadges({ role_category, manager_type }: { role_category: string; manager_type: string | null }) {
+  const badges: string[] = [];
+  if (role_category === 'manager' || role_category === 'both') {
+    if (manager_type === 'both') badges.push('AM', 'CCM');
+    else if (manager_type === 'account_manager') badges.push('AM');
+    else if (manager_type === 'ccm') badges.push('CCM');
+    else badges.push('Mgr');
+  }
+  if (role_category === 'crew' || role_category === 'both') badges.push('Crew');
+  return (
+    <span className="inline-flex gap-1 flex-wrap">
+      {badges.map((b) => (
+        <span key={b} className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${b === 'Crew' ? 'border border-[#C0272D] text-[#C0272D]' : 'bg-[#1a1a1a] text-white'}`}>{b}</span>
+      ))}
+    </span>
+  );
+}
+
+function KeysHeldCell({ s }: { s: any }) {
+  const [open, setOpen] = useState(false);
+  const total = s.total_keys_held;
+  if (!total) return <span className="text-gray-300">—</span>;
+  const parts = [
+    s.keys_metal ? `${s.keys_metal} metal` : null,
+    s.keys_card ? `${s.keys_card} card` : null,
+    s.keys_fob ? `${s.keys_fob} fob` : null,
+    s.keys_dispenser ? `${s.keys_dispenser} dispenser` : null,
+    s.keys_other ? `${s.keys_other} other` : null,
+  ].filter(Boolean);
+  const text = parts.length ? parts.join(' · ') : 'No type breakdown recorded';
+  return (
+    <span className="relative inline-block">
+      <button
+        type="button"
+        title={text}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        onBlur={() => setOpen(false)}
+        className="inline-flex items-center justify-center min-w-[1.5rem] h-6 px-1.5 rounded-full bg-[#1a1a1a] text-white text-xs font-semibold cursor-pointer hover:ring-2 hover:ring-[#C0272D]/50 focus:outline-none focus:ring-2 focus:ring-[#C0272D]"
+      >
+        {total}
+      </button>
+      {open && (
+        <div onClick={(e) => e.stopPropagation()} className="absolute z-30 left-1/2 -translate-x-1/2 mt-1 whitespace-nowrap rounded border border-cw-border bg-white px-2 py-1 text-[11px] text-gray-700 shadow-lg">
+          {text}
+        </div>
+      )}
+    </span>
+  );
+}
+
+const STAFF_CHIPS: { key: string; label: string; match: (rc: string) => boolean }[] = [
+  { key: 'all', label: 'All', match: () => true },
+  { key: 'managers', label: 'Managers', match: (rc) => rc === 'manager' || rc === 'both' },
+  { key: 'crew', label: 'Crew', match: (rc) => rc === 'crew' || rc === 'both' },
+];
+
+function CWEmployeesTable({
+  rows, loading, onSelect,
+}: {
+  rows: any[];
+  loading: boolean;
+  onSelect: (id: number) => void;
+}) {
+  const [sortKey, setSortKey] = useState('total_keys_held');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const sorted = useMemo(() => {
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      const cmp = typeof av === 'string' ? String(av).localeCompare(String(bv)) : ((av || 0) - (bv || 0));
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return copy;
+  }, [rows, sortKey, sortDir]);
+
+  const sort = (key: string) => {
+    if (key === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir(key === 'name' ? 'asc' : 'desc'); }
+  };
+  const arrow = (key: string) => (key === sortKey ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+
+  return (
+    <div className="card overflow-x-auto max-w-full">
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="bg-[#1a1a1a] text-white text-xs">
+            <th className="text-left px-4 py-3 font-medium whitespace-nowrap cursor-pointer select-none" onClick={() => sort('name')}>Name{arrow('name')}</th>
+            <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Role</th>
+            <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Shift</th>
+            <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Day/Night</th>
+            <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Keys Held</th>
+            <th className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none" onClick={() => sort('total_keys_held')}>Total Keys Held{arrow('total_keys_held')}</th>
+            <th className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none" onClick={() => sort('accounts_assigned')}>Accounts Assigned{arrow('accounts_assigned')}</th>
+            <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Active</th>
+            <th className="px-3 py-3"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {loading ? (
+            <tr><td colSpan={9} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+          ) : sorted.length === 0 ? (
+            <tr><td colSpan={9} className="px-4 py-8 text-center text-cw-muted">No employees found</td></tr>
+          ) : sorted.map((s, i) => {
+            const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
+            const shiftText = [s.shift ? `${s.shift} shift` : null, s.day_night ? s.day_night[0].toUpperCase() + s.day_night.slice(1) : null].filter(Boolean).join(' · ');
+            return (
+              <tr
+                key={s.id}
+                className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${rowBg} ${s.active === 0 ? 'opacity-60' : ''}`}
+                onClick={() => onSelect(s.id)}
+                title="View this employee's keys + accounts"
+              >
+                <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap">{s.name}</td>
+                <td className="px-3 py-3"><StaffRoleBadges role_category={s.role_category} manager_type={s.manager_type} /></td>
+                <td className="px-3 py-3 whitespace-nowrap">
+                  {shiftText
+                    ? <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border border-[#C0272D] text-[#C0272D]">{shiftText}</span>
+                    : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-3 py-3 text-center text-xs text-gray-600">{s.day_night ? s.day_night[0].toUpperCase() + s.day_night.slice(1) : '—'}</td>
+                <td className="px-3 py-3 text-center"><KeysHeldCell s={s} /></td>
+                <td className="px-3 py-3 text-center">
+                  {s.total_keys_held
+                    ? <span className="inline-flex items-center justify-center min-w-[1.75rem] h-6 px-2 rounded-full bg-[#C0272D] text-white text-xs font-bold">{s.total_keys_held}</span>
+                    : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-3 py-3 text-center"><CountBadge value={s.accounts_assigned} /></td>
+                <td className="px-3 py-3 text-center">
+                  {s.active === 1
+                    ? <span className="text-[#2d7a3a] font-bold">✓</span>
+                    : <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-200 text-gray-600">Inactive</span>}
+                </td>
+                <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                  <button onClick={() => onSelect(s.id)} className="text-xs text-[#C0272D] hover:underline whitespace-nowrap">View</button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────
 
 type ModalState =
@@ -717,9 +866,12 @@ export default function Registry() {
   const [searchParams, setSearchParams] = useSearchParams();
   const isAdmin = getManager()?.role === 'admin';
   const canDelete = !!getManager()?.can_delete;
-  const [tab, setTab] = useState<TabType>(searchParams.get('tab') === 'archived' ? 'archived' : 'customer');
+  const initialTab = searchParams.get('tab');
+  const [tab, setTab] = useState<TabType>(
+    initialTab === 'archived' ? 'archived' : initialTab === 'cwemployees' ? 'cwemployees' : 'customer'
+  );
   const [accounts, setAccounts] = useState<any[]>([]);
-  const [counts, setCounts] = useState({ ic: 0, customer: 0, all: 0, archived: 0 });
+  const [counts, setCounts] = useState({ ic: 0, customer: 0, office: 0, staff: 0, all: 0, archived: 0 });
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -729,6 +881,11 @@ export default function Registry() {
   const [showImport, setShowImport] = useState(false);
   const [roster, setRoster] = useState<any[]>([]);
   const [rosterLoading, setRosterLoading] = useState(false);
+  // CW Boston Employees (unified staff roster) — its own state + view filters.
+  const [staff, setStaff] = useState<any[]>([]);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [staffChip, setStaffChip] = useState('all');
+  const [staffSearch, setStaffSearch] = useState('');
   // When a roster person is clicked, drill into their client list.
   const [drill, setDrill] = useState<{ role: 'am' | 'ccm'; name: string } | null>(null);
   // Row selection + delete flows.
@@ -741,7 +898,10 @@ export default function Registry() {
   const LIMIT = 50;
 
   const isRosterTab = (tab === 'am' || tab === 'ccm') && !drill;
+  const isStaffTab = tab === 'cwemployees' && !drill;
   const isArchivedTab = tab === 'archived' && !drill;
+  // Tabs that render their OWN roster (no account list / account search box).
+  const isPeopleTab = isRosterTab || isStaffTab;
 
   // Debounce the applied search: typing updates the input instantly, but the
   // list is only refetched 300ms after the user pauses (was 4 API calls PER
@@ -763,6 +923,10 @@ export default function Registry() {
       } else if (tab === 'archived') {
         params.type = 'all';
         params.archived = '1';
+      } else if (tab === 'office') {
+        // Office tab — customers where the Office holder physically holds keys.
+        params.type = 'customer';
+        params.office_keys = '1';
       } else {
         params.type = tab;
       }
@@ -785,32 +949,53 @@ export default function Registry() {
     }
   }, [tab]);
 
+  // CW Employees — the full roster (incl. inactive so the Active column is
+  // meaningful); category + search are applied client-side over the small list.
+  const loadStaff = useCallback(async () => {
+    setStaffLoading(true);
+    try {
+      const data = await getStaff({ includeInactive: true });
+      setStaff(data);
+    } finally {
+      setStaffLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (isRosterTab) loadRoster();
+    if (isStaffTab) loadStaff();
+    else if (isRosterTab) loadRoster();
     else loadRows();
-  }, [isRosterTab, loadRoster, loadRows]);
+  }, [isStaffTab, isRosterTab, loadStaff, loadRoster, loadRows]);
 
   // Tab/type counts — independent of search, so they are NOT refetched while
   // typing. Refreshed on mount and after any mutation.
   const refreshCounts = useCallback(async () => {
-    const [icData, custData, allData, archData] = await Promise.all([
+    const [icData, custData, officeData, allData, archData, staffData] = await Promise.all([
       getAccounts({ limit: '1', type: 'ic' }),
       getAccounts({ limit: '1', type: 'customer' }),
+      getAccounts({ limit: '1', type: 'customer', office_keys: '1' }),
       getAccounts({ limit: '1', type: 'all' }),
       getAccounts({ limit: '1', type: 'all', archived: '1' }),
+      getStaff({ includeInactive: false }).catch(() => [] as any[]),
     ]);
-    setCounts({ ic: icData.total, customer: custData.total, all: allData.total, archived: archData.total });
+    setCounts({
+      ic: icData.total, customer: custData.total, office: officeData.total,
+      staff: staffData.length, all: allData.total, archived: archData.total,
+    });
   }, []);
 
   useEffect(() => { refreshCounts(); }, [refreshCounts]);
 
   const onRowClick = useCallback((id: number) => navigate(`/registry/${id}`), [navigate]);
 
-  const openEdit = useCallback(async (e: React.MouseEvent, id: number) => {
-    e.stopPropagation();
+  const openEditId = useCallback(async (id: number) => {
     const data = await getAccount(id);
     setModal({ kind: 'edit', recordType: data.record_type === 'customer' ? 'customer' : 'ic', initial: data });
   }, []);
+  const openEdit = useCallback(async (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    await openEditId(id);
+  }, [openEditId]);
 
   const openAdd = (type: 'ic' | 'customer') => setModal({ kind: 'add', recordType: type });
 
@@ -825,6 +1010,8 @@ export default function Registry() {
     { key: 'ic', label: `IC Vendors (${counts.ic})` },
     { key: 'am', label: 'Account Managers' },
     { key: 'ccm', label: 'Contract Compliance Mgrs' },
+    { key: 'office', label: `Office (${counts.office})` },
+    { key: 'cwemployees', label: `CW Employees (${counts.staff})` },
     { key: 'all', label: `All (${counts.all})` },
     { key: 'archived', label: `Archived (${counts.archived})` },
   ], [counts]);
@@ -834,12 +1021,25 @@ export default function Registry() {
     setPage(1);
     setDrill(null);
     setSelectedId(null);
-    setSearchParams(key === 'archived' ? { tab: 'archived' } : {}, { replace: true });
+    setStaffChip('all');
+    setStaffSearch('');
+    setSearchParams(key === 'archived' ? { tab: 'archived' } : key === 'cwemployees' ? { tab: 'cwemployees' } : {}, { replace: true });
   };
   const openPerson = (name: string) => {
     setDrill({ role: tab === 'am' ? 'am' : 'ccm', name });
     setPage(1);
   };
+  const openStaff = useCallback((id: number) => navigate(`/staff/${id}`), [navigate]);
+
+  // CW Employees — filter chip (role category) + search applied client-side.
+  const filteredStaff = useMemo(() => {
+    const chip = STAFF_CHIPS.find((c) => c.key === staffChip)!;
+    const q = staffSearch.trim().toLowerCase();
+    return staff.filter((s) =>
+      chip.match(s.role_category) &&
+      (!q || s.name.toLowerCase().includes(q) || (s.email || '').toLowerCase().includes(q))
+    );
+  }, [staff, staffChip, staffSearch]);
 
   const selectedAccount = accounts.find((a) => a.id === selectedId) || null;
 
@@ -882,7 +1082,7 @@ export default function Registry() {
   // col counts incl. leading checkbox: customer=22 (site Metal/Card/Fob/Dispenser
   // + IC/AM/CCM/Office role pills), all=16, ic=15 (no role pills — Office is a
   // holder concept that only applies to customer accounts).
-  const tableTab: TabType = drill ? 'customer' : tab;
+  const tableTab: TabType = drill || tab === 'office' ? 'customer' : tab;
   // Base counts include the leading checkbox column; drop it without delete rights.
   const baseColSpan = tableTab === 'customer' ? 22 : tableTab === 'all' ? 16 : 15;
   const colSpan = canDelete ? baseColSpan : baseColSpan - 1;
@@ -907,14 +1107,24 @@ export default function Registry() {
               + Add IC
             </button>
             {canDelete && (
-              <button
-                onClick={() => { setArchiveError(''); setArchiveTarget(selectedAccount); }}
-                disabled={!selectedAccount}
-                title={selectedAccount ? 'Archive the selected account' : 'Select a row first'}
-                className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-40 disabled:hover:border-[#1a1a1a] disabled:hover:text-[#1a1a1a] disabled:cursor-not-allowed transition-colors"
-              >
-                Delete Account
-              </button>
+              <>
+                <button
+                  onClick={() => selectedAccount && openEditId(selectedAccount.id)}
+                  disabled={!selectedAccount}
+                  title={selectedAccount ? 'Edit the selected account' : 'Select a row first'}
+                  className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-40 disabled:hover:border-[#1a1a1a] disabled:hover:text-[#1a1a1a] disabled:cursor-not-allowed transition-colors"
+                >
+                  Edit Account
+                </button>
+                <button
+                  onClick={() => { setArchiveError(''); setArchiveTarget(selectedAccount); }}
+                  disabled={!selectedAccount}
+                  title={selectedAccount ? 'Archive the selected account' : 'Select a row first'}
+                  className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-40 disabled:hover:border-[#1a1a1a] disabled:hover:text-[#1a1a1a] disabled:cursor-not-allowed transition-colors"
+                >
+                  Delete Account
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -948,8 +1158,8 @@ export default function Registry() {
           </div>
         )}
 
-        {/* Search — not shown on the pure roster tabs */}
-        {!isRosterTab && (
+        {/* Search — not shown on the pure people-roster tabs (they have their own) */}
+        {!isPeopleTab && (
           <input
             className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
             placeholder="Search by name, number, or manager…"
@@ -958,8 +1168,40 @@ export default function Registry() {
           />
         )}
 
-        {/* Roster (Account Managers / CCMs) · Archived · or the client table */}
-        {isRosterTab ? (
+        {/* CW Employees filter chips + search */}
+        {isStaffTab && (
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex border-b border-cw-border gap-6">
+              {STAFF_CHIPS.map((c) => (
+                <button
+                  key={c.key}
+                  onClick={() => setStaffChip(c.key)}
+                  className={`pb-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                    staffChip === c.key ? 'border-[#C0272D] text-[#C0272D]' : 'border-transparent text-[#6b6b68] hover:text-[#1a1a1a]'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex-1" />
+            <input
+              className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
+              placeholder="Search by name or email…"
+              value={staffSearch}
+              onChange={(e) => setStaffSearch(e.target.value)}
+            />
+          </div>
+        )}
+
+        {/* Roster (AMs / CCMs) · CW Employees · Archived · or the client table */}
+        {isStaffTab ? (
+          <CWEmployeesTable
+            rows={filteredStaff}
+            loading={staffLoading}
+            onSelect={openStaff}
+          />
+        ) : isRosterTab ? (
           <RosterTable
             role={tab as 'am' | 'ccm'}
             rows={roster}
@@ -990,7 +1232,7 @@ export default function Registry() {
         )}
 
         {/* Pagination */}
-        {!isRosterTab && total > LIMIT && (
+        {!isPeopleTab && total > LIMIT && (
           <div className="flex items-center gap-3 justify-center">
             <button className="btn-secondary" disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
             <span className="text-sm text-cw-muted">Page {page} of {Math.ceil(total / LIMIT)}</span>

@@ -8,7 +8,7 @@ import { gridTotal, num } from '../lib/roleKeys';
 const router = Router();
 
 router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
-  const { search = '', status = '', type = 'all', exclude_test = '', account_manager = '', ccm_manager = '', archived = '0', page = '1', limit = '50' } = req.query as Record<string, string>;
+  const { search = '', status = '', type = 'all', exclude_test = '', account_manager = '', ccm_manager = '', office_keys = '', archived = '0', page = '1', limit = '50' } = req.query as Record<string, string>;
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   let whereClauses = '1=1';
@@ -46,6 +46,10 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   if (ccm_manager) {
     whereClauses += ' AND ccm_manager = ?';
     params.push(ccm_manager);
+  }
+  // Office tab — customers where the Office holder physically holds keys.
+  if (office_keys === '1' || office_keys === 'true') {
+    whereClauses += ' AND COALESCE(office_keys_held, 0) > 0';
   }
 
   const countRow = db.prepare(`SELECT COUNT(*) as c FROM accounts WHERE ${whereClauses}`).get(...params) as any;
@@ -200,7 +204,13 @@ router.get('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   res.json({ ...Object.assign({}, account), assignments: assignments.map((a) => Object.assign({}, a)) });
 });
 
-router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
+// Shared update handler for PUT (legacy) and PATCH. Accepts the full account
+// object from the Add/Edit modal, honors the holder grid + computed totals,
+// never zeroes unspecified fields (see gridTotal), and logs an 'account_edited'
+// audit entry naming exactly which fields changed. Secret code values are NEVER
+// logged — the diff records only WHICH code was rotated (door/alarm/door_access),
+// never the value.
+function updateAccountHandler(req: AuthRequest, res: Response) {
   const {
     ic_company_name, bc_vendor_number, bc_client_number,
     ic_name, account_manager, ccm_manager,
@@ -218,6 +228,7 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   // Read the existing row so we can preserve legacy totals (grid cells all 0)
   // yet honor an intentional clear-to-zero of a cell that previously had data.
   const prev: any = Object.assign({}, db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) || {});
+  if (prev.id === undefined) return res.status(404).json({ error: 'Not found' });
 
   // COLUMN totals (one holder, all 4 types).
   const amTotal = gridTotal(am_metal, am_card, am_fob, am_dispenser, am_keys,
@@ -279,10 +290,53 @@ router.put('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     db.prepare('UPDATE accounts SET door_access_code_encrypted=?, door_access_code_iv=? WHERE id=?').run(encrypted, iv, req.params.id);
   }
 
-  logAudit(req, 'account_updated', ic_company_name, req.params.id, { bc_vendor_number });
+  // ── Field-level diff (prev row → the values just written) ──────────────────
+  // Powers the 'account_edited' audit entry. Compared against the ACTUAL stored
+  // result: grid cells as written, totals as computed above. Secret codes are
+  // recorded only as a rotation flag — the value never enters the log.
+  const changed: string[] = [];
+  const cmpText = (field: string, next: any) => {
+    const a = prev[field] === undefined || prev[field] === null ? '' : String(prev[field]);
+    const b = next === undefined || next === null ? '' : String(next);
+    if (a !== b) changed.push(field);
+  };
+  const cmpNum = (field: string, next: any) => { if (num(prev[field]) !== num(next)) changed.push(field); };
+  const cmpBool = (field: string, next: any) => { if ((prev[field] ? 1 : 0) !== (next ? 1 : 0)) changed.push(field); };
 
-  res.json({ success: true });
-});
+  cmpText('ic_company_name', ic_company_name);
+  cmpText('bc_vendor_number', bc_vendor_number || null);
+  cmpText('bc_client_number', bc_client_number || null);
+  cmpText('ic_name', ic_name || null);
+  cmpText('account_manager', account_manager || null);
+  cmpText('ccm_manager', ccm_manager || null);
+  cmpBool('keys_yn', keys_yn);
+  cmpBool('security_app_yn', security_app_yn);
+  cmpText('lockbox_code', lockbox_code || null);
+  cmpText('notes', notes || null);
+  cmpText('status', status || 'active');
+  for (const holder of ['am', 'ccm', 'contractor', 'office']) {
+    for (const t of ['metal', 'card', 'fob', 'dispenser']) {
+      const field = `${holder}_${t}`;
+      cmpNum(field, num((req.body as any)[field]));
+    }
+  }
+  cmpNum('metal_keys', metalRow); cmpNum('key_cards', cardRow);
+  cmpNum('has_fob', fobRow); cmpNum('dispenser_keys', dispenserRow);
+  cmpNum('am_keys', amTotal); cmpNum('ccm_keys', ccmTotal);
+  cmpNum('contractor_keys', contractorTotal); cmpNum('office_keys_held', officeTotal);
+  if (door_code) changed.push('door_code');
+  if (alarm_code) changed.push('alarm_code');
+  if (door_access_code) changed.push('door_access_code');
+
+  logAudit(req, 'account_edited', ic_company_name, req.params.id, { bc_vendor_number, changed });
+
+  res.json({ success: true, changed });
+}
+
+// Same handler on both verbs: PUT kept for back-compat, PATCH is the documented
+// edit route for the Edit Customer / Edit IC flow.
+router.put('/:id', requireAuth, updateAccountHandler);
+router.patch('/:id', requireAuth, updateAccountHandler);
 
 // Archive / restore / purge all require the can_delete permission.
 const DELETE_DENIED = 'Delete access required — contact Cara Angeloni';

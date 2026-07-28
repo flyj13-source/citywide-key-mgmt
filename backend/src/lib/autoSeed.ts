@@ -128,22 +128,31 @@ export function autoSeedIfEmpty(): void {
 function seedStaffManagerRoster(): void {
   try {
     const r = backfillStaffManagers();
-    if (r.created > 0) {
+    if (r.created > 0 || r.crewCreated > 0 || r.crewPromotedToBoth > 0) {
       console.log(
-        `✓ [seed] Staff manager roster backfilled: ${r.created} distinct manager(s) created ` +
+        `✓ [seed] Staff roster backfilled: ${r.created} manager(s) created ` +
         `(AM-only ${r.byType.account_manager}, CCM-only ${r.byType.ccm}, both ${r.byType.both}) ` +
-        `from ${r.distinctNames} distinct name(s) on the client rows`
+        `from ${r.distinctNames} distinct client name(s); ` +
+        `CREW — ${r.crewDistinct} distinct assignee name(s) seen, ${r.crewCreated} new crew member(s) created, ` +
+        `${r.crewPromotedToBoth} manager(s) promoted to 'both'`
       );
       db.prepare(
         'INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)'
       ).run(
         'staff_managers_backfilled', null, null, 'System',
-        JSON.stringify({ created: r.created, by_type: r.byType, distinct_names: r.distinctNames })
+        JSON.stringify({
+          created: r.created, by_type: r.byType, distinct_names: r.distinctNames,
+          crew_distinct: r.crewDistinct, crew_created: r.crewCreated,
+          crew_promoted_to_both: r.crewPromotedToBoth,
+        })
       );
     } else {
-      console.log(`✓ [seed] Staff manager roster up to date — ${r.alreadyPresent} manager(s) already present, none added`);
+      console.log(
+        `✓ [seed] Staff roster up to date — ${r.alreadyPresent} manager(s) + ` +
+        `${r.crewAlreadyPresent} crew already present, none added`
+      );
     }
   } catch (err) {
-    console.error('[seed] staff manager backfill failed:', err);
+    console.error('[seed] staff roster backfill failed:', err);
   }
 }
