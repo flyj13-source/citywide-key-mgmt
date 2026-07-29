@@ -104,6 +104,27 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Signed key sign-off forms — an append-only log of e-signatures collected in
+-- person (kiosk-style) when an EMPLOYEE or CONTRACTOR receives or returns keys.
+-- The signature image is stored in the DB (base64 PNG) so it persists on the
+-- Render disk; PDF/JPEG/PNG downloads are rendered on demand from this record.
+CREATE TABLE IF NOT EXISTS key_forms (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  party_type TEXT NOT NULL,       -- 'employee' | 'contractor'
+  action TEXT NOT NULL,           -- 'receive' | 'return'
+  person_name TEXT NOT NULL,
+  person_id INTEGER,              -- optional link to staff_managers.id / contractors.id
+  person_email TEXT,
+  account_names TEXT,             -- JSON array of account/site strings
+  key_details TEXT,               -- free text (counts / types / tags)
+  notes TEXT,
+  signature_data TEXT NOT NULL,   -- base64 PNG data URL
+  signature_hash TEXT NOT NULL,   -- sha256 of the signature data
+  signed_at DATETIME NOT NULL,
+  collected_by TEXT,              -- the manager (JWT) who collected the signature
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS contractors (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,

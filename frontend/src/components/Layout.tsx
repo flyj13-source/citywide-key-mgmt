@@ -117,6 +117,7 @@ const mainNavItems = [
 ];
 
 const formsNavItems = [
+  { path: '/forms', label: 'Key Sign-Off', icon: '🖊' },
   { path: '/ic-change', label: 'IC Change', icon: '✎' },
   { path: '/customer-lookup', label: 'Customer Lookup', icon: '⊡' },
 ];

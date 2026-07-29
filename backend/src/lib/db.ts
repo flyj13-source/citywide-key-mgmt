@@ -232,6 +232,28 @@ if (!smCols.includes('role_category')) {
   db.exec("UPDATE staff_managers SET role_category = 'manager' WHERE role_category IS NULL");
 }
 
+// Key sign-off forms — append-only log of in-person e-signatures for employees
+// and contractors receiving/returning keys. Created here too (idempotent) so the
+// forms API can always read/write it even on a DB whose schema.sql predates it.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS key_forms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    party_type TEXT NOT NULL,
+    action TEXT NOT NULL,
+    person_name TEXT NOT NULL,
+    person_id INTEGER,
+    person_email TEXT,
+    account_names TEXT,
+    key_details TEXT,
+    notes TEXT,
+    signature_data TEXT NOT NULL,
+    signature_hash TEXT NOT NULL,
+    signed_at DATETIME NOT NULL,
+    collected_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
 // is_test flag on managers — marks the dedicated troubleshooting account so its
 // actions can be badged in the audit UI. PRAGMA-guarded: added only if absent.
 const managerCols = (db.prepare('PRAGMA table_info(managers)').all() as any[]).map(

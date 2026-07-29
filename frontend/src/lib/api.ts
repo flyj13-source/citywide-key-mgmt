@@ -206,6 +206,42 @@ export const getStaffMember = (id: number) =>
 export const updateStaffMember = (id: number, data: Partial<StaffMember>) =>
   req<{ staff: StaffDetail }>(`/staff/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 
+// Key sign-off forms (in-person e-signatures — employees + contractors).
+export interface KeyForm {
+  id: number;
+  party_type: 'employee' | 'contractor';
+  action: 'receive' | 'return';
+  person_name: string;
+  person_id: number | null;
+  person_email: string | null;
+  account_names: string[];
+  key_details: string | null;
+  notes: string | null;
+  signature_hash: string;
+  signed_at: string;
+  collected_by: string | null;
+  created_at: string;
+}
+export interface KeyFormFull extends KeyForm {
+  signature_data: string;
+}
+export const getKeyForms = (params?: Record<string, string>) => {
+  const q = params ? '?' + new URLSearchParams(params).toString() : '';
+  return req<{ forms: KeyForm[] }>(`/forms${q}`);
+};
+export const getKeyForm = (id: number) => req<{ form: KeyFormFull }>(`/forms/${id}`);
+export const createKeyForm = (data: {
+  party_type: 'employee' | 'contractor';
+  action: 'receive' | 'return';
+  person_name: string;
+  person_id?: number | null;
+  person_email?: string | null;
+  account_names?: string[];
+  key_details?: string | null;
+  notes?: string | null;
+  signature_data: string;
+}) => req<{ form: KeyForm }>('/forms', { method: 'POST', body: JSON.stringify(data) });
+
 // Reports
 export const getOverdue = () => req<any[]>('/reports/overdue');
 export const sendOutlookAlert = (to?: string) =>

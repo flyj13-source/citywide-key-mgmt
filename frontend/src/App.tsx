@@ -18,6 +18,7 @@ import Settings from './pages/Settings';
 import ContractorPortal from './pages/ContractorPortal';
 import ICChange from './pages/ICChange';
 import CustomerLookup from './pages/CustomerLookup';
+import Forms from './pages/Forms';
 import ManagerRoster from './pages/ManagerRoster';
 import ManagerDetail from './pages/ManagerDetail';
 import StaffDetail from './pages/StaffDetail';
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
         <Route path="/ic-change" element={<RequireAuth><ICChange /></RequireAuth>} />
         <Route path="/customer-lookup" element={<RequireAuth><CustomerLookup /></RequireAuth>} />
+        <Route path="/forms" element={<RequireAuth><Forms /></RequireAuth>} />
         <Route path="*" element={<Navigate to={isAuthenticated() ? '/dashboard' : '/login'} replace />} />
       </Routes>
     </Router>
