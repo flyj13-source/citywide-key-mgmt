@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Badge from '../components/Badge';
+import YesNo from '../components/YesNo';
 import { getAccount, revealCode } from '../lib/api';
 
-function MetricCard({ label, value }: { label: string; value: number | string }) {
+function MetricCard({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="card p-4 text-center">
       <div className="text-2xl font-bold text-[#1a1a1a]">{value}</div>
@@ -119,8 +120,8 @@ export default function AccountDetail() {
         <div>
           <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">Key Inventory</h2>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <MetricCard label="Keys Y/N" value={account.keys_yn ? 'Yes' : 'No'} />
-            <MetricCard label="Security App" value={account.security_app_yn ? 'Yes' : 'No'} />
+            <MetricCard label="Keys Y/N" value={<YesNo value={account.keys_yn} label="Keys" size="lg" />} />
+            <MetricCard label="Security App" value={<YesNo value={account.security_app_yn} label="Security app" size="lg" />} />
             <MetricCard label="Metal Keys" value={account.metal_keys ?? 0} />
             <MetricCard label="Key Cards" value={account.key_cards ?? 0} />
             <MetricCard label="Key Fobs" value={account.has_fob ?? 0} />

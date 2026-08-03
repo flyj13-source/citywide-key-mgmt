@@ -4,7 +4,9 @@ import Layout from '../components/Layout';
 import Modal from '../components/Modal';
 import ImportModal from '../components/ImportModal';
 import { getManager } from '../lib/auth';
-import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff } from '../lib/api';
+import YesNo from '../components/YesNo';
+import ExportMenu from '../components/ExportMenu';
+import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry } from '../lib/api';
 
 type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'all' | 'archived';
 
@@ -52,14 +54,6 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
     >
       <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-6' : 'translate-x-1'}`} />
     </button>
-  );
-}
-
-function Check({ value }: { value: number | boolean }) {
-  return value ? (
-    <span className="text-[#2d7a3a] font-bold text-base">✓</span>
-  ) : (
-    <span className="text-gray-300">—</span>
   );
 }
 
@@ -217,12 +211,22 @@ function AccountFormModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [form, setForm] = useState<FormState>(() => ({
-    ...emptyForm,
-    ...(initial || {}),
-    keys_yn: !!initial?.keys_yn,
-    security_app_yn: !!initial?.security_app_yn,
-  }));
+  const [form, setForm] = useState<FormState>(() => {
+    const merged: FormState = {
+      ...emptyForm,
+      ...(initial || {}),
+      keys_yn: !!initial?.keys_yn,
+      security_app_yn: !!initial?.security_app_yn,
+    };
+    // The DB stores NULL for empty optional fields (ic_name, account_manager,
+    // notes, …). Spreading those over emptyForm's '' defaults would feed a
+    // controlled <input> a null value (React warns). Coerce every string-typed
+    // form field back to '' so the inputs stay controlled.
+    for (const key of Object.keys(emptyForm) as (keyof typeof emptyForm)[]) {
+      if (typeof emptyForm[key] === 'string' && (merged as any)[key] == null) (merged as any)[key] = '';
+    }
+    return merged;
+  });
   const [saving, setSaving] = useState(false);
   const isCustomer = recordType === 'customer';
 
@@ -500,8 +504,8 @@ const RegistryTable = memo(function RegistryTable({
                     <td className="px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap">{a.bc_vendor_number || '—'}</td>
                   </>
                 )}
-                <td className="px-3 py-3 text-center"><Check value={a.keys_yn} /></td>
-                <td className="px-3 py-3 text-center"><Check value={a.security_app_yn} /></td>
+                <td className="px-3 py-3 text-center"><YesNo value={a.keys_yn} label="Keys" /></td>
+                <td className="px-3 py-3 text-center"><YesNo value={a.security_app_yn} label="Security app" /></td>
                 <td className="px-3 py-3 text-center"><CountBadge value={a.metal_keys} /></td>
                 <td className="px-3 py-3 text-center"><CountBadge value={a.key_cards} /></td>
                 <td className="px-3 py-3 text-center"><CountBadge value={a.has_fob} /></td>
@@ -842,8 +846,17 @@ function CWEmployeesTable({
                     ? <span className="text-[#2d7a3a] font-bold">✓</span>
                     : <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-200 text-gray-600">Inactive</span>}
                 </td>
-                <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => onSelect(s.id)} className="text-xs text-[#C0272D] hover:underline whitespace-nowrap">View</button>
+                <td className="px-3 py-3 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                  <div className="inline-flex items-center gap-2">
+                    <ExportMenu
+                      size="sm"
+                      options={[
+                        { label: 'Excel (.xlsx)', onSelect: () => exportEmployee(s.id, 'xlsx') },
+                        { label: 'PDF (one-pager)', onSelect: () => exportEmployee(s.id, 'pdf') },
+                      ]}
+                    />
+                    <button onClick={() => onSelect(s.id)} className="text-xs text-[#C0272D] hover:underline">View</button>
+                  </div>
                 </td>
               </tr>
             );
@@ -851,6 +864,92 @@ function CWEmployeesTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+// ── Registry export modal ──────────────────────────────────
+// Scope (current tab / entire registry), format (xlsx / csv), and an archived
+// opt-in. Respects the active search so "what I see is what I get".
+const EXPORT_TAB_LABEL: Record<string, string> = {
+  customer: 'Customers', ic: 'IC Vendors', am: 'Account Managers', ccm: 'Contract Compliance Mgrs',
+  office: 'Office', cwemployees: 'CW Employees', all: 'All', archived: 'Archived',
+};
+
+function RegistryExportModal({
+  tab, search, onClose,
+}: {
+  tab: TabType;
+  search: string;
+  onClose: () => void;
+}) {
+  const [scope, setScope] = useState<'current' | 'all'>('current');
+  const [format, setFormat] = useState<'xlsx' | 'csv'>('xlsx');
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const run = async () => {
+    setBusy(true); setError('');
+    try {
+      await exportRegistry({ scope, tab, format, search, includeArchived });
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || 'Export failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Export Registry" onClose={onClose} width="max-w-md">
+      <div className="space-y-5">
+        <div>
+          <SectionLabel>Scope</SectionLabel>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input type="radio" name="exp-scope" className="accent-[#C0272D]" checked={scope === 'current'} onChange={() => setScope('current')} />
+              Current tab only <span className="text-gray-400">— {EXPORT_TAB_LABEL[tab] || tab}</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input type="radio" name="exp-scope" className="accent-[#C0272D]" checked={scope === 'all'} onChange={() => setScope('all')} />
+              Entire registry <span className="text-gray-400">— all tabs, one sheet each</span>
+            </label>
+          </div>
+        </div>
+
+        <div>
+          <SectionLabel>Format</SectionLabel>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input type="radio" name="exp-format" className="accent-[#C0272D]" checked={format === 'xlsx'} onChange={() => setFormat('xlsx')} />
+              Excel (.xlsx) <span className="text-gray-400">— recommended</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input type="radio" name="exp-format" className="accent-[#C0272D]" checked={format === 'csv'} onChange={() => setFormat('csv')} />
+              CSV (.csv)
+            </label>
+          </div>
+        </div>
+
+        <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+          <input type="checkbox" className="accent-[#C0272D] h-4 w-4" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
+          Include archived records
+        </label>
+
+        <p className="text-[11px] text-gray-400">
+          Access codes are never exported — a “Has Door Code” / “Has Alarm Code” column shows Yes/No instead. Respects your current search.
+        </p>
+
+        {error && <p className="text-sm text-[#C0272D] bg-[#fbeaea] border border-[#f0c9cb] rounded px-3 py-2">{error}</p>}
+      </div>
+
+      <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
+        <button onClick={run} disabled={busy} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors">
+          {busy ? 'Exporting…' : 'Export'}
+        </button>
+        <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -879,6 +978,7 @@ export default function Registry() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalState>(null);
   const [showImport, setShowImport] = useState(false);
+  const [showExport, setShowExport] = useState(false);
   const [roster, setRoster] = useState<any[]>([]);
   const [rosterLoading, setRosterLoading] = useState(false);
   // CW Boston Employees (unified staff roster) — its own state + view filters.
@@ -1100,6 +1200,9 @@ export default function Registry() {
             <button onClick={() => setShowImport(true)} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
               ↑ Import from Excel
             </button>
+            <button onClick={() => setShowExport(true)} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors">
+              ↓ Export
+            </button>
             <button onClick={() => openAdd('customer')} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
               + Add Customer
             </button>
@@ -1253,6 +1356,10 @@ export default function Registry() {
 
       {showImport && (
         <ImportModal onClose={() => setShowImport(false)} onDone={() => { loadRows(); refreshCounts(); }} />
+      )}
+
+      {showExport && (
+        <RegistryExportModal tab={tab} search={debouncedSearch} onClose={() => setShowExport(false)} />
       )}
 
       {/* Archive confirmation */}

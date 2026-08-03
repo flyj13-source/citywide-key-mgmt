@@ -21,6 +21,8 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/database ./database
 COPY --from=builder /app/src/lib ./src/lib
+# Brand asset for generated PDFs (logo). pdfBrand.ts reads it at runtime.
+COPY --from=builder /app/src/assets ./src/assets
 
 ENV NODE_ENV=production
 

@@ -206,6 +206,49 @@ export const getStaffMember = (id: number) =>
 export const updateStaffMember = (id: number, data: Partial<StaffMember>) =>
   req<{ staff: StaffDetail }>(`/staff/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 
+// ── Downloads ────────────────────────────────────────────────────────────────
+// Save a fetch Response body as a file, preferring the server-provided
+// Content-Disposition filename (so the CityWide-… naming is authoritative).
+async function saveResponseAsFile(res: Response, fallback: string): Promise<void> {
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(e.error || 'Export failed');
+  }
+  const cd = res.headers.get('Content-Disposition') || '';
+  const match = /filename="?([^"]+)"?/.exec(cd);
+  const name = match?.[1] || fallback;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Per-employee export (Excel or one-page branded PDF).
+export const exportEmployee = async (id: number, format: 'xlsx' | 'pdf') => {
+  const res = await reqRaw(`/staff/${id}/export?format=${format}`);
+  await saveResponseAsFile(res, `CityWide-Employee-${id}.${format}`);
+};
+
+// Full or current-tab registry export (xlsx primary, or csv).
+export interface RegistryExportOpts {
+  scope: 'current' | 'all';
+  tab: string;
+  format: 'xlsx' | 'csv';
+  search?: string;
+  includeArchived?: boolean;
+}
+export const exportRegistry = async (opts: RegistryExportOpts) => {
+  const res = await reqRaw('/exports/registry', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
+  await saveResponseAsFile(res, `CityWide-KeyRegistry-${opts.scope}.${opts.format}`);
+};
+
 // Key sign-off forms (in-person e-signatures — employees + contractors).
 export interface KeyForm {
   id: number;

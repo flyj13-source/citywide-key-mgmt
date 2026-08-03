@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import ManagerModal from '../components/ManagerModal';
-import { getStaffManager, type StaffManager } from '../lib/api';
+import ExportMenu from '../components/ExportMenu';
+import { getStaffManager, exportEmployee, type StaffManager } from '../lib/api';
 
 function TypeBadges({ type }: { type: StaffManager['manager_type'] }) {
   const badges = type === 'both'
@@ -96,12 +97,20 @@ export default function ManagerDetail() {
                 {manager.phone && <span>☎ {manager.phone}</span>}
               </div>
             </div>
-            <button
-              onClick={() => setShowEdit(true)}
-              className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
-            >
-              Edit
-            </button>
+            <div className="flex items-center gap-2">
+              <ExportMenu
+                options={[
+                  { label: 'Excel (.xlsx)', onSelect: () => exportEmployee(manager.id, 'xlsx') },
+                  { label: 'PDF (one-pager)', onSelect: () => exportEmployee(manager.id, 'pdf') },
+                ]}
+              />
+              <button
+                onClick={() => setShowEdit(true)}
+                className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
+              >
+                Edit
+              </button>
+            </div>
           </div>
         </div>
 

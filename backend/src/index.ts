@@ -20,6 +20,7 @@ import contractorsRouter from './routes/contractors';
 import backupsRouter from './routes/backups';
 import staffManagersRouter from './routes/staffManagers';
 import formsRouter from './routes/forms';
+import exportsRouter from './routes/exports';
 
 // Catch crashes before the health check has a chance to respond
 process.on('uncaughtException', (err) => {
@@ -76,6 +77,7 @@ app.use('/api/assignments', assignmentsRouter);
 app.use('/api/vault', vaultRouter);
 app.use('/api/audit', auditRouter);
 app.use('/api/staff', staffRouter);
+app.use('/api/exports', exportsRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/backups', backupsRouter);
 app.use('/api/claude', claudeRouter);

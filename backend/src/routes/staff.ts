@@ -2,8 +2,13 @@ import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
 import { logAudit } from '../lib/audit';
+import { buildEmployeeModel, buildEmployeeWorkbook, buildEmployeePdf } from '../lib/employeeExport';
 
 const router = Router();
+
+// Filename-safe slug from a person's name.
+const slug = (s: string) =>
+  String(s || 'employee').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'employee';
 
 // ── Unified City Wide staff roster ("CW Boston Employees") ───────────────────
 // ONE endpoint over the whole staff_managers table — managers AND field crew —
@@ -202,6 +207,18 @@ function serialize(row: any, detail = false) {
   return base;
 }
 
+// Reusable roster builder (also consumed by the registry export) so the CW
+// Employees sheet is the same aggregate the tab shows.
+export function staffRoster(opts: { includeInactive?: boolean; category?: 'all' | 'managers' | 'crew' } = {}) {
+  const where: string[] = [];
+  if (!opts.includeInactive) where.push('COALESCE(active, 1) = 1');
+  if (opts.category === 'managers') where.push("(role_category IN ('manager', 'both') OR role_category IS NULL)");
+  else if (opts.category === 'crew') where.push("role_category IN ('crew', 'both')");
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const rows = db.prepare(`SELECT * FROM staff_managers ${whereSql} ORDER BY name ASC`).all();
+  return rows.map((r) => serialize(r));
+}
+
 // ── GET /api/staff — unified roster with key aggregates ──────────────────────
 // Returns a JSON array (so existing count consumers keep working). Query:
 //   ?category=all|managers|crew  (default all)
@@ -225,6 +242,40 @@ router.get('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   const row = db.prepare('SELECT * FROM staff_managers WHERE id = ?').get(req.params.id) as any;
   if (!row) return res.status(404).json({ error: 'Staff member not found' });
   res.json({ staff: serialize(row, true) });
+});
+
+// ── GET /api/staff/:id/export?format=xlsx|pdf — per-employee export ───────────
+// A single employee's key holdings as an Excel workbook or a branded one-page
+// PDF. Numbers come from the same serialize() the roster/detail pages use, so
+// they reconcile with the UI exactly. SECURITY: never includes decrypted access
+// codes — the model has no code fields at all. Every export is audit-logged.
+router.get('/:id/export', requireAuth, async (req: AuthRequest, res: Response) => {
+  const row = db.prepare('SELECT * FROM staff_managers WHERE id = ?').get(req.params.id) as any;
+  if (!row) return res.status(404).json({ error: 'Staff member not found' });
+
+  const format = String(req.query.format || 'xlsx').toLowerCase();
+  if (format !== 'xlsx' && format !== 'pdf') {
+    return res.status(400).json({ error: "format must be 'xlsx' or 'pdf'" });
+  }
+
+  const model = buildEmployeeModel(serialize(row, true));
+  const date = new Date().toISOString().slice(0, 10);
+  const filename = `CityWide-Employee-${slug(model.name)}-${date}.${format}`;
+
+  logAudit(req, 'export_employee', model.name, Number(req.params.id), {
+    format, clients: model.summary.clients, total_keys: model.summary.totalKeys,
+  });
+
+  if (format === 'pdf') {
+    const buf = await buildEmployeePdf(model);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.end(buf);
+  }
+  const buf = await buildEmployeeWorkbook(model);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  return res.end(buf);
 });
 
 // ── PATCH /api/staff/:id — edit (incl. soft-deactivate) ──────────────────────

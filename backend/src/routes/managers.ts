@@ -52,12 +52,17 @@ function roster(groupCol: 'account_manager' | 'ccm_manager', role: 'am' | 'ccm')
   });
 }
 
+// Reusable roster builders (also consumed by the registry export) so the
+// exported AM/CCM sheets are byte-for-byte the same aggregate as the tabs.
+export const accountManagerRoster = () => roster('account_manager', 'am');
+export const ccmRoster = () => roster('ccm_manager', 'ccm');
+
 router.get('/account-managers', requireAuth, (_req: AuthRequest, res: Response) => {
-  res.json({ managers: roster('account_manager', 'am') });
+  res.json({ managers: accountManagerRoster() });
 });
 
 router.get('/ccms', requireAuth, (_req: AuthRequest, res: Response) => {
-  res.json({ managers: roster('ccm_manager', 'ccm') });
+  res.json({ managers: ccmRoster() });
 });
 
 // ── Grant / revoke a manager's delete permission (admin only) ────────────────
