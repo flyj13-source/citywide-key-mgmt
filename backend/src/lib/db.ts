@@ -254,6 +254,35 @@ db.exec(`
   )
 `);
 
+// ── Key custody columns on key_assignments ──────────────────────────────────
+// Multi-key transactions (keys_json), holder identity/type, the ACTOR who
+// recorded each side of the transaction (distinct from the holder, for
+// on-behalf recording), and the check-out sign-off fields. PRAGMA-guarded so
+// existing rows and their history are untouched — legacy single-key rows keep
+// keys_json NULL and are read back through their key_type/keys_held text.
+const assignmentCols = (db.prepare('PRAGMA table_info(key_assignments)').all() as any[]).map(
+  (c) => Object.assign({}, c).name
+);
+const assignmentNeeded: [string, string][] = [
+  ['keys_json', 'TEXT'],
+  ['holder_type', 'TEXT'],
+  ['holder_id', 'INTEGER'],
+  ['recorded_by', 'TEXT'],
+  ['checkin_recorded_by', 'TEXT'],
+  ['signoff_token', 'TEXT'],
+  ['signoff_expires_at', 'DATETIME'],
+  ['signed_at', 'DATETIME'],
+  ['signature_data', 'TEXT'],
+  ['signature_hash', 'TEXT'],
+  ['pdf_path', 'TEXT'],
+];
+for (const [col, def] of assignmentNeeded) {
+  if (!assignmentCols.includes(col)) db.exec(`ALTER TABLE key_assignments ADD COLUMN ${col} ${def}`);
+}
+// Token lookup is a public, unauthenticated path — keep it indexed.
+db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_signoff_token ON key_assignments(signoff_token)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_status ON key_assignments(status)');
+
 // is_test flag on managers — marks the dedicated troubleshooting account so its
 // actions can be badged in the audit UI. PRAGMA-guarded: added only if absent.
 const managerCols = (db.prepare('PRAGMA table_info(managers)').all() as any[]).map(

@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import db from './db';
 import { accountManagerRoster, ccmRoster } from '../routes/managers';
 import { staffRoster } from '../routes/staff';
+import { readKeyLines } from './custody';
 
 // ── On-demand registry export ────────────────────────────────────────────────
 // Builds the Key Registry as xlsx (primary) or csv from the SAME queries the
@@ -14,7 +15,9 @@ import { staffRoster } from '../routes/staff';
 // log records every export (caller does the logging with the row count we
 // return here).
 
-export type ExportTab = 'customer' | 'ic' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'all' | 'archived';
+export type ExportTab =
+  | 'customer' | 'ic' | 'am' | 'ccm' | 'office' | 'cwemployees'
+  | 'checkedout' | 'checkedin' | 'all' | 'archived';
 
 export interface ExportOpts {
   scope: 'current' | 'all';
@@ -230,8 +233,86 @@ function cwEmployeesSheet(): SheetSpec {
   return { name: 'CW Employees', columns, rows };
 }
 
+// ── Custody sheets (Checked Out / Checked In tabs) ──────────────────────────
+// Same rows, same order and the same searchable fields as the on-screen tabs,
+// so an export of what you are looking at reconciles line for line.
+function custodyRows(status: 'checked_out' | 'returned', opts: ExportOpts): any[] {
+  let where = 'status = ?';
+  const params: any[] = [status];
+  if (opts.search) {
+    where += ' AND (assignee LIKE ? OR account_name LIKE ? OR keys_held LIKE ? OR assignee_email LIKE ?)';
+    const s = `%${opts.search}%`;
+    params.push(s, s, s, s);
+  }
+  const order = status === 'returned' ? 'returned_at DESC' : 'checked_out_at DESC';
+  return (db.prepare(`SELECT * FROM key_assignments WHERE ${where} ORDER BY ${order}, id DESC`).all(...params) as any[])
+    .map((r) => Object.assign({}, r));
+}
+
+const holderTypeLabel = (t: any): string => (t === 'ic' ? 'IC' : t === 'employee' ? 'Employee' : '');
+const keysText = (row: any): string => {
+  const lines = readKeyLines(row);
+  return lines.length ? lines.map((l) => `${l.qty} × ${l.label}`).join(' · ') : (row.keys_held || '');
+};
+const isOverdue = (row: any): boolean =>
+  !!row.due_at && new Date(`${row.due_at}`.replace(' ', 'T')) < new Date();
+
+function checkedOutSheet(opts: ExportOpts): SheetSpec {
+  const columns: Column[] = [
+    { header: 'Holder', key: 'holder', width: 24 },
+    { header: 'Type', key: 'holder_type', width: 11 },
+    { header: 'Client', key: 'account_name', width: 34 },
+    { header: 'Keys', key: 'keys', width: 36 },
+    { header: 'Total Keys', key: 'total_keys', width: 11 },
+    { header: 'Checked Out', key: 'checked_out_at', width: 22 },
+    { header: 'Due', key: 'due_at', width: 22 },
+    { header: 'Status', key: 'custody_status', width: 12 },
+    { header: 'Signature', key: 'signature', width: 20 },
+    { header: 'Recorded By', key: 'recorded_by', width: 22 },
+  ];
+  const rows = custodyRows('checked_out', opts).map((a) => ({
+    holder: a.assignee,
+    holder_type: holderTypeLabel(a.holder_type),
+    account_name: a.account_name,
+    keys: keysText(a),
+    total_keys: readKeyLines(a).reduce((n, l) => n + l.qty, 0),
+    checked_out_at: a.checked_out_at,
+    due_at: a.due_at || '',
+    custody_status: isOverdue(a) ? 'Overdue' : 'On time',
+    signature: a.signed_at ? 'Signed' : 'Awaiting signature',
+    recorded_by: a.recorded_by || '',
+  }));
+  return { name: 'Checked Out', columns, rows };
+}
+
+function checkedInSheet(opts: ExportOpts): SheetSpec {
+  const columns: Column[] = [
+    { header: 'Holder', key: 'holder', width: 24 },
+    { header: 'Type', key: 'holder_type', width: 11 },
+    { header: 'Client', key: 'account_name', width: 34 },
+    { header: 'Keys', key: 'keys', width: 36 },
+    { header: 'Total Keys', key: 'total_keys', width: 11 },
+    { header: 'Checked Out', key: 'checked_out_at', width: 22 },
+    { header: 'Returned', key: 'returned_at', width: 22 },
+    { header: 'Condition', key: 'condition_on_return', width: 14 },
+    { header: 'Recorded By', key: 'recorded_by', width: 22 },
+  ];
+  const rows = custodyRows('returned', opts).map((a) => ({
+    holder: a.assignee,
+    holder_type: holderTypeLabel(a.holder_type),
+    account_name: a.account_name,
+    keys: keysText(a),
+    total_keys: readKeyLines(a).reduce((n, l) => n + l.qty, 0),
+    checked_out_at: a.checked_out_at,
+    returned_at: a.returned_at || '',
+    condition_on_return: a.condition_on_return || '',
+    recorded_by: a.checkin_recorded_by || a.recorded_by || '',
+  }));
+  return { name: 'Checked In', columns, rows };
+}
+
 // Build the sheet(s) for a request. `current` → just the active tab; `all` →
-// the six registry tabs, one sheet each.
+// every registry tab, one sheet each.
 export function buildSheets(opts: ExportOpts): SheetSpec[] {
   if (opts.scope === 'all') {
     return [
@@ -241,6 +322,8 @@ export function buildSheets(opts: ExportOpts): SheetSpec[] {
       amSheet('ccm'),
       customerSheet('Office', 'office', opts),
       cwEmployeesSheet(),
+      checkedOutSheet(opts),
+      checkedInSheet(opts),
     ];
   }
   switch (opts.tab) {
@@ -250,6 +333,8 @@ export function buildSheets(opts: ExportOpts): SheetSpec[] {
     case 'am': return [amSheet('am')];
     case 'ccm': return [amSheet('ccm')];
     case 'cwemployees': return [cwEmployeesSheet()];
+    case 'checkedout': return [checkedOutSheet(opts)];
+    case 'checkedin': return [checkedInSheet(opts)];
     case 'archived': return [archivedSheet(opts)];
     case 'all':
     default: return [allSheet(opts)];

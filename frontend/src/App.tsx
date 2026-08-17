@@ -8,7 +8,6 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Registry from './pages/Registry';
 import AccountDetail from './pages/AccountDetail';
-import Checkout from './pages/Checkout';
 import CodeVault from './pages/CodeVault';
 import ClaudeAssistant from './pages/ClaudeAssistant';
 import AuditLog from './pages/AuditLog';
@@ -16,6 +15,7 @@ import Reports from './pages/Reports';
 import Contractors from './pages/Contractors';
 import Settings from './pages/Settings';
 import ContractorPortal from './pages/ContractorPortal';
+import KeySignoff from './pages/KeySignoff';
 import ICChange from './pages/ICChange';
 import CustomerLookup from './pages/CustomerLookup';
 import Forms from './pages/Forms';
@@ -33,13 +33,17 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/contractor/:token" element={<ContractorPortal />} />
+        {/* Public, login-free key sign-off (48h token from the check-out email) */}
+        <Route path="/key-signoff/:token" element={<KeySignoff />} />
         <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
         <Route path="/registry" element={<RequireAuth><Registry /></RequireAuth>} />
         <Route path="/registry/:accountId" element={<RequireAuth><AccountDetail /></RequireAuth>} />
         <Route path="/managers" element={<RequireAuth><ManagerRoster /></RequireAuth>} />
         <Route path="/managers/:id" element={<RequireAuth><ManagerDetail /></RequireAuth>} />
         <Route path="/staff/:id" element={<RequireAuth><StaffDetail /></RequireAuth>} />
-        <Route path="/checkout" element={<RequireAuth><Checkout /></RequireAuth>} />
+        {/* Check Out / In now lives INSIDE the Key Registry — old links land on
+            the Checked Out tab rather than 404ing. */}
+        <Route path="/checkout" element={<Navigate to="/registry?tab=checkedout" replace />} />
         <Route path="/vault" element={<RequireAuth><CodeVault /></RequireAuth>} />
         <Route path="/assistant" element={<RequireAuth><ClaudeAssistant /></RequireAuth>} />
         <Route path="/audit" element={<RequireAuth><AuditLog /></RequireAuth>} />

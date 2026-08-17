@@ -144,15 +144,104 @@ export const restoreAccount = (id: number) =>
 export const purgeAccount = (id: number, confirm: string) =>
   req<any>(`/accounts/${id}`, { method: 'DELETE', body: JSON.stringify({ confirm }) });
 
-// Assignments
+// ── Key custody (Check Out / Check In, inside the Key Registry) ─────────────
+export type KeyTypeKey = 'metal' | 'card' | 'fob' | 'dispenser';
+export interface KeyLine { type: KeyTypeKey; label: string; qty: number }
+export interface KeyAvailability {
+  type: KeyTypeKey;
+  label: string;
+  site_total: number;
+  checked_out: number;
+  available: number;
+}
+export interface Assignment {
+  id: number;
+  account_id: number | null;
+  account_name: string;
+  holder: string;
+  holder_email: string | null;
+  holder_type: 'employee' | 'ic' | null;
+  holder_id: number | null;
+  keys: KeyLine[];
+  keys_summary: string;
+  total_keys: number;
+  checked_out_at: string;
+  due_at: string | null;
+  returned_at: string | null;
+  condition_on_return: string | null;
+  notes: string | null;
+  status: 'checked_out' | 'returned';
+  overdue: boolean;
+  recorded_by: string | null;
+  checkin_recorded_by: string | null;
+  signed_at: string | null;
+  signature_hash: string | null;
+  has_pdf: boolean;
+  signoff_pending: boolean;
+  signoff_expires_at: string | null;
+}
+export interface MailOutcome { ok: boolean; recipients: string[]; error?: string; cara?: string }
+export interface HolderOption {
+  id: number;
+  name: string;
+  email: string | null;
+  type: 'employee' | 'ic';
+  detail: string;
+}
+
 export const getAssignments = (params?: Record<string, string>) => {
   const q = params ? '?' + new URLSearchParams(params).toString() : '';
-  return req<{ assignments: any[]; total: number }>(`/assignments${q}`);
+  return req<{ assignments: Assignment[]; total: number }>(`/assignments${q}`);
 };
-export const checkout = (data: any) =>
-  req<any>('/assignments/checkout', { method: 'POST', body: JSON.stringify(data) });
-export const checkin = (data: any) =>
-  req<any>('/assignments/checkin', { method: 'POST', body: JSON.stringify(data) });
+export const getKeyAvailability = (accountId: number) =>
+  req<{ account: { id: number; name: string; record_type: string }; types: KeyAvailability[] }>(
+    `/assignments/availability?account_id=${accountId}`
+  );
+export const getHolders = () =>
+  req<{ employees: HolderOption[]; ics: HolderOption[] }>('/assignments/holders');
+export const checkout = (data: {
+  account_id: number;
+  account_name?: string;
+  holder: string;
+  holder_email?: string | null;
+  holder_type: 'employee' | 'ic';
+  holder_id?: number | null;
+  keys: { type: KeyTypeKey; qty: number }[];
+  due_at?: string | null;
+  notes?: string | null;
+  on_behalf: boolean;
+}) =>
+  req<{ id: number; assignment: Assignment; signoff_link: string; email: MailOutcome }>(
+    '/assignments/checkout', { method: 'POST', body: JSON.stringify(data) }
+  );
+export const checkin = (data: {
+  id: number;
+  keys?: { type: KeyTypeKey; qty: number }[];
+  condition_on_return?: string;
+  notes?: string | null;
+  on_behalf?: boolean;
+}) =>
+  req<{ success: true; partial: boolean; still_out: KeyLine[]; assignment: Assignment; email: MailOutcome }>(
+    '/assignments/checkin', { method: 'POST', body: JSON.stringify(data) }
+  );
+export const resendSignoff = (id: number) =>
+  req<{ success: true; signoff_link: string; email: MailOutcome }>(
+    `/assignments/${id}/resend-signoff`, { method: 'POST' }
+  );
+export const downloadReceipt = async (id: number) => {
+  const res = await reqRaw(`/assignments/${id}/receipt`);
+  await saveResponseAsFile(res, `CityWide-KeyReceipt-${id}.pdf`);
+};
+
+// Public sign-off portal (no JWT — the 48h token is the credential)
+export const getSignoffByToken = (token: string) =>
+  fetch(`${API_ORIGIN}/api/signoff/${token}`).then((r) => r.json());
+export const submitSignoff = (token: string, signature_data: string) =>
+  fetch(`${API_ORIGIN}/api/signoff/${token}/sign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ signature_data }),
+  }).then((r) => r.json());
 
 // Vault
 export const getVault = () => req<any[]>('/vault');

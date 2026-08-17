@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS accounts (
   customer_id TEXT
 );
 
+-- Key custody. ONE row per check-out transaction, which may carry SEVERAL key
+-- types at once (2 metal + 1 fob): the full set lives in keys_json as
+-- [{ type, label, qty }]. key_type/keys_held are kept as a human summary for
+-- legacy consumers and for rows that predate the multi-key model.
+--
+-- `assignee` is the HOLDER (the person who has the keys); `recorded_by` /
+-- `checkin_recorded_by` are the ACTOR who entered the transaction — the two
+-- differ whenever Cara or a manager records a check-out on someone's behalf.
 CREATE TABLE IF NOT EXISTS key_assignments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id INTEGER REFERENCES accounts(id),
@@ -78,12 +86,24 @@ CREATE TABLE IF NOT EXISTS key_assignments (
   assignee_email TEXT,
   key_type TEXT DEFAULT 'physical',
   keys_held TEXT,
+  keys_json TEXT,                 -- JSON [{type,label,qty}] — the full key set
+  holder_type TEXT,               -- 'employee' | 'ic'
+  holder_id INTEGER,              -- staff_managers.id (employee) / accounts.id (IC)
+  recorded_by TEXT,               -- actor who recorded the CHECK-OUT
+  checkin_recorded_by TEXT,       -- actor who recorded the CHECK-IN
   checked_out_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   due_at DATETIME,
   returned_at DATETIME,
   condition_on_return TEXT,
   notes TEXT,
-  status TEXT DEFAULT 'checked_out'
+  status TEXT DEFAULT 'checked_out',
+  -- Sign-off (check-OUT only; a return needs no signature per spec)
+  signoff_token TEXT,
+  signoff_expires_at DATETIME,
+  signed_at DATETIME,
+  signature_data TEXT,            -- base64 PNG data URL
+  signature_hash TEXT,            -- sha256 of signature_data
+  pdf_path TEXT
 );
 
 CREATE TABLE IF NOT EXISTS staff_key_holders (

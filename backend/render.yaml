@@ -65,6 +65,10 @@ services:
         sync: false
       - key: SMTP_PASS
         sync: false
+      # Second recipient on every key check-out / check-in email (with the
+      # holder). Falls back to SMTP_USER when unset.
+      - key: CARA_EMAIL
+        sync: false
       - key: TEAMS_WEBHOOK_URL
         sync: false
       - key: FRONTEND_URL

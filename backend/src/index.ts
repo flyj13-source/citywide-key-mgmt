@@ -21,6 +21,7 @@ import backupsRouter from './routes/backups';
 import staffManagersRouter from './routes/staffManagers';
 import formsRouter from './routes/forms';
 import exportsRouter from './routes/exports';
+import signoffRouter from './routes/signoff';
 
 // Catch crashes before the health check has a chance to respond
 process.on('uncaughtException', (err) => {
@@ -84,6 +85,8 @@ app.use('/api/claude', claudeRouter);
 app.use('/api/contractors', contractorsRouter);
 // Public contractor routes (no JWT)
 app.use('/api/contractor', contractorsRouter);
+// Public key check-out sign-off portal (no JWT — the 48h token is the credential)
+app.use('/api/signoff', signoffRouter);
 
 // ── Tier 3 boot self-check ──────────────────────────────────────────────────
 // One grep-able line per start proving WHERE the DB lives and whether it is on

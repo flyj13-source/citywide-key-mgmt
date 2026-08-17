@@ -23,6 +23,7 @@ Open http://localhost:5173
 - **AES-256-GCM encrypted code vault** — alarm codes and door codes encrypted at rest, reveal button with 5-second auto-hide, every reveal audit logged
 - **Claude AI assistant** (claude-sonnet-4-6) with full registry context — ask natural language questions about keys, staff, codes
 - **Contractor magic link portal** — email invite, 48hr TTL token, HTML5 canvas e-signature, SHA-256 signature hash, PDF receipt generated with pdf-lib
+- **Key custody workflow inside the registry** — multi-key check-out (several key types and quantities in one transaction), per-client availability that blocks over-checkout, self-service *or* on-behalf recording (the audit trail names both the actor and the holder), CW-branded check-out/check-in emails to the holder **and** Cara, and a 48hr magic-link sign-off with an e-signature + branded PDF receipt
 - **M365 integrations:** Outlook SMTP, Teams adaptive card webhook, OneDrive folder sync
 - **Full audit trail** — every action timestamped, attributed, and paginated
 - **Excel export** — 4-sheet workbook: Key Registry, Active Assignments, Overdue, Staff Holdings
@@ -31,7 +32,7 @@ Open http://localhost:5173
 1. **Login** — CW branded
 2. **Dashboard** — 4 metrics, overdue panel, recent activity
 3. **Key Registry** — searchable/paginated table of all accounts
-4. **Check Out / In** — two-panel form with account autocomplete, overdue detection
+4. **Key Custody** — Check Out / In lives *inside* the Key Registry (header buttons + **Checked Out** / **Checked In** tabs), with a multi-key checkbox dropdown, availability guardrails, CW-branded emails, and a magic-link sign-off
 5. **Code Vault** — encrypted codes table, reveal button (5s auto-hide), audit logged
 6. **AI Assistant** — chat panel, full registry passed as context
 7. **Audit Log** — immutable table, filterable, Excel export
