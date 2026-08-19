@@ -8,6 +8,7 @@ import YesNo from '../components/YesNo';
 import ExportMenu from '../components/ExportMenu';
 import { CheckOutModal, CheckInModal } from '../components/CustodyModals';
 import ReassignModal from '../components/ReassignModal';
+import ActionMenu, { type ActionItem } from '../components/ActionMenu';
 import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
 import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, type Assignment } from '../lib/api';
 
@@ -1049,7 +1050,7 @@ export default function Registry() {
     { assignmentId: number | null; account: { id: number; name: string } | null } | null
   >(null);
   const [notice, setNotice] = useState('');
-  const [reassign, setReassign] = useState<{ name: string; role: 'am' | 'ccm' } | null>(null);
+  const [reassign, setReassign] = useState<{ name: string | null; role: 'am' | 'ccm' } | null>(null);
   const LIMIT = 50;
 
   const isRosterTab = (tab === 'am' || tab === 'ccm') && !drill;
@@ -1308,6 +1309,33 @@ export default function Registry() {
   const baseColSpan = tableTab === 'customer' ? 22 : tableTab === 'all' ? 16 : 15;
   const colSpan = canDelete ? baseColSpan : baseColSpan - 1;
 
+  // Lower-frequency header actions, grouped under ⋯ More. Selection-dependent
+  // entries stay listed but disabled, with the reason spelled out — a hidden
+  // action is indistinguishable from a missing one.
+  const moreActions: ActionItem[] = [
+    ...(canDelete || isAdmin ? [{
+      label: 'Reassign Manager…',
+      onSelect: () => setReassign({ name: null, role: 'am' as const }),
+    }] : []),
+    { label: 'Export…', onSelect: () => setShowExport(true), separated: canDelete || isAdmin },
+    ...(canDelete ? [
+      {
+        label: 'Edit Account',
+        onSelect: () => selectedAccount && openEditId(selectedAccount.id),
+        disabled: !selectedAccount,
+        hint: 'Select a client row first',
+        separated: true,
+      },
+      {
+        label: 'Delete Account',
+        onSelect: () => { setArchiveError(''); setArchiveTarget(selectedAccount); },
+        disabled: !selectedAccount,
+        hint: 'Select a client row first',
+        danger: true,
+      },
+    ] : []),
+  ];
+
   return (
     <Layout>
       <div className="p-6 max-w-full mx-auto space-y-4">
@@ -1321,8 +1349,13 @@ export default function Registry() {
                 : `${total} record${total !== 1 ? 's' : ''}`}
             </p>
           </div>
-          <div className="flex flex-wrap gap-2 justify-end">
-            {/* Custody lives HERE now — not on a separate sidebar page. */}
+          {/* ── Action row ────────────────────────────────────────────────
+              Visible: the five high-frequency daily actions. Everything
+              lower-frequency (Reassign Manager, Export, Edit, Delete) lives in
+              the ⋯ More overflow so this row stays scannable. The handover
+              confirm is contextual — it only exists while a flagged row is
+              selected, so it adds no permanent clutter. */}
+          <div className="flex flex-wrap gap-2 justify-end items-start">
             <button
               onClick={() => setCheckOutOpen(true)}
               title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Check keys out to an employee or IC'}
@@ -1338,18 +1371,16 @@ export default function Registry() {
               ↙ Check In Keys
             </button>
             <span className="w-px bg-cw-border self-stretch mx-1" aria-hidden="true" />
-            <button onClick={() => setShowImport(true)} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
-              ↑ Import from Excel
-            </button>
-            <button onClick={() => setShowExport(true)} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors">
-              ↓ Export
-            </button>
             <button onClick={() => openAdd('customer')} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
               + Add Customer
             </button>
             <button onClick={() => openAdd('ic')} className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors">
               + Add IC
             </button>
+            <button onClick={() => setShowImport(true)} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors">
+              ↑ Import from Excel
+            </button>
+
             {(canDelete || isAdmin) && selectedAccount?.pending_handover && (
               <button
                 onClick={doConfirmHandover}
@@ -1360,26 +1391,8 @@ export default function Registry() {
                 ✓ Confirm physical handover
               </button>
             )}
-            {canDelete && (
-              <>
-                <button
-                  onClick={() => selectedAccount && openEditId(selectedAccount.id)}
-                  disabled={!selectedAccount}
-                  title={selectedAccount ? 'Edit the selected account' : 'Select a row first'}
-                  className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-40 disabled:hover:border-[#1a1a1a] disabled:hover:text-[#1a1a1a] disabled:cursor-not-allowed transition-colors"
-                >
-                  Edit Account
-                </button>
-                <button
-                  onClick={() => { setArchiveError(''); setArchiveTarget(selectedAccount); }}
-                  disabled={!selectedAccount}
-                  title={selectedAccount ? 'Archive the selected account' : 'Select a row first'}
-                  className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-40 disabled:hover:border-[#1a1a1a] disabled:hover:text-[#1a1a1a] disabled:cursor-not-allowed transition-colors"
-                >
-                  Delete Account
-                </button>
-              </>
-            )}
+
+            <ActionMenu items={moreActions} />
           </div>
         </div>
 
@@ -1560,8 +1573,8 @@ export default function Registry() {
 
       {reassign && (
         <ReassignModal
-          sourceName={reassign.name}
-          role={reassign.role}
+          sourceName={reassign.name ?? undefined}
+          role={reassign.name ? reassign.role : undefined}
           onClose={() => setReassign(null)}
           onDone={() => { loadRoster(); refreshCounts(); }}
         />

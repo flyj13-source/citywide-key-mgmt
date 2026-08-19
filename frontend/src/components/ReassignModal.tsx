@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Modal from './Modal';
 import {
-  getReassignable, reassignManager, getStaff,
+  getReassignable, reassignManager, getStaff, getAccountManagers, getCcms,
   type ReassignablePayload, type ReassignClient, type MailOutcome,
 } from '../lib/api';
 
@@ -34,15 +34,21 @@ function KeyPills({ keys }: { keys: ReassignClient['keys'] }) {
 }
 
 export default function ReassignModal({
-  staffId, sourceName, role, onClose, onDone,
+  staffId, sourceName, role: initialRole, onClose, onDone,
 }: {
-  /** Known on the manager detail page; resolved from sourceName otherwise. */
+  /** Known when launched from a roster row (via name). Absent from the
+   *  registry header, where the source manager is chosen inside the modal. */
   staffId?: number | null;
   sourceName?: string;
-  role: 'am' | 'ccm';
+  role?: 'am' | 'ccm';
   onClose: () => void;
   onDone: () => void;
 }) {
+  // Header entry starts with nothing selected: pick the role, then the person.
+  const needsSourcePick = staffId == null && !sourceName;
+  const [role, setRole] = useState<'am' | 'ccm'>(initialRole ?? 'am');
+  const [roster, setRoster] = useState<{ id: number; name: string; manager_type: string; clients: number }[]>([]);
+  const [rosterLoading, setRosterLoading] = useState(false);
   const [resolvedId, setResolvedId] = useState<number | null>(staffId ?? null);
   const [data, setData] = useState<ReassignablePayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,6 +61,32 @@ export default function ReassignModal({
   const [done, setDone] = useState<{
     to: string; clients: number; keys: number; email: MailOutcome | null; pending: boolean;
   } | null>(null);
+
+  // Header entry: load the roster of people who actually hold clients in the
+  // chosen role, so the source list is never a wall of irrelevant names.
+  useEffect(() => {
+    if (!needsSourcePick) return;
+    setRosterLoading(true);
+    setResolvedId(null);
+    setData(null);
+    (role === 'am' ? getAccountManagers() : getCcms())
+      .then(async (r) => {
+        const staff = await getStaff({ includeInactive: false });
+        const byName = new Map(staff.map((s) => [s.name, s]));
+        setRoster(
+          r.managers
+            .map((m: any) => {
+              const hit = byName.get(m.person);
+              return hit
+                ? { id: hit.id, name: m.person, manager_type: hit.manager_type ?? '', clients: m.clients_managed }
+                : null;
+            })
+            .filter(Boolean) as any[],
+        );
+      })
+      .catch(() => setRoster([]))
+      .finally(() => setRosterLoading(false));
+  }, [needsSourcePick, role]);
 
   // Roster rows carry a NAME only — map it to the staff_managers id.
   useEffect(() => {
@@ -160,7 +192,50 @@ export default function ReassignModal({
 
   return (
     <Modal title="Reassign clients" onClose={onClose} width="max-w-2xl">
-      {loading ? (
+      {needsSourcePick && (
+        <div className="mb-5">
+          <SectionLabel>Role</SectionLabel>
+          <div className="flex gap-4">
+            {(['am', 'ccm'] as const).map((r) => (
+              <label key={r} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="radio"
+                  className="accent-[#C0272D]"
+                  checked={role === r}
+                  onChange={() => setRole(r)}
+                />
+                {r === 'am' ? 'Account Manager' : 'Contract Compliance Manager'}
+              </label>
+            ))}
+          </div>
+          {resolvedId == null && (
+            <div className="mt-4">
+              <SectionLabel>From</SectionLabel>
+              <select
+                className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
+                value=""
+                onChange={(e) => setResolvedId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">
+                  {rosterLoading ? 'Loading roster…' : `— Select the manager to transfer from (${roster.length}) —`}
+                </option>
+                {roster.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} ({m.clients} client{m.clients === 1 ? '' : 's'})
+                  </option>
+                ))}
+              </select>
+              {!rosterLoading && roster.length === 0 && (
+                <p className="text-[11px] text-[#7a5a00] bg-[#fff8e6] border border-[#e8cf8a] rounded px-2 py-1.5 mt-2">
+                  No {role === 'am' ? 'account managers' : 'CCMs'} on the staff roster hold clients in this role.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {needsSourcePick && resolvedId == null ? null : loading ? (
         <p className="text-sm text-cw-muted">Loading…</p>
       ) : loadError ? (
         <p className="text-sm text-[#C0272D] bg-[#fbeaea] border border-[#f0c9cb] rounded px-3 py-2">{loadError}</p>
@@ -169,9 +244,24 @@ export default function ReassignModal({
           <div className="grid grid-cols-2 gap-4">
             <div>
               <SectionLabel>From</SectionLabel>
-              <div className="input bg-gray-50 flex items-center text-[#1a1a1a] font-medium">
-                {data.source.name}
-              </div>
+              {needsSourcePick ? (
+                <select
+                  className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
+                  value={resolvedId ?? ''}
+                  onChange={(e) => setResolvedId(e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">— Select the manager to transfer from —</option>
+                  {roster.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} ({m.clients} client{m.clients === 1 ? '' : 's'})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="input bg-gray-50 flex items-center text-[#1a1a1a] font-medium">
+                  {data.source.name}
+                </div>
+              )}
               <p className="text-[11px] text-gray-400 mt-1">{data.role_label}</p>
             </div>
             <div>
@@ -293,13 +383,16 @@ export default function ReassignModal({
       )}
 
       <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
-        <button
-          onClick={submit}
-          disabled={!canSubmit}
-          className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {saving ? 'Transferring…' : `Transfer ${summary.clients} client${summary.clients === 1 ? '' : 's'}`}
-        </button>
+        {/* No source chosen yet → there is nothing to transfer, so don't offer it. */}
+        {!(needsSourcePick && resolvedId == null) && (
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {saving ? 'Transferring…' : `Transfer ${summary.clients} client${summary.clients === 1 ? '' : 's'}`}
+          </button>
+        )}
         <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
       </div>
     </Modal>
