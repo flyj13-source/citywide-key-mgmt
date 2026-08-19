@@ -1,0 +1,140 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# City Wide Boston — Key Management System
+# ROOT BLUEPRINT. Both services live here so they deploy IN LOCKSTEP from the
+# same commit.
+#
+# WHY THIS FILE EXISTS: backend/render.yaml and frontend/render.yaml previously
+# described the two services separately, with nothing tying them together. Render
+# only reads a blueprint at the REPOSITORY ROOT, so those two files were inert
+# documentation and each service was wired by hand in the dashboard — free to
+# deploy, fail, or be paused independently. That is how a stale frontend bundle
+# ends up rendering old UI (e.g. the pre-transpose Role Key Counts grid) against
+# a fully migrated backend, which reads as a backend bug and is not one.
+#
+# TO ADOPT: Render Dashboard → Blueprints → New Blueprint Instance → point at
+# this repo. Existing services with the same names are adopted rather than
+# duplicated. Until that is done this file changes nothing — see handoff notes.
+#
+# Every deploy is verifiable afterwards with no dashboard access:
+#   curl -s $BACKEND/api/health            → {"commit": "<sha>", ...}
+#   curl -s $FRONTEND/ | grep build-commit → <meta name="build-commit" ...>
+# ─────────────────────────────────────────────────────────────────────────────
+
+envVarGroups:
+  - name: citywide-backup-secrets
+    envVars:
+      # openssl rand -hex 32  — encrypts every backup artifact at rest
+      - key: BACKUP_ENCRYPTION_KEY
+        sync: false
+      # openssl rand -hex 32  — shared secret gating POST /api/backups/run
+      - key: BACKUP_TRIGGER_TOKEN
+        sync: false
+      # S3-compatible object storage (Cloudflare R2 recommended)
+      - key: BACKUP_S3_ENDPOINT
+        sync: false
+      - key: BACKUP_S3_BUCKET
+        sync: false
+      - key: BACKUP_S3_KEY
+        sync: false
+      - key: BACKUP_S3_SECRET
+        sync: false
+      - key: BACKUP_ALERT_EMAIL
+        sync: false
+
+services:
+  # ── Backend web service (owns the persistent disk) ─────────────────────────
+  # NOTE: RENDER_GIT_COMMIT is intentionally NOT declared below. Render injects
+  # it automatically; declaring it here as `sync: false` would create an EMPTY
+  # dashboard variable that SHADOWS the injected value. The build instead bakes
+  # the hash into dist/build-info.json (backend/scripts/write-build-info.js) so
+  # /api/health can report it either way.
+  - type: web
+    name: citywide-backend
+    runtime: node
+    rootDir: backend
+    # --include=dev so tsc + @types are present even with NODE_ENV=production.
+    # NO seed here — seeding runs at runtime on boot (autoSeedIfEmpty), otherwise
+    # `npm run seed` would try to mkdir the /data mount before it exists.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: node dist/index.js
+    healthCheckPath: /api/health
+    # Persistent disk — WITHOUT this the SQLite file lives on ephemeral storage
+    # and every deploy/restart wipes all data.
+    disk:
+      name: citywide-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - fromGroup: citywide-backup-secrets
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: DB_PATH
+        value: /data/citywide.db
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      # Second recipient on every key custody email (with the holder).
+      - key: CARA_EMAIL
+        sync: false
+      - key: TEAMS_WEBHOOK_URL
+        sync: false
+      # Public URL of the static site below — used to build sign-off magic links.
+      - key: FRONTEND_URL
+        fromService:
+          type: web
+          name: citywide-frontend
+          property: hostport
+      # Dedicated test/troubleshooting account. The account is created ONLY when
+      # TEST_USER_PASSWORD is set; leave unset to skip creation.
+      - key: TEST_USER_EMAIL
+        sync: false
+      - key: TEST_USER_PASSWORD
+        sync: false
+
+  # ── Frontend static site ───────────────────────────────────────────────────
+  # Deploys from the SAME commit as the backend because both are in this one
+  # blueprint — the drift this file exists to prevent.
+  - type: web
+    name: citywide-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: citywide-backend
+          property: hostport
+    routes:
+      # SPA fallback so deep links (/key-signoff/:token, /registry) resolve.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # ── Scheduled backup trigger (cron) ────────────────────────────────────────
+  # Holds NO disk and NO S3 creds — it just POSTs to the web service, which
+  # performs the snapshot/upload.
+  - type: cron
+    name: citywide-backup-cron
+    runtime: node
+    rootDir: backend
+    schedule: "0 6 * * *"
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: node dist/scripts/trigger-backup.js
+    envVars:
+      - fromGroup: citywide-backup-secrets
+      - key: BACKUP_TRIGGER_URL
+        fromService:
+          type: web
+          name: citywide-backend
+          property: hostport

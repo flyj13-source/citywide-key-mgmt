@@ -1,3 +1,7 @@
+# SUPERSEDED by the root render.yaml blueprint, which defines this frontend
+# service alongside the other so the two deploy in lockstep. Render only
+# reads a blueprint at the REPOSITORY ROOT, so this file was never active.
+# Kept for reference; edit the root render.yaml instead.
 services:
   - type: web
     name: citywide-frontend

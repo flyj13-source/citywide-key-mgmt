@@ -3,6 +3,8 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import ManagerModal from '../components/ManagerModal';
 import ExportMenu from '../components/ExportMenu';
+import ReassignModal from '../components/ReassignModal';
+import { getManager } from '../lib/auth';
 import { getStaffManager, exportEmployee, type StaffManager } from '../lib/api';
 
 function TypeBadges({ type }: { type: StaffManager['manager_type'] }) {
@@ -40,6 +42,8 @@ function RoleBadge({ role }: { role: string }) {
 }
 
 export default function ManagerDetail() {
+  const [showReassign, setShowReassign] = useState(false);
+  const canReassign = !!getManager()?.can_delete || getManager()?.role === 'admin';
   const { id } = useParams();
   const navigate = useNavigate();
   const [manager, setManager] = useState<StaffManager | null>(null);
@@ -104,6 +108,15 @@ export default function ManagerDetail() {
                   { label: 'PDF (one-pager)', onSelect: () => exportEmployee(manager.id, 'pdf') },
                 ]}
               />
+              {canReassign && (
+                <button
+                  onClick={() => setShowReassign(true)}
+                  title={`Transfer this manager's clients and key responsibility to another ${manager.manager_type === 'ccm' ? 'CCM' : 'Account Manager'}`}
+                  className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
+                >
+                  Reassign clients
+                </button>
+              )}
               <button
                 onClick={() => setShowEdit(true)}
                 className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
@@ -172,6 +185,23 @@ export default function ManagerDetail() {
           </div>
         </div>
       </div>
+
+      {showReassign && manager && (
+
+        <ReassignModal
+
+          staffId={manager.id}
+
+          role={manager.manager_type === 'ccm' ? 'ccm' : 'am'}
+
+          onClose={() => setShowReassign(false)}
+
+          onDone={() => load()}
+
+        />
+
+      )}
+
 
       {showEdit && (
         <ManagerModal

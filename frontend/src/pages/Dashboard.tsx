@@ -166,7 +166,7 @@ export default function Dashboard() {
           <div className="card">
             <div className="px-5 py-4 border-b border-cw-border flex items-center justify-between">
               <h2 className="font-semibold text-sm">Overdue Assignments</h2>
-              <Link to="/checkout" className="text-xs text-cw-red hover:underline">View all →</Link>
+              <Link to="/registry?tab=checkedout" className="text-xs text-cw-red hover:underline">View all →</Link>
             </div>
             <div className="divide-y divide-cw-border">
               {overdueList.length === 0 ? (
@@ -219,7 +219,7 @@ export default function Dashboard() {
           <h2 className="font-semibold text-sm mb-3">Quick Actions</h2>
           <div className="flex flex-wrap gap-2">
             <button onClick={() => setShowAddManager(true)} className="btn-primary text-sm">+ Add Manager</button>
-            <Link to="/checkout" className="btn-primary text-sm">Check Out Key</Link>
+            <Link to="/registry?tab=checkedout" className="btn-primary text-sm">Check Out Keys</Link>
             <Link to="/registry" className="btn-secondary text-sm">View Registry</Link>
             <Link to="/vault" className="btn-secondary text-sm">Open Vault</Link>
             <Link to="/reports" className="btn-secondary text-sm">Export Report</Link>

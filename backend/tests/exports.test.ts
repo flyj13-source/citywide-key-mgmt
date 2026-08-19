@@ -169,8 +169,11 @@ describe('FULL REGISTRY EXPORT', () => {
     expect(res.headers['content-disposition']).toMatch(/CityWide-KeyRegistry-Full-\d{4}-\d{2}-\d{2}\.xlsx/);
 
     const sheets = parseWorkbook(res.body as Buffer);
-    // Six registry sheets, in order.
-    expect(Object.keys(sheets)).toEqual(['Customers', 'IC Vendors', 'Account Managers', 'CCM', 'Office', 'CW Employees']);
+    // Every registry tab, one sheet each, in on-screen order.
+    expect(Object.keys(sheets)).toEqual([
+      'Customers', 'IC Vendors', 'Account Managers', 'CCM', 'Office', 'CW Employees',
+      'Checked Out', 'Checked In',
+    ]);
 
     // Customers: 3 rows + header. Column order mirrors the screen.
     const cust = sheets['Customers'];

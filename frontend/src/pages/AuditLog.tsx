@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import Layout from '../components/Layout';
 import Badge from '../components/Badge';
 import TestPill from '../components/TestPill';
-import { getAudit, downloadExcel } from '../lib/api';
+import { getAudit, downloadExcel, undoReassignment } from '../lib/api';
+import { getManager } from '../lib/auth';
 
 const ACTION_LABELS: Record<string, { label: string; variant: 'red' | 'green' | 'gray' | 'yellow' | 'blue' }> = {
   key_checked_out: { label: 'Check Out', variant: 'yellow' },
@@ -17,10 +18,69 @@ const ACTION_LABELS: Record<string, { label: string; variant: 'red' | 'green' | 
   contractor_signed: { label: 'Contractor Signed', variant: 'green' },
   ai_query: { label: 'AI Query', variant: 'gray' },
   system_seed: { label: 'System Init', variant: 'gray' },
+  bulk_manager_reassignment: { label: 'Bulk Reassignment', variant: 'red' },
+  manager_reassigned: { label: 'Manager Reassigned', variant: 'yellow' },
+  reassignment_undone: { label: 'Reassignment Undone', variant: 'blue' },
+  handover_confirmed: { label: 'Handover Confirmed', variant: 'green' },
   vault_updated: { label: 'Vault Updated', variant: 'yellow' },
 };
 
+// ── Undo a bulk reassignment ────────────────────────────────────────────────
+// Available to admins / can_delete holders for 30 days, straight off the audit
+// entry that recorded the change — the before/after it carries IS the undo data.
+function UndoReassignment({
+  log, meta, canUndo, onDone,
+}: {
+  log: any; meta: any; canUndo: boolean; onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  if (meta.undone_by) {
+    return (
+      <div className="mt-1 text-[11px] text-cw-muted">
+        Undone by {meta.undone_by}
+      </div>
+    );
+  }
+  if (!canUndo) return null;
+
+  const ageDays = (Date.now() - new Date(String(log.created_at).replace(' ', 'T') + 'Z').getTime()) / 86_400_000;
+  if (Number.isFinite(ageDays) && ageDays > 30) {
+    return <div className="mt-1 text-[11px] text-gray-400">Undo window expired (30 days)</div>;
+  }
+
+  return (
+    <div className="mt-1">
+      {msg ? (
+        <span className="text-[11px] text-[#1a1a1a]">{msg}</span>
+      ) : (
+        <button
+          disabled={busy}
+          onClick={async () => {
+            if (!window.confirm(
+              `Undo this reassignment? ${meta.total_clients} client(s) will be restored to ${meta.from}.`
+            )) return;
+            setBusy(true);
+            try {
+              const r = await undoReassignment(log.id);
+              setMsg(r.message);
+              onDone();
+            } catch (e: any) {
+              setMsg(e?.message || 'Undo failed');
+            } finally { setBusy(false); }
+          }}
+          className="text-[11px] border border-[#C0272D] text-[#C0272D] rounded px-2 py-0.5 hover:bg-[#C0272D] hover:text-white transition-colors disabled:opacity-50"
+        >
+          {busy ? 'Undoing…' : '↺ Undo reassignment'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function AuditLog() {
+  const canUndo = !!getManager()?.can_delete || getManager()?.role === 'admin';
   const [logs, setLogs] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -109,9 +169,17 @@ export default function AuditLog() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-xs text-cw-muted">
-                      {Object.entries(meta).filter(([k]) => k !== 'test_action').map(([k, v]) => (
-                        <span key={k} className="mr-2"><span className="font-medium">{k}:</span> {String(v)}</span>
-                      ))}
+                      {Object.entries(meta)
+                        .filter(([k]) => k !== 'test_action' && k !== 'clients' && k !== 'client_ids')
+                        .map(([k, v]) => (
+                          <span key={k} className="mr-2">
+                            <span className="font-medium">{k}:</span>{' '}
+                            {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
+                          </span>
+                        ))}
+                      {log.action === 'bulk_manager_reassignment' && (
+                        <UndoReassignment log={log} meta={meta} canUndo={canUndo} onDone={load} />
+                      )}
                     </td>
                   </tr>
                 );

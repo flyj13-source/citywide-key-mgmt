@@ -14,6 +14,8 @@ const TAB_LABEL: Record<ExportTab, string> = {
   ccm: 'CCM',
   office: 'Office',
   cwemployees: 'CW-Employees',
+  checkedout: 'Checked-Out',
+  checkedin: 'Checked-In',
   all: 'All',
   archived: 'Archived',
 };

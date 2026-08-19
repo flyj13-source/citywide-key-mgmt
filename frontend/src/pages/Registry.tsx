@@ -6,9 +6,12 @@ import ImportModal from '../components/ImportModal';
 import { getManager } from '../lib/auth';
 import YesNo from '../components/YesNo';
 import ExportMenu from '../components/ExportMenu';
-import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry } from '../lib/api';
+import { CheckOutModal, CheckInModal } from '../components/CustodyModals';
+import ReassignModal from '../components/ReassignModal';
+import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
+import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, type Assignment } from '../lib/api';
 
-type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'all' | 'archived';
+type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'checkedout' | 'checkedin' | 'all' | 'archived';
 
 const emptyForm = {
   ic_company_name: '',
@@ -124,6 +127,19 @@ function RevealCell({ accountId, type, hasCode }: { accountId: number; type: 'do
     >
       {loading ? '…' : '••••'}
     </button>
+  );
+}
+
+// Amber until the physical keys have actually changed hands. Registry
+// responsibility already moved; this is the honest gap between the two truths.
+function HandoverPill({ from, to }: { from?: string | null; to?: string | null }) {
+  return (
+    <span
+      title={from && to ? `Keys still with ${from} — to be handed to ${to}` : 'Physical handover pending'}
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#fff8e6] text-[#7a5a00] border border-[#e8cf8a]"
+    >
+      Handover pending
+    </span>
   );
 }
 
@@ -487,8 +503,13 @@ const RegistryTable = memo(function RegistryTable({
                 )}
                 {tab === 'customer' ? (
                   <>
-                    <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[200px] truncate sticky ${selectable ? 'left-11' : 'left-0'} z-10 ${rowBg}`}>
+                    <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[240px] truncate sticky ${selectable ? 'left-11' : 'left-0'} z-10 ${rowBg}`}>
                       {a.ic_company_name}
+                      {!!a.pending_handover && (
+                        <div className="mt-0.5">
+                          <HandoverPill from={a.pending_handover_from} to={a.pending_handover_to} />
+                        </div>
+                      )}
                     </td>
                     <td className={`px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap sticky ${selectable ? 'left-[244px]' : 'left-[200px]'} z-10 ${rowBg}`}>
                       {a.bc_client_number || '—'}
@@ -622,12 +643,14 @@ function MutedCount({ value }: { value: number }) {
 }
 
 function RosterTable({
-  role, rows, loading, onSelect,
+  role, rows, loading, onSelect, onReassign, canReassign,
 }: {
   role: 'am' | 'ccm';
   rows: any[];
   loading: boolean;
   onSelect: (person: string) => void;
+  onReassign: (person: string) => void;
+  canReassign: boolean;
 }) {
   const [sortKey, setSortKey] = useState('total_held');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -659,6 +682,7 @@ function RosterTable({
             <th rowSpan={2} className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('clients_managed')}>Clients Managed{arrow('clients_managed')}</th>
             <th colSpan={5} className={`text-center px-3 py-2 font-bold uppercase tracking-wide whitespace-nowrap ${RED_BORDER}`}>Personally Holds</th>
             <th colSpan={5} className="text-center px-3 py-2 font-medium uppercase tracking-wide whitespace-nowrap text-white/50 border-l border-white/20">Across Their Clients</th>
+            <th rowSpan={2} className="px-3 py-3 align-bottom"></th>
           </tr>
           {/* Column header row */}
           <tr className="bg-[#1a1a1a] text-white text-xs">
@@ -670,13 +694,14 @@ function RosterTable({
               <th key={c.key} className={`text-center px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none text-white/60 ${idx === 0 ? 'border-l border-white/20' : ''}`} onClick={() => sort(c.key)}>{c.label}{arrow(c.key)}</th>
             ))}
             <th className="text-center px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none text-white/60" onClick={() => sort('total_client_keys')}>Total Client Keys{arrow('total_client_keys')}</th>
+            <th className="px-3 py-2"></th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={12} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+            <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
           ) : sorted.length === 0 ? (
-            <tr><td colSpan={12} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
+            <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
           ) : sorted.map((p, i) => {
             const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
             return (
@@ -700,6 +725,17 @@ function RosterTable({
                   <td key={c.key} className={`px-3 py-3 text-center ${idx === 0 ? 'border-l border-gray-200' : ''}`}><MutedCount value={p[c.key]} /></td>
                 ))}
                 <td className="px-3 py-3 text-center text-gray-600 text-xs font-semibold">{p.total_client_keys || '—'}</td>
+                <td className="px-3 py-3 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                  {canReassign && (
+                    <button
+                      onClick={() => onReassign(p.person)}
+                      title={`Transfer ${p.person}'s clients to another manager`}
+                      className="text-xs border border-[#1a1a1a] text-[#1a1a1a] rounded px-2.5 py-1 hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
+                    >
+                      Reassign
+                    </button>
+                  )}
+                </td>
               </tr>
             );
           })}
@@ -872,7 +908,8 @@ function CWEmployeesTable({
 // opt-in. Respects the active search so "what I see is what I get".
 const EXPORT_TAB_LABEL: Record<string, string> = {
   customer: 'Customers', ic: 'IC Vendors', am: 'Account Managers', ccm: 'Contract Compliance Mgrs',
-  office: 'Office', cwemployees: 'CW Employees', all: 'All', archived: 'Archived',
+  office: 'Office', cwemployees: 'CW Employees', checkedout: 'Checked Out', checkedin: 'Checked In',
+  all: 'All', archived: 'Archived',
 };
 
 function RegistryExportModal({
@@ -967,10 +1004,14 @@ export default function Registry() {
   const canDelete = !!getManager()?.can_delete;
   const initialTab = searchParams.get('tab');
   const [tab, setTab] = useState<TabType>(
-    initialTab === 'archived' ? 'archived' : initialTab === 'cwemployees' ? 'cwemployees' : 'customer'
+    (['archived', 'cwemployees', 'checkedout', 'checkedin'] as string[]).includes(initialTab || '')
+      ? (initialTab as TabType)
+      : 'customer'
   );
   const [accounts, setAccounts] = useState<any[]>([]);
-  const [counts, setCounts] = useState({ ic: 0, customer: 0, office: 0, staff: 0, all: 0, archived: 0 });
+  const [counts, setCounts] = useState({
+    ic: 0, customer: 0, office: 0, staff: 0, all: 0, archived: 0, checkedOut: 0, checkedIn: 0,
+  });
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -988,18 +1029,33 @@ export default function Registry() {
   const [staffSearch, setStaffSearch] = useState('');
   // When a roster person is clicked, drill into their client list.
   const [drill, setDrill] = useState<{ role: 'am' | 'ccm'; name: string } | null>(null);
-  // Row selection + delete flows.
+  // Row selection + delete flows. The selected row is kept as a {id, name}
+  // snapshot too, so it still pre-fills the custody modals after switching to a
+  // tab whose row list no longer contains it.
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<{ id: number; name: string } | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<any | null>(null);
   const [archiveError, setArchiveError] = useState('');
   const [purgeTarget, setPurgeTarget] = useState<any | null>(null);
   const [purgeConfirm, setPurgeConfirm] = useState('');
   const [busy, setBusy] = useState(false);
+  // Key custody — the Check Out / In workflow, now inside the registry.
+  const [custody, setCustody] = useState<Assignment[]>([]);
+  const [custodyLoading, setCustodyLoading] = useState(false);
+  const [custodyTotal, setCustodyTotal] = useState(0);
+  const [custodySort, setCustodySort] = useState<SortState>({ key: 'checked_out_at', dir: 'desc' });
+  const [checkOutOpen, setCheckOutOpen] = useState(false);
+  const [checkInFor, setCheckInFor] = useState<
+    { assignmentId: number | null; account: { id: number; name: string } | null } | null
+  >(null);
+  const [notice, setNotice] = useState('');
+  const [reassign, setReassign] = useState<{ name: string; role: 'am' | 'ccm' } | null>(null);
   const LIMIT = 50;
 
   const isRosterTab = (tab === 'am' || tab === 'ccm') && !drill;
   const isStaffTab = tab === 'cwemployees' && !drill;
   const isArchivedTab = tab === 'archived' && !drill;
+  const isCustodyTab = (tab === 'checkedout' || tab === 'checkedin') && !drill;
   // Tabs that render their OWN roster (no account list / account search box).
   const isPeopleTab = isRosterTab || isStaffTab;
 
@@ -1061,26 +1117,50 @@ export default function Registry() {
     }
   }, []);
 
+  // Key custody rows — Checked Out (active) or Checked In (returned history).
+  // Sorting and search are applied server-side so they span the whole set.
+  const loadCustody = useCallback(async () => {
+    setCustodyLoading(true);
+    try {
+      const data = await getAssignments({
+        status: tab === 'checkedin' ? 'returned' : 'checked_out',
+        search: debouncedSearch,
+        sort: custodySort.key,
+        dir: custodySort.dir,
+        page: String(page),
+        limit: String(LIMIT),
+      });
+      setCustody(data.assignments);
+      setCustodyTotal(data.total);
+    } finally {
+      setCustodyLoading(false);
+    }
+  }, [tab, debouncedSearch, custodySort, page]);
+
   useEffect(() => {
-    if (isStaffTab) loadStaff();
+    if (isCustodyTab) loadCustody();
+    else if (isStaffTab) loadStaff();
     else if (isRosterTab) loadRoster();
     else loadRows();
-  }, [isStaffTab, isRosterTab, loadStaff, loadRoster, loadRows]);
+  }, [isCustodyTab, isStaffTab, isRosterTab, loadCustody, loadStaff, loadRoster, loadRows]);
 
   // Tab/type counts — independent of search, so they are NOT refetched while
   // typing. Refreshed on mount and after any mutation.
   const refreshCounts = useCallback(async () => {
-    const [icData, custData, officeData, allData, archData, staffData] = await Promise.all([
+    const [icData, custData, officeData, allData, archData, staffData, outData, inData] = await Promise.all([
       getAccounts({ limit: '1', type: 'ic' }),
       getAccounts({ limit: '1', type: 'customer' }),
       getAccounts({ limit: '1', type: 'customer', office_keys: '1' }),
       getAccounts({ limit: '1', type: 'all' }),
       getAccounts({ limit: '1', type: 'all', archived: '1' }),
       getStaff({ includeInactive: false }).catch(() => [] as any[]),
+      getAssignments({ limit: '1', status: 'checked_out' }).catch(() => ({ total: 0, assignments: [] })),
+      getAssignments({ limit: '1', status: 'returned' }).catch(() => ({ total: 0, assignments: [] })),
     ]);
     setCounts({
       ic: icData.total, customer: custData.total, office: officeData.total,
       staff: staffData.length, all: allData.total, archived: archData.total,
+      checkedOut: outData.total, checkedIn: inData.total,
     });
   }, []);
 
@@ -1112,24 +1192,43 @@ export default function Registry() {
     { key: 'ccm', label: 'Contract Compliance Mgrs' },
     { key: 'office', label: `Office (${counts.office})` },
     { key: 'cwemployees', label: `CW Employees (${counts.staff})` },
+    { key: 'checkedout', label: `Checked Out (${counts.checkedOut})` },
+    { key: 'checkedin', label: `Checked In (${counts.checkedIn})` },
     { key: 'all', label: `All (${counts.all})` },
     { key: 'archived', label: `Archived (${counts.archived})` },
   ], [counts]);
+
+  const DEEP_LINK_TABS: TabType[] = ['archived', 'cwemployees', 'checkedout', 'checkedin'];
 
   const selectTab = (key: TabType) => {
     setTab(key);
     setPage(1);
     setDrill(null);
-    setSelectedId(null);
     setStaffChip('all');
     setStaffSearch('');
-    setSearchParams(key === 'archived' ? { tab: 'archived' } : key === 'cwemployees' ? { tab: 'cwemployees' } : {}, { replace: true });
+    setNotice('');
+    setCustodySort({ key: key === 'checkedin' ? 'returned_at' : 'checked_out_at', dir: 'desc' });
+    setSearchParams(DEEP_LINK_TABS.includes(key) ? { tab: key } : {}, { replace: true });
   };
   const openPerson = (name: string) => {
     setDrill({ role: tab === 'am' ? 'am' : 'ccm', name });
     setPage(1);
   };
   const openStaff = useCallback((id: number) => navigate(`/staff/${id}`), [navigate]);
+
+  const sortCustody = useCallback((key: string) => {
+    setCustodySort((cur) => (cur.key === key
+      ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: key === 'holder' || key === 'account_name' ? 'asc' : 'desc' }));
+    setPage(1);
+  }, []);
+
+  // A custody change moves rows between the two tabs and shifts availability —
+  // refresh both the visible list and the tab counts.
+  const onCustodyChanged = useCallback(() => {
+    refreshCounts();
+    if (isCustodyTab) loadCustody();
+  }, [refreshCounts, isCustodyTab, loadCustody]);
 
   // CW Employees — filter chip (role category) + search applied client-side.
   const filteredStaff = useMemo(() => {
@@ -1143,6 +1242,15 @@ export default function Registry() {
 
   const selectedAccount = accounts.find((a) => a.id === selectedId) || null;
 
+  const toggleSelect = useCallback((id: number) => {
+    setSelectedId((cur) => (cur === id ? null : id));
+    setSelectedSnapshot((cur) => {
+      if (cur?.id === id) return null;
+      const row = accounts.find((a) => a.id === id);
+      return row ? { id: row.id, name: row.ic_company_name } : null;
+    });
+  }, [accounts]);
+
   const doArchive = async () => {
     if (!archiveTarget) return;
     setBusy(true); setArchiveError('');
@@ -1154,6 +1262,19 @@ export default function Registry() {
       refreshCounts();
     } catch (err: any) {
       setArchiveError(err?.message || 'Could not archive');
+    } finally { setBusy(false); }
+  };
+
+  // Clears the amber pill once the metal has actually changed hands.
+  const doConfirmHandover = async () => {
+    if (!selectedAccount) return;
+    setBusy(true);
+    try {
+      await confirmHandover([selectedAccount.id]);
+      setNotice(`Physical handover confirmed for ${selectedAccount.ic_company_name}.`);
+      loadRows();
+    } catch (err: any) {
+      setNotice(err?.message || 'Could not confirm the handover');
     } finally { setBusy(false); }
   };
 
@@ -1194,9 +1315,29 @@ export default function Registry() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-[#1a1a1a]">Key Registry</h1>
-            <p className="text-sm text-cw-muted">{total} record{total !== 1 ? 's' : ''}</p>
+            <p className="text-sm text-cw-muted">
+              {isCustodyTab
+                ? `${custodyTotal} ${tab === 'checkedin' ? 'returned' : 'active'} custody record${custodyTotal !== 1 ? 's' : ''}`
+                : `${total} record${total !== 1 ? 's' : ''}`}
+            </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 justify-end">
+            {/* Custody lives HERE now — not on a separate sidebar page. */}
+            <button
+              onClick={() => setCheckOutOpen(true)}
+              title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Check keys out to an employee or IC'}
+              className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors"
+            >
+              ↗ Check Out Keys
+            </button>
+            <button
+              onClick={() => setCheckInFor({ assignmentId: null, account: selectedSnapshot })}
+              title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Record returned keys'}
+              className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
+            >
+              ↙ Check In Keys
+            </button>
+            <span className="w-px bg-cw-border self-stretch mx-1" aria-hidden="true" />
             <button onClick={() => setShowImport(true)} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
               ↑ Import from Excel
             </button>
@@ -1209,6 +1350,16 @@ export default function Registry() {
             <button onClick={() => openAdd('ic')} className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors">
               + Add IC
             </button>
+            {(canDelete || isAdmin) && selectedAccount?.pending_handover && (
+              <button
+                onClick={doConfirmHandover}
+                disabled={busy}
+                title={`Mark the physical keys for ${selectedAccount.ic_company_name} as handed over`}
+                className="px-4 py-2 border border-[#e8cf8a] bg-[#fff8e6] text-[#7a5a00] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-50 transition-colors"
+              >
+                ✓ Confirm physical handover
+              </button>
+            )}
             {canDelete && (
               <>
                 <button
@@ -1261,11 +1412,19 @@ export default function Registry() {
           </div>
         )}
 
+        {/* Transient notice (sign-off link re-sends, email outcomes) */}
+        {notice && (
+          <div className="flex items-center justify-between gap-3 text-sm bg-[#f4f4f2] border border-cw-border rounded px-3 py-2 text-cw-text">
+            <span>{notice}</span>
+            <button onClick={() => setNotice('')} className="text-cw-muted hover:text-cw-text">×</button>
+          </div>
+        )}
+
         {/* Search — not shown on the pure people-roster tabs (they have their own) */}
         {!isPeopleTab && (
           <input
             className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
-            placeholder="Search by name, number, or manager…"
+            placeholder={isCustodyTab ? 'Search by holder, client, or key…' : 'Search by name, number, or manager…'}
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1); }}
           />
@@ -1297,8 +1456,29 @@ export default function Registry() {
           </div>
         )}
 
-        {/* Roster (AMs / CCMs) · CW Employees · Archived · or the client table */}
-        {isStaffTab ? (
+        {/* Custody · Roster (AMs / CCMs) · CW Employees · Archived · client table */}
+        {isCustodyTab ? (
+          tab === 'checkedout' ? (
+            <CheckedOutTable
+              rows={custody}
+              loading={custodyLoading}
+              sort={custodySort}
+              onSort={sortCustody}
+              onCheckIn={(a) => setCheckInFor({
+                assignmentId: a.id,
+                account: a.account_id ? { id: a.account_id, name: a.account_name } : null,
+              })}
+              onNotice={setNotice}
+            />
+          ) : (
+            <CheckedInTable
+              rows={custody}
+              loading={custodyLoading}
+              sort={custodySort}
+              onSort={sortCustody}
+            />
+          )
+        ) : isStaffTab ? (
           <CWEmployeesTable
             rows={filteredStaff}
             loading={staffLoading}
@@ -1310,6 +1490,8 @@ export default function Registry() {
             rows={roster}
             loading={rosterLoading}
             onSelect={openPerson}
+            canReassign={canDelete || isAdmin}
+            onReassign={(person) => setReassign({ name: person, role: tab === 'ccm' ? 'ccm' : 'am' })}
           />
         ) : isArchivedTab ? (
           <ArchivedTable
@@ -1326,22 +1508,26 @@ export default function Registry() {
             accounts={accounts}
             loading={loading}
             colSpan={colSpan}
-            selectable={canDelete}
+            selectable
             selectedId={selectedId}
-            onToggleSelect={(id) => setSelectedId((cur) => (cur === id ? null : id))}
+            onToggleSelect={toggleSelect}
             onRowClick={onRowClick}
             onEdit={openEdit}
           />
         )}
 
         {/* Pagination */}
-        {!isPeopleTab && total > LIMIT && (
-          <div className="flex items-center gap-3 justify-center">
-            <button className="btn-secondary" disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
-            <span className="text-sm text-cw-muted">Page {page} of {Math.ceil(total / LIMIT)}</span>
-            <button className="btn-secondary" disabled={page * LIMIT >= total} onClick={() => setPage(p => p + 1)}>Next →</button>
-          </div>
-        )}
+        {(() => {
+          const count = isCustodyTab ? custodyTotal : total;
+          if (isPeopleTab || count <= LIMIT) return null;
+          return (
+            <div className="flex items-center gap-3 justify-center">
+              <button className="btn-secondary" disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
+              <span className="text-sm text-cw-muted">Page {page} of {Math.ceil(count / LIMIT)}</span>
+              <button className="btn-secondary" disabled={page * LIMIT >= count} onClick={() => setPage(p => p + 1)}>Next →</button>
+            </div>
+          );
+        })()}
       </div>
 
       {modal && (
@@ -1360,6 +1546,34 @@ export default function Registry() {
 
       {showExport && (
         <RegistryExportModal tab={tab} search={debouncedSearch} onClose={() => setShowExport(false)} />
+      )}
+
+      {/* Key custody — both modals open within the registry context and pre-fill
+          the client from the selected row. */}
+      {checkOutOpen && (
+        <CheckOutModal
+          presetAccount={selectedSnapshot}
+          onClose={() => setCheckOutOpen(false)}
+          onDone={onCustodyChanged}
+        />
+      )}
+
+      {reassign && (
+        <ReassignModal
+          sourceName={reassign.name}
+          role={reassign.role}
+          onClose={() => setReassign(null)}
+          onDone={() => { loadRoster(); refreshCounts(); }}
+        />
+      )}
+
+      {checkInFor && (
+        <CheckInModal
+          presetAccount={checkInFor.account}
+          presetAssignmentId={checkInFor.assignmentId}
+          onClose={() => setCheckInFor(null)}
+          onDone={onCustodyChanged}
+        />
       )}
 
       {/* Archive confirmation */}

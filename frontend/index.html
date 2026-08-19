@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>City Wide Boston — Key Management</title>
+    <!-- Build markers — stamped by vite.config.ts at build time so a stale
+         static deploy is detectable without a login:
+           curl -s https://<frontend>/ | grep build-commit          -->
+    <meta name="build-commit" content="%BUILD_COMMIT%" />
+    <meta name="build-at" content="%BUILD_AT%" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a1a1a'/><polygon points='20,4 28,4 28,12' fill='%23C0272D'/></svg>" />
   </head>
   <body>

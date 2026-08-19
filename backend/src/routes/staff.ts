@@ -3,6 +3,7 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
 import { logAudit } from '../lib/audit';
 import { buildEmployeeModel, buildEmployeeWorkbook, buildEmployeePdf } from '../lib/employeeExport';
+import { readKeyLines } from '../lib/custody';
 
 const router = Router();
 
@@ -48,16 +49,16 @@ function roleLabel(manager_type: string | null, role_category: string | null): s
   return mgrLabel ?? 'Manager';
 }
 
-// Bucket a checked-out assignment into a key type. Assignment data carries only
-// a free-text key_type / keys_held, so this is best-effort; anything we can't
-// classify lands honestly in "other" rather than being guessed into a type.
-function bucketAssignment(key_type: string | null, keys_held: string | null): keyof KeyBreakdown {
-  const s = `${key_type ?? ''} ${keys_held ?? ''}`.toLowerCase();
-  if (/\bcard\b|keycard|key card/.test(s)) return 'card';
-  if (/\bfob\b/.test(s)) return 'fob';
-  if (/dispenser/.test(s)) return 'dispenser';
-  if (/metal/.test(s)) return 'metal';
-  return 'other';
+// Break a checked-out assignment into per-type quantities. Multi-key rows carry
+// an exact keys_json set; legacy rows only have free-text key_type / keys_held,
+// so readKeyLines() classifies what it can and anything unclassifiable lands
+// honestly in "other" as a single key rather than being guessed into a type.
+function assignmentBreakdown(row: any): KeyBreakdown {
+  const b = emptyBreakdown();
+  const lines = readKeyLines(row);
+  if (!lines.length) { b.other += 1; return b; }
+  for (const line of lines) b[line.type] += line.qty;
+  return b;
 }
 
 interface Gathered {
@@ -140,7 +141,7 @@ function gatherStaff(row: any, detail = false): Gathered {
 
   if (isCrewCat(rc) && name && name.trim()) {
     const rows = db.prepare(`
-      SELECT id, account_id, account_name, key_type, keys_held, checked_out_at, due_at
+      SELECT id, account_id, account_name, key_type, keys_held, keys_json, checked_out_at, due_at
       FROM key_assignments
       WHERE assignee = ? AND status = 'checked_out'
       ORDER BY checked_out_at DESC
@@ -148,8 +149,10 @@ function gatherStaff(row: any, detail = false): Gathered {
 
     for (const raw of rows) {
       const a = Object.assign({}, raw);
-      const bucket = bucketAssignment(a.key_type, a.keys_held);
-      keys[bucket] += 1; // one currently-held key per open assignment
+      const here = assignmentBreakdown(a);
+      const hereTotal = breakdownTotal(here);
+      keys.metal += here.metal; keys.card += here.card; keys.fob += here.fob;
+      keys.dispenser += here.dispenser; keys.other += here.other;
       const acctKey = a.account_id != null ? `acct:${a.account_id}` : `name:${String(a.account_name || '').toLowerCase()}`;
       addAccount(acctKey, {
         id: a.account_id ?? null,
@@ -158,13 +161,13 @@ function gatherStaff(row: any, detail = false): Gathered {
         ic_name: null,
         role: 'Crew',
         source: 'crew',
-        keys_here: 1,
+        keys_here: hereTotal,
       });
       if (detail) {
         holdings.push({
           source: 'crew', assignment_id: a.id, account_id: a.account_id ?? null,
           account_name: a.account_name, key_type: a.key_type, keys_held: a.keys_held,
-          bucket, checked_out_at: a.checked_out_at, due_at: a.due_at,
+          ...here, total: hereTotal, checked_out_at: a.checked_out_at, due_at: a.due_at,
         });
       }
     }
