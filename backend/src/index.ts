@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import path from 'path';
 
 import db, { DATABASE_FILE } from './lib/db';
+import { buildInfo } from './lib/buildInfo';
 import { autoSeedIfEmpty } from './lib/autoSeed';
 import authRouter from './routes/auth';
 import importRouter from './routes/import';
@@ -22,6 +23,7 @@ import staffManagersRouter from './routes/staffManagers';
 import formsRouter from './routes/forms';
 import exportsRouter from './routes/exports';
 import signoffRouter from './routes/signoff';
+import diagRouter from './routes/diag';
 
 // Catch crashes before the health check has a chance to respond
 process.on('uncaughtException', (err) => {
@@ -57,13 +59,17 @@ if (process.env.CITYWIDE_DESKTOP === '1') {
 
 // ── Health check — registered first so Railway can reach it immediately ──────
 app.get('/api/health', (_req, res) => {
-  // RENDER_GIT_COMMIT is set automatically by Render to the deployed commit —
-  // surfaced here so a deploy's live hash can be confirmed after each push.
-  const commit = process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || null;
+  // The deployed commit, resolved from Render's injected RENDER_GIT_COMMIT and
+  // falling back to the hash baked into dist/build-info.json at build time — so
+  // "which commit is live?" is answerable with one unauthenticated curl.
+  const build = buildInfo();
   res.status(200).json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    commit,
+    commit: build.commit,
+    commit_short: build.commitShort,
+    commit_source: build.source,
+    built_at: build.builtAt,
   });
 });
 
@@ -87,6 +93,8 @@ app.use('/api/contractors', contractorsRouter);
 app.use('/api/contractor', contractorsRouter);
 // Public key check-out sign-off portal (no JWT — the 48h token is the credential)
 app.use('/api/signoff', signoffRouter);
+// Deployed-state diagnostics (JWT + admin only)
+app.use('/api/_diag', diagRouter);
 
 // ── Tier 3 boot self-check ──────────────────────────────────────────────────
 // One grep-able line per start proving WHERE the DB lives and whether it is on

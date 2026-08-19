@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/write-build-info.js",
     "start": "node dist/index.js",
     "seed": "ts-node database/seed.ts",
     "encrypt-seed": "ts-node database/encrypt-seed.ts",

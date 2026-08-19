@@ -7,8 +7,9 @@ import { getManager } from '../lib/auth';
 import YesNo from '../components/YesNo';
 import ExportMenu from '../components/ExportMenu';
 import { CheckOutModal, CheckInModal } from '../components/CustodyModals';
+import ReassignModal from '../components/ReassignModal';
 import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
-import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, type Assignment } from '../lib/api';
+import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, type Assignment } from '../lib/api';
 
 type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'checkedout' | 'checkedin' | 'all' | 'archived';
 
@@ -126,6 +127,19 @@ function RevealCell({ accountId, type, hasCode }: { accountId: number; type: 'do
     >
       {loading ? '…' : '••••'}
     </button>
+  );
+}
+
+// Amber until the physical keys have actually changed hands. Registry
+// responsibility already moved; this is the honest gap between the two truths.
+function HandoverPill({ from, to }: { from?: string | null; to?: string | null }) {
+  return (
+    <span
+      title={from && to ? `Keys still with ${from} — to be handed to ${to}` : 'Physical handover pending'}
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#fff8e6] text-[#7a5a00] border border-[#e8cf8a]"
+    >
+      Handover pending
+    </span>
   );
 }
 
@@ -489,8 +503,13 @@ const RegistryTable = memo(function RegistryTable({
                 )}
                 {tab === 'customer' ? (
                   <>
-                    <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[200px] truncate sticky ${selectable ? 'left-11' : 'left-0'} z-10 ${rowBg}`}>
+                    <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[240px] truncate sticky ${selectable ? 'left-11' : 'left-0'} z-10 ${rowBg}`}>
                       {a.ic_company_name}
+                      {!!a.pending_handover && (
+                        <div className="mt-0.5">
+                          <HandoverPill from={a.pending_handover_from} to={a.pending_handover_to} />
+                        </div>
+                      )}
                     </td>
                     <td className={`px-3 py-3 font-mono text-xs text-gray-600 whitespace-nowrap sticky ${selectable ? 'left-[244px]' : 'left-[200px]'} z-10 ${rowBg}`}>
                       {a.bc_client_number || '—'}
@@ -624,12 +643,14 @@ function MutedCount({ value }: { value: number }) {
 }
 
 function RosterTable({
-  role, rows, loading, onSelect,
+  role, rows, loading, onSelect, onReassign, canReassign,
 }: {
   role: 'am' | 'ccm';
   rows: any[];
   loading: boolean;
   onSelect: (person: string) => void;
+  onReassign: (person: string) => void;
+  canReassign: boolean;
 }) {
   const [sortKey, setSortKey] = useState('total_held');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -661,6 +682,7 @@ function RosterTable({
             <th rowSpan={2} className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('clients_managed')}>Clients Managed{arrow('clients_managed')}</th>
             <th colSpan={5} className={`text-center px-3 py-2 font-bold uppercase tracking-wide whitespace-nowrap ${RED_BORDER}`}>Personally Holds</th>
             <th colSpan={5} className="text-center px-3 py-2 font-medium uppercase tracking-wide whitespace-nowrap text-white/50 border-l border-white/20">Across Their Clients</th>
+            <th rowSpan={2} className="px-3 py-3 align-bottom"></th>
           </tr>
           {/* Column header row */}
           <tr className="bg-[#1a1a1a] text-white text-xs">
@@ -672,13 +694,14 @@ function RosterTable({
               <th key={c.key} className={`text-center px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none text-white/60 ${idx === 0 ? 'border-l border-white/20' : ''}`} onClick={() => sort(c.key)}>{c.label}{arrow(c.key)}</th>
             ))}
             <th className="text-center px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none text-white/60" onClick={() => sort('total_client_keys')}>Total Client Keys{arrow('total_client_keys')}</th>
+            <th className="px-3 py-2"></th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={12} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+            <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
           ) : sorted.length === 0 ? (
-            <tr><td colSpan={12} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
+            <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">No {personLabel.toLowerCase()}s found</td></tr>
           ) : sorted.map((p, i) => {
             const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
             return (
@@ -702,6 +725,17 @@ function RosterTable({
                   <td key={c.key} className={`px-3 py-3 text-center ${idx === 0 ? 'border-l border-gray-200' : ''}`}><MutedCount value={p[c.key]} /></td>
                 ))}
                 <td className="px-3 py-3 text-center text-gray-600 text-xs font-semibold">{p.total_client_keys || '—'}</td>
+                <td className="px-3 py-3 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                  {canReassign && (
+                    <button
+                      onClick={() => onReassign(p.person)}
+                      title={`Transfer ${p.person}'s clients to another manager`}
+                      className="text-xs border border-[#1a1a1a] text-[#1a1a1a] rounded px-2.5 py-1 hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
+                    >
+                      Reassign
+                    </button>
+                  )}
+                </td>
               </tr>
             );
           })}
@@ -1015,6 +1049,7 @@ export default function Registry() {
     { assignmentId: number | null; account: { id: number; name: string } | null } | null
   >(null);
   const [notice, setNotice] = useState('');
+  const [reassign, setReassign] = useState<{ name: string; role: 'am' | 'ccm' } | null>(null);
   const LIMIT = 50;
 
   const isRosterTab = (tab === 'am' || tab === 'ccm') && !drill;
@@ -1230,6 +1265,19 @@ export default function Registry() {
     } finally { setBusy(false); }
   };
 
+  // Clears the amber pill once the metal has actually changed hands.
+  const doConfirmHandover = async () => {
+    if (!selectedAccount) return;
+    setBusy(true);
+    try {
+      await confirmHandover([selectedAccount.id]);
+      setNotice(`Physical handover confirmed for ${selectedAccount.ic_company_name}.`);
+      loadRows();
+    } catch (err: any) {
+      setNotice(err?.message || 'Could not confirm the handover');
+    } finally { setBusy(false); }
+  };
+
   const doRestore = async (id: number) => {
     setBusy(true);
     try {
@@ -1302,6 +1350,16 @@ export default function Registry() {
             <button onClick={() => openAdd('ic')} className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors">
               + Add IC
             </button>
+            {(canDelete || isAdmin) && selectedAccount?.pending_handover && (
+              <button
+                onClick={doConfirmHandover}
+                disabled={busy}
+                title={`Mark the physical keys for ${selectedAccount.ic_company_name} as handed over`}
+                className="px-4 py-2 border border-[#e8cf8a] bg-[#fff8e6] text-[#7a5a00] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-50 transition-colors"
+              >
+                ✓ Confirm physical handover
+              </button>
+            )}
             {canDelete && (
               <>
                 <button
@@ -1432,6 +1490,8 @@ export default function Registry() {
             rows={roster}
             loading={rosterLoading}
             onSelect={openPerson}
+            canReassign={canDelete || isAdmin}
+            onReassign={(person) => setReassign({ name: person, role: tab === 'ccm' ? 'ccm' : 'am' })}
           />
         ) : isArchivedTab ? (
           <ArchivedTable
@@ -1495,6 +1555,15 @@ export default function Registry() {
           presetAccount={selectedSnapshot}
           onClose={() => setCheckOutOpen(false)}
           onDone={onCustodyChanged}
+        />
+      )}
+
+      {reassign && (
+        <ReassignModal
+          sourceName={reassign.name}
+          role={reassign.role}
+          onClose={() => setReassign(null)}
+          onDone={() => { loadRoster(); refreshCounts(); }}
         />
       )}
 

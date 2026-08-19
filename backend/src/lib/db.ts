@@ -283,6 +283,25 @@ for (const [col, def] of assignmentNeeded) {
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_signoff_token ON key_assignments(signoff_token)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_status ON key_assignments(status)');
 
+// ── Manager reassignment: physical-handover tracking ────────────────────────
+// Reassigning a manager moves REGISTRY responsibility instantly; the physical
+// keys still have to change hands. These columns keep those two truths
+// separate: the registry is already correct, while pending_handover=1 flags
+// that metal is still with the previous manager. Cleared when Cara confirms.
+const acctCols2 = (db.prepare('PRAGMA table_info(accounts)').all() as any[]).map(
+  (c) => Object.assign({}, c).name
+);
+const handoverNeeded: [string, string][] = [
+  ['pending_handover', 'INTEGER DEFAULT 0'],
+  ['pending_handover_from', 'TEXT'],
+  ['pending_handover_to', 'TEXT'],
+  ['pending_handover_role', 'TEXT'],
+  ['pending_handover_at', 'DATETIME'],
+];
+for (const [col, def] of handoverNeeded) {
+  if (!acctCols2.includes(col)) db.exec(`ALTER TABLE accounts ADD COLUMN ${col} ${def}`);
+}
+
 // is_test flag on managers — marks the dedicated troubleshooting account so its
 // actions can be badged in the audit UI. PRAGMA-guarded: added only if absent.
 const managerCols = (db.prepare('PRAGMA table_info(managers)').all() as any[]).map(

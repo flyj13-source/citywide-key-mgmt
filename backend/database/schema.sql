@@ -67,7 +67,14 @@ CREATE TABLE IF NOT EXISTS accounts (
   lockbox TEXT,
   ic_name TEXT,
   ic_id_number TEXT,
-  customer_id TEXT
+  customer_id TEXT,
+  -- Physical-handover tracking after a bulk manager reassignment. Registry
+  -- responsibility moves immediately; these flag that the metal has not.
+  pending_handover INTEGER DEFAULT 0,
+  pending_handover_from TEXT,
+  pending_handover_to TEXT,
+  pending_handover_role TEXT,
+  pending_handover_at DATETIME
 );
 
 -- Key custody. ONE row per check-out transaction, which may carry SEVERAL key

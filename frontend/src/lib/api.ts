@@ -458,3 +458,65 @@ export const signContractor = (token: string, signature_data: string) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ signature_data }),
   }).then((r) => r.json());
+
+// ── Bulk manager reassignment ───────────────────────────────────────────────
+export interface ReassignClient {
+  id: number;
+  name: string;
+  bc_client_number: string | null;
+  keys: { type: string; label: string; qty: number }[];
+  total_keys: number;
+  pending_handover: boolean;
+}
+export interface ReassignTarget {
+  id: number;
+  name: string;
+  manager_type: string;
+  email: string | null;
+  clients_managed: number;
+}
+export interface ReassignablePayload {
+  source: { id: number; name: string; manager_type: string };
+  role: 'am' | 'ccm';
+  role_label: string;
+  clients: ReassignClient[];
+  targets: ReassignTarget[];
+  summary: { clients: number; keys: number; key_types: number };
+}
+export const getReassignable = (staffId: number, role: 'am' | 'ccm') =>
+  req<ReassignablePayload>(`/managers/${staffId}/reassignable?role=${role}`);
+
+export const reassignManager = (data: {
+  fromId: number;
+  toId: number;
+  clientIds: number[];
+  role: 'am' | 'ccm';
+  sendHandover: boolean;
+}) =>
+  req<{
+    success: true; audit_id: number; from: string; to: string; role: 'am' | 'ccm';
+    totalClients: number; totalKeys: number; keyTypesAffected: string[];
+    pending_handover: boolean; email: MailOutcome | null;
+  }>('/managers/reassign', { method: 'POST', body: JSON.stringify(data) });
+
+export const undoReassignment = (auditId: number) =>
+  req<{ success: true; restored: number; skipped: number; message: string }>(
+    `/managers/reassign/${auditId}/undo`, { method: 'POST' }
+  );
+
+export interface PendingHandover {
+  id: number;
+  ic_company_name: string;
+  bc_client_number: string | null;
+  pending_handover_from: string | null;
+  pending_handover_to: string | null;
+  pending_handover_role: string | null;
+  pending_handover_at: string | null;
+}
+export const getPendingHandovers = () =>
+  req<{ pending: PendingHandover[]; count: number }>('/managers/handover/pending');
+
+export const confirmHandover = (clientIds: number[]) =>
+  req<{ success: true; confirmed: number }>('/managers/handover/confirm', {
+    method: 'POST', body: JSON.stringify({ clientIds }),
+  });

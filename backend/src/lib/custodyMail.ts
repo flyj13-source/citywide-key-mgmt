@@ -83,7 +83,7 @@ function detailRows(pairs: [string, string][]): string {
     </tr>`).join('');
 }
 
-function shell(title: string, subtitle: string, body: string, hasLogo: boolean): string {
+export function brandedShell(title: string, subtitle: string, body: string, hasLogo = !!logoBytes()): string {
   const brand = hasLogo
     ? `<div style="background:#ffffff;border-radius:4px;padding:8px 12px;display:inline-block">
          <img src="cid:cwlogo" alt="City Wide Building Services" width="132" style="display:block;width:132px;height:auto" />
@@ -147,7 +147,7 @@ export interface CheckinMail {
 
 // Shared send path: builds recipients (holder + Cara), attaches the inline
 // logo, and converts any transport error into a reported failure.
-async function send(subject: string, html: string, text: string, to: string[]): Promise<MailResult> {
+export async function sendBranded(subject: string, html: string, text: string, to: string[]): Promise<MailResult> {
   const recipients = Array.from(new Set(to.filter(Boolean).map((t) => t.trim()).filter(Boolean)));
   if (!recipients.length) {
     return { ok: false, recipients: [], skipped: true, error: 'No recipient address on file' };
@@ -190,7 +190,7 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
        </div>`
     : '';
 
-  const html = shell(
+  const html = brandedShell(
     'Keys checked out',
     `${d.holder} has keys checked out for ${d.client}.`,
     `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
@@ -230,12 +230,12 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
     ...(d.signoffLink ? ['', `Sign for these keys (expires in 48 hours): ${d.signoffLink}`] : []),
   ].join('\n');
 
-  return send(subject, html, text, [d.holderEmail || '', caraAddress()]);
+  return sendBranded(subject, html, text, [d.holderEmail || '', caraAddress()]);
 }
 
 export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
   const subject = `Keys returned — ${d.client}`;
-  const html = shell(
+  const html = brandedShell(
     'Keys returned',
     `${d.holder} has returned keys for ${d.client}. No signature is required.`,
     `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
@@ -276,5 +276,5 @@ export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
     'No signature is required for a return.',
   ].join('\n');
 
-  return send(subject, html, text, [d.holderEmail || '', caraAddress()]);
+  return sendBranded(subject, html, text, [d.holderEmail || '', caraAddress()]);
 }

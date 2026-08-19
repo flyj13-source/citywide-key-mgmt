@@ -24,6 +24,7 @@ Open http://localhost:5173
 - **Claude AI assistant** (claude-sonnet-4-6) with full registry context — ask natural language questions about keys, staff, codes
 - **Contractor magic link portal** — email invite, 48hr TTL token, HTML5 canvas e-signature, SHA-256 signature hash, PDF receipt generated with pdf-lib
 - **Key custody workflow inside the registry** — multi-key check-out (several key types and quantities in one transaction), per-client availability that blocks over-checkout, self-service *or* on-behalf recording (the audit trail names both the actor and the holder), CW-branded check-out/check-in emails to the holder **and** Cara, and a 48hr magic-link sign-off with an e-signature + branded PDF receipt
+- **Bulk manager reassignment** — transfer a manager's clients and key responsibility to another manager in one atomic action, with per-client checkboxes for partial transfers, an audit entry per client plus a summary, a 30-day undo, an optional CW-branded key-handover email, and an amber "Handover pending" pill that keeps registry truth and physical truth separate
 - **M365 integrations:** Outlook SMTP, Teams adaptive card webhook, OneDrive folder sync
 - **Full audit trail** — every action timestamped, attributed, and paginated
 - **Excel export** — 4-sheet workbook: Key Registry, Active Assignments, Overdue, Staff Holdings
@@ -39,6 +40,28 @@ Open http://localhost:5173
 8. **Reports** — Excel / Outlook / Teams / OneDrive
 9. **Contractor Portal** — magic link table, PDF download; public `/contractor/:token` route
 10. **Settings** — M365 config reference
+
+## Verifying a deploy (no dashboard needed)
+
+Both services stamp the commit they were built from, so drift between them is
+detectable in two curls:
+
+```bash
+curl -s $BACKEND/api/health              # {"commit":"<sha>","commit_source":"env|build-file",...}
+curl -s $FRONTEND/ | grep build-commit   # <meta name="build-commit" content="<sha>" />
+```
+
+Different hashes = the two services are out of step (the usual cause of "old UI,
+new API"). The root `render.yaml` blueprint exists to prevent exactly that by
+defining both services together; adopt it via Render → Blueprints → New
+Blueprint Instance pointed at this repo.
+
+For deeper schema truth, `GET /api/_diag` (JWT + **admin only**) reports the
+resolved `DB_PATH` and whether it is on the mounted disk, which of the 16
+holder-grid columns exist, the `staff_managers` row count with its
+`role_category` distribution and backfill gap, record counts, and which feature
+migrations are live. `POST /api/_diag/backfill-staff` (admin) re-runs the
+idempotent staff-roster backfill without waiting for a redeploy.
 
 ## Deploy to Railway
 
