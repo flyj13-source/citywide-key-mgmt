@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS key_assignments (
   signed_at DATETIME,
   signature_data TEXT,            -- base64 PNG data URL
   signature_hash TEXT,            -- sha256 of signature_data
+  signature_typed_name TEXT,      -- the signer's typed name confirmation
   pdf_path TEXT,
   -- Check-IN sign-off ("You are returning these keys") — the mirror set, so a
   -- record that was signed for on the way out AND on the way back carries both
@@ -119,6 +120,7 @@ CREATE TABLE IF NOT EXISTS key_assignments (
   checkin_signed_at DATETIME,
   checkin_signature_data TEXT,
   checkin_signature_hash TEXT,
+  checkin_signature_typed_name TEXT,
   checkin_pdf_path TEXT,
   -- Person-to-person transfer linkage. Both sides of a transfer share a
   -- transfer_id; transfer_role says which end this row is, and

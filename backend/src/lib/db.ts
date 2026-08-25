@@ -274,6 +274,7 @@ const assignmentNeeded: [string, string][] = [
   ['signed_at', 'DATETIME'],
   ['signature_data', 'TEXT'],
   ['signature_hash', 'TEXT'],
+  ['signature_typed_name', 'TEXT'],
   ['pdf_path', 'TEXT'],
   // Check-IN sign-off — the mirror of the check-out set above. Kept as its own
   // columns rather than reusing signed_at/pdf_path so a record signed on the
@@ -284,6 +285,7 @@ const assignmentNeeded: [string, string][] = [
   ['checkin_signed_at', 'DATETIME'],
   ['checkin_signature_data', 'TEXT'],
   ['checkin_signature_hash', 'TEXT'],
+  ['checkin_signature_typed_name', 'TEXT'],
   ['checkin_pdf_path', 'TEXT'],
   // Person-to-person transfer linkage (both sides share transfer_id).
   ['transfer_id', 'TEXT'],

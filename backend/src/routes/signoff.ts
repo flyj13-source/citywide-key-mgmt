@@ -109,6 +109,22 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'A signature is required' });
   }
 
+  // Typed name confirmation — the second factor on the form. A drawn squiggle
+  // alone identifies nobody; requiring the signer to type the name the keys are
+  // recorded against is what ties the mark to the person. Compared loosely
+  // (case and inner whitespace) so "j.  martinez" is accepted while a different
+  // person's name is not.
+  const typed_name = typeof req.body?.typed_name === 'string' ? req.body.typed_name.trim() : '';
+  if (!typed_name) {
+    return res.status(400).json({ error: 'Please type your full name to confirm' });
+  }
+  const normalize = (v: string) => v.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (normalize(typed_name) !== normalize(String(row.assignee ?? ''))) {
+    return res.status(400).json({
+      error: `The typed name must match the holder on this record (${row.assignee}).`,
+    });
+  }
+
   const hash = hashSignature(signature_data);
   const signedAt = new Date().toISOString();
   const keys = readKeyLines(row);
@@ -134,6 +150,7 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
       condition: row.condition_on_return ?? null,
       recordedBy: (action === 'checkin' ? row.checkin_recorded_by : row.recorded_by) || row.recorded_by || 'City Wide Boston',
       signatureData: signature_data,
+      typedName: typed_name,
       signedAt,
       transferCounterparty: counterparty,
     });
@@ -147,12 +164,13 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
     action === 'checkin'
       ? `UPDATE key_assignments
             SET checkin_signed_at=?, checkin_signature_data=?, checkin_signature_hash=?,
-                checkin_pdf_path=?, checkin_signoff_token=NULL
+                checkin_signature_typed_name=?, checkin_pdf_path=?, checkin_signoff_token=NULL
           WHERE id=?`
       : `UPDATE key_assignments
-            SET signed_at=?, signature_data=?, signature_hash=?, pdf_path=?, signoff_token=NULL
+            SET signed_at=?, signature_data=?, signature_hash=?,
+                signature_typed_name=?, pdf_path=?, signoff_token=NULL
           WHERE id=?`
-  ).run(signedAt, signature_data, hash, pdfPath, row.id);
+  ).run(signedAt, signature_data, hash, typed_name, pdfPath, row.id);
 
   // Email the signed PDF to the notification recipient AND back to the signer.
   // A failed send is logged and reported — never swallowed.
@@ -183,6 +201,7 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
       holder_type: row.holder_type ?? 'employee',
       keys, total_keys: totalQty(keys),
       hash: hash.slice(0, 16),
+      typed_name,
       pdf: pdfPath ? path.basename(pdfPath) : null,
       pdf_error: pdfError || undefined,
       transfer_id: row.transfer_id ?? undefined,

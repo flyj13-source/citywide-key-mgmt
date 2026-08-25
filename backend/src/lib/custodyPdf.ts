@@ -32,6 +32,8 @@ export interface CustodyReceiptData {
   condition?: string | null;
   recordedBy: string;
   signatureData: string;
+  /** The name the signer typed to confirm the drawn mark is theirs. */
+  typedName?: string | null;
   signedAt: string;
   /** Set when this receipt is one half of a person-to-person transfer. */
   transferCounterparty?: string | null;
@@ -192,6 +194,10 @@ export async function generateCustodyReceipt(d: CustodyReceiptData): Promise<str
   page.drawLine({ start: { x: 36, y }, end: { x: 300, y }, thickness: 1, color: CW_BORDER });
   y -= 13;
   page.drawText(`${d.holder} — ${copy.sigCaption}`, { x: 36, y, size: 9, font: regular, color: CW_GRAY });
+  if (d.typedName) {
+    y -= 13;
+    page.drawText(`Typed name confirmation: ${d.typedName}`, { x: 36, y, size: 9, font: regular, color: CW_GRAY });
+  }
   y -= 13;
   page.drawText(`Signed ${fmt(d.signedAt)}`, { x: 36, y, size: 9, font: regular, color: CW_GRAY });
 

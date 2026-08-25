@@ -176,6 +176,7 @@ export interface Assignment {
   checkin_recorded_by: string | null;
   signed_at: string | null;
   signature_hash: string | null;
+  signature_typed_name: string | null;
   has_pdf: boolean;
   signoff_pending: boolean;
   signoff_expires_at: string | null;
@@ -183,6 +184,7 @@ export interface Assignment {
   // record can be signed out and still awaiting its return signature.
   checkin_signed_at: string | null;
   checkin_signature_hash: string | null;
+  checkin_signature_typed_name: string | null;
   has_checkin_pdf: boolean;
   checkin_signoff_pending: boolean;
   checkin_signoff_expires_at: string | null;
@@ -404,11 +406,13 @@ export interface SignoffView {
 }
 export const getSignoffByToken = (token: string) =>
   fetch(`${API_ORIGIN}/api/signoff/${token}`).then((r) => r.json());
-export const submitSignoff = (token: string, signature_data: string) =>
+// Both factors travel together: the drawn mark and the typed name that ties it
+// to the person the keys are recorded against.
+export const submitSignoff = (token: string, signature_data: string, typed_name: string) =>
   fetch(`${API_ORIGIN}/api/signoff/${token}/sign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ signature_data }),
+    body: JSON.stringify({ signature_data, typed_name }),
   }).then((r) => r.json());
 
 // Vault

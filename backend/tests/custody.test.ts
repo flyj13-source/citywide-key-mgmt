@@ -209,10 +209,40 @@ describe('MULTI-KEY CHECK-OUT', () => {
     expect(res.status).toBe(404);
   });
 
-  it('signing stores the signature + SHA-256, generates the PDF, audits checkout_signed', async () => {
-    // 1×1 transparent PNG — a valid image pdf-lib can embed.
+  // ── Typed name confirmation ───────────────────────────────────────────────
+  // A drawn mark on its own identifies nobody; the typed name is what ties it
+  // to the person the keys are recorded against.
+  it('refuses a signature with no typed name', async () => {
     const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     const res = await request(app).post(`/api/signoff/${signoffToken}/sign`).send({ signature_data: png });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('type your full name');
+    // Nothing was recorded — the link is still live.
+    expect(one('SELECT signed_at FROM key_assignments WHERE id = ?', assignmentId).signed_at).toBeNull();
+  });
+
+  it("refuses a typed name that is not the record's holder", async () => {
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const res = await request(app).post(`/api/signoff/${signoffToken}/sign`)
+      .send({ signature_data: png, typed_name: 'Somebody Else' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('J. Martinez');
+    expect(one('SELECT signed_at FROM key_assignments WHERE id = ?', assignmentId).signed_at).toBeNull();
+  });
+
+  it('refuses a typed name without a signature', async () => {
+    const res = await request(app).post(`/api/signoff/${signoffToken}/sign`)
+      .send({ typed_name: 'J. Martinez' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('signature is required');
+  });
+
+  it('signing stores the signature + SHA-256 + typed name, generates the PDF, audits checkout_signed', async () => {
+    // 1×1 transparent PNG — a valid image pdf-lib can embed.
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    // Case and extra spaces are tolerated; a different name is not (above).
+    const res = await request(app).post(`/api/signoff/${signoffToken}/sign`)
+      .send({ signature_data: png, typed_name: '  j. martinez  ' });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.pdf_error).toBeNull();
@@ -222,6 +252,7 @@ describe('MULTI-KEY CHECK-OUT', () => {
     expect(row.signed_at).toBeTruthy();
     expect(row.signature_hash).toBe(crypto.createHash('sha256').update(png).digest('hex'));
     expect(row.signature_data).toBe(png);
+    expect(row.signature_typed_name).toBe('j. martinez');
     expect(fs.existsSync(row.pdf_path)).toBe(true);
     expect(fs.readFileSync(row.pdf_path).subarray(0, 4).toString()).toBe('%PDF');
     // The token is burned on use so the link cannot be replayed.
@@ -238,6 +269,7 @@ describe('MULTI-KEY CHECK-OUT', () => {
     expect(found.signoff_pending).toBe(false);
     expect(found.signed_at).toBeTruthy();
     expect(found.has_pdf).toBe(true);
+    expect(found.signature_typed_name).toBe('j. martinez');
   });
 
   it('a used link cannot be signed twice', async () => {
@@ -429,17 +461,20 @@ describe('CHECK-IN SIGNATURE', () => {
     // Sign the check-out first so both signatures coexist on one record.
     const checkoutToken = one('SELECT signoff_token FROM key_assignments WHERE id = ?', outId).signoff_token;
     const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-    const first = await request(app).post(`/api/signoff/${checkoutToken}/sign`).send({ signature_data: png });
+    const first = await request(app).post(`/api/signoff/${checkoutToken}/sign`).send({ signature_data: png, typed_name: 'Signback Sam' });
     expect(first.status).toBe(200);
     expect(first.body.action).toBe('checkout');
 
-    const second = await request(app).post(`/api/signoff/${checkinToken}/sign`).send({ signature_data: png });
+    const second = await request(app).post(`/api/signoff/${checkinToken}/sign`).send({ signature_data: png, typed_name: 'signback  SAM' });
     expect(second.status).toBe(200);
     expect(second.body.action).toBe('checkin');
 
     const row = one('SELECT * FROM key_assignments WHERE id = ?', outId);
     expect(row.signed_at).toBeTruthy();
     expect(row.checkin_signed_at).toBeTruthy();
+    // Each direction keeps its own typed name.
+    expect(row.signature_typed_name).toBe('Signback Sam');
+    expect(row.checkin_signature_typed_name).toBe('signback  SAM');
     expect(row.signature_hash).toHaveLength(64);
     expect(row.checkin_signature_hash).toHaveLength(64);
     // Both receipts exist as separate documents.
@@ -465,7 +500,7 @@ describe('CHECK-IN SIGNATURE', () => {
 
   it('a return cannot be signed twice', async () => {
     const res = await request(app).post(`/api/signoff/${checkinToken}/sign`).send({
-      signature_data: 'data:image/png;base64,iVBORw0KGgo=',
+      signature_data: 'data:image/png;base64,iVBORw0KGgo=', typed_name: 'Signback Sam',
     });
     // The token was cleared on the first signature, so the link is simply dead.
     expect([404, 409]).toContain(res.status);
@@ -608,12 +643,12 @@ describe('KEY TRANSFER', () => {
 
     const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     const toToken = transfer.to.signoff_link.split('/').pop();
-    const first = await request(app).post(`/api/signoff/${toToken}/sign`).send({ signature_data: png });
+    const first = await request(app).post(`/api/signoff/${toToken}/sign`).send({ signature_data: png, typed_name: 'Receiving Rick' });
     expect(first.status).toBe(200);
     expect(first.body.transfer_signatures).toMatchObject({ signed: 1, complete: false, to_signed: true });
 
     const fromToken = transfer.from.signoff_link.split('/').pop();
-    const second = await request(app).post(`/api/signoff/${fromToken}/sign`).send({ signature_data: png });
+    const second = await request(app).post(`/api/signoff/${fromToken}/sign`).send({ signature_data: png, typed_name: 'Transfer Tina' });
     expect(second.status).toBe(200);
     expect(second.body.transfer_signatures).toEqual({
       signed: 2, total: 2, complete: true, from_signed: true, to_signed: true,

@@ -58,6 +58,7 @@ export function serializeAssignment(raw: any) {
     checkin_recorded_by: a.checkin_recorded_by ?? null,
     signed_at: a.signed_at ?? null,
     signature_hash: a.signature_hash ?? null,
+    signature_typed_name: a.signature_typed_name ?? null,
     has_pdf: !!a.pdf_path,
     signoff_pending: a.status === 'checked_out' && !a.signed_at,
     signoff_expires_at: a.signoff_expires_at ?? null,
@@ -65,6 +66,7 @@ export function serializeAssignment(raw: any) {
     // "signed out, awaiting return signature" and say so.
     checkin_signed_at: a.checkin_signed_at ?? null,
     checkin_signature_hash: a.checkin_signature_hash ?? null,
+    checkin_signature_typed_name: a.checkin_signature_typed_name ?? null,
     has_checkin_pdf: !!a.checkin_pdf_path,
     checkin_signoff_pending: a.status === 'returned' && !a.checkin_signed_at,
     checkin_signoff_expires_at: a.checkin_signoff_expires_at ?? null,

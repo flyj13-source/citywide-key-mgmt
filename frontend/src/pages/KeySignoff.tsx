@@ -113,6 +113,7 @@ export default function KeySignoff() {
   const [signing, setSigning] = useState(false);
   const [signed, setSigned] = useState(false);
   const [pdfNote, setPdfNote] = useState<string | null>(null);
+  const [typedName, setTypedName] = useState('');
   const padRef = useRef<SignaturePadHandle>(null);
 
   useEffect(() => {
@@ -129,12 +130,19 @@ export default function KeySignoff() {
   const action: 'checkout' | 'checkin' = data?.action === 'checkin' ? 'checkin' : 'checkout';
   const copy = COPY[action];
 
+  // The typed name is the second factor: a drawn mark on its own identifies
+  // nobody. It must match the holder the keys are recorded against, compared
+  // ignoring case and extra spaces.
+  const normalize = (v: string) => v.trim().toLowerCase().replace(/\s+/g, ' ');
+  const nameMatches = !!data && normalize(typedName) === normalize(data.holder);
+
   const submit = async () => {
     const signature = padRef.current?.toDataURL();
     if (!signature) { setError('Please sign in the box before submitting.'); return; }
+    if (!nameMatches) { setError(`Please type your full name exactly as it appears on this record: ${data?.holder}`); return; }
     setSigning(true); setError('');
     try {
-      const r: any = await submitSignoff(token!, signature);
+      const r: any = await submitSignoff(token!, signature, typedName.trim());
       if (r?.success) {
         setSigned(true);
         if (r.pdf_error) setPdfNote(`Your signature was recorded, but the PDF receipt could not be generated (${r.pdf_error}). City Wide has been notified.`);
@@ -265,16 +273,37 @@ export default function KeySignoff() {
         </ul>
       </div>
 
-      <div className="bg-white border border-cw-border rounded-lg p-5">
-        <h2 className="font-semibold text-sm mb-3">Electronic signature</h2>
-        <SignaturePad ref={padRef} />
+      <div className="bg-white border border-cw-border rounded-lg p-5 space-y-4">
+        <div>
+          <h2 className="font-semibold text-sm mb-3">Electronic signature</h2>
+          <SignaturePad ref={padRef} />
+        </div>
+        <div>
+          <label htmlFor="typed-name" className="block text-sm font-semibold text-cw-text mb-1">
+            Type your full name to confirm
+          </label>
+          <input
+            id="typed-name"
+            type="text"
+            value={typedName}
+            onChange={(e) => setTypedName(e.target.value)}
+            placeholder={data?.holder}
+            autoComplete="name"
+            className="input w-full focus:ring-[#C0272D] focus:border-[#C0272D]"
+          />
+          <p className="mt-1 text-xs text-cw-muted">
+            {typedName.trim() && !nameMatches
+              ? <span className="text-[#C0272D]">This must match the holder on this record: <strong>{data?.holder}</strong></span>
+              : <>Must match the holder on this record: <strong>{data?.holder}</strong></>}
+          </p>
+        </div>
       </div>
 
       {error && <div className="bg-red-50 border border-red-200 rounded px-4 py-3 text-sm text-red-700">{error}</div>}
 
       <button
         onClick={submit}
-        disabled={signing || !acknowledged}
+        disabled={signing || !acknowledged || !nameMatches}
         className="w-full py-3 text-base bg-[#C0272D] text-white font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
         {signing ? copy.submitBusy : copy.submitLabel}
