@@ -8,6 +8,7 @@ import YesNo from '../components/YesNo';
 import ExportMenu from '../components/ExportMenu';
 import { CheckOutModal, CheckInModal } from '../components/CustodyModals';
 import ReassignModal from '../components/ReassignModal';
+import TransferModal from '../components/TransferModal';
 import ActionMenu, { type ActionItem } from '../components/ActionMenu';
 import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
 import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, type Assignment } from '../lib/api';
@@ -1049,6 +1050,9 @@ export default function Registry() {
   const [checkInFor, setCheckInFor] = useState<
     { assignmentId: number | null; account: { id: number; name: string } | null } | null
   >(null);
+  const [transferFor, setTransferFor] = useState<
+    { account: { id: number; name: string } | null; holder: string | null } | null
+  >(null);
   const [notice, setNotice] = useState('');
   const [reassign, setReassign] = useState<{ name: string | null; role: 'am' | 'ccm' } | null>(null);
   const LIMIT = 50;
@@ -1313,11 +1317,16 @@ export default function Registry() {
   // entries stay listed but disabled, with the reason spelled out — a hidden
   // action is indistinguishable from a missing one.
   const moreActions: ActionItem[] = [
+    {
+      label: 'Custody Report…',
+      onSelect: () => navigate('/registry/custody-report'),
+    },
     ...(canDelete || isAdmin ? [{
       label: 'Reassign Manager…',
       onSelect: () => setReassign({ name: null, role: 'am' as const }),
+      separated: true,
     }] : []),
-    { label: 'Export…', onSelect: () => setShowExport(true), separated: canDelete || isAdmin },
+    { label: 'Export…', onSelect: () => setShowExport(true), separated: !(canDelete || isAdmin) },
     ...(canDelete ? [
       {
         label: 'Edit Account',
@@ -1369,6 +1378,13 @@ export default function Registry() {
               className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
             >
               ↙ Check In Keys
+            </button>
+            <button
+              onClick={() => setTransferFor({ account: selectedSnapshot, holder: null })}
+              title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Hand keys straight from one person to another'}
+              className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
+            >
+              ⇄ Transfer Keys
             </button>
             <span className="w-px bg-cw-border self-stretch mx-1" aria-hidden="true" />
             <button onClick={() => openAdd('customer')} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
@@ -1481,6 +1497,10 @@ export default function Registry() {
                 assignmentId: a.id,
                 account: a.account_id ? { id: a.account_id, name: a.account_name } : null,
               })}
+              onTransfer={(a) => setTransferFor({
+                account: a.account_id ? { id: a.account_id, name: a.account_name } : null,
+                holder: a.holder,
+              })}
               onNotice={setNotice}
             />
           ) : (
@@ -1489,6 +1509,7 @@ export default function Registry() {
               loading={custodyLoading}
               sort={custodySort}
               onSort={sortCustody}
+              onNotice={setNotice}
             />
           )
         ) : isStaffTab ? (
@@ -1577,6 +1598,15 @@ export default function Registry() {
           role={reassign.name ? reassign.role : undefined}
           onClose={() => setReassign(null)}
           onDone={() => { loadRoster(); refreshCounts(); }}
+        />
+      )}
+
+      {transferFor && (
+        <TransferModal
+          presetAccount={transferFor.account}
+          presetHolder={transferFor.holder}
+          onClose={() => setTransferFor(null)}
+          onDone={onCustodyChanged}
         />
       )}
 

@@ -1,4 +1,4 @@
-import { downloadReceipt, resendSignoff, type Assignment } from '../lib/api';
+import { downloadReceipt, resendSignoff, type Assignment, type SignoffKind } from '../lib/api';
 import { useState } from 'react';
 
 // ── Custody tables (Checked Out / Checked In registry tabs) ─────────────────
@@ -65,17 +65,25 @@ function StatusPill({ overdue }: { overdue: boolean }) {
     : <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap bg-[#eaf5ec] text-[#2d7a3a] border border-[#c9e4d0]">On time</span>;
 }
 
-/** Signed / Awaiting signature (amber) — plus the receipt download once signed. */
-function SignaturePill({ a, onResent }: { a: Assignment; onResent: (msg: string) => void }) {
+/**
+ * Signed (green) / Awaiting signature (amber) for ONE direction, with the
+ * receipt download once signed and a re-send while it is outstanding.
+ */
+function SignaturePill({ a, kind, onResent }: {
+  a: Assignment; kind: SignoffKind; onResent: (msg: string) => void;
+}) {
   const [busy, setBusy] = useState(false);
-  if (a.signed_at) {
+  const signedAt = kind === 'checkin' ? a.checkin_signed_at : a.signed_at;
+  const hasPdf = kind === 'checkin' ? a.has_checkin_pdf : a.has_pdf;
+
+  if (signedAt) {
     return (
       <span className="inline-flex items-center gap-2">
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-[#eaf5ec] text-[#2d7a3a] border border-[#c9e4d0]" title={`Signed ${fmtDateTime(a.signed_at)}`}>
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-[#eaf5ec] text-[#2d7a3a] border border-[#c9e4d0]" title={`Signed ${fmtDateTime(signedAt)}`}>
           Signed
         </span>
-        {a.has_pdf && (
-          <button onClick={() => downloadReceipt(a.id)} className="text-[11px] text-[#C0272D] hover:underline whitespace-nowrap">PDF</button>
+        {hasPdf && (
+          <button onClick={() => downloadReceipt(a.id, kind)} className="text-[11px] text-[#C0272D] hover:underline whitespace-nowrap">PDF</button>
         )}
       </span>
     );
@@ -90,12 +98,12 @@ function SignaturePill({ a, onResent }: { a: Assignment; onResent: (msg: string)
         onClick={async () => {
           setBusy(true);
           try {
-            const r = await resendSignoff(a.id);
+            const r = await resendSignoff(a.id, kind);
             onResent(r.email.ok
-              ? `Sign-off link re-sent to ${r.email.recipients.join(', ')}`
-              : `Could not re-send the sign-off email${r.email.error ? `: ${r.email.error}` : ''}`);
+              ? `Signature link re-sent to ${r.email.recipients.join(', ')}`
+              : `Could not re-send the signature email${r.email.error ? `: ${r.email.error}` : ''}`);
           } catch (e: any) {
-            onResent(e?.message || 'Could not re-send the sign-off email');
+            onResent(e?.message || 'Could not re-send the signature email');
           } finally { setBusy(false); }
         }}
         className="text-[11px] text-[#C0272D] hover:underline whitespace-nowrap disabled:opacity-50"
@@ -103,6 +111,35 @@ function SignaturePill({ a, onResent }: { a: Assignment; onResent: (msg: string)
       >
         {busy ? '…' : 'Resend'}
       </button>
+    </span>
+  );
+}
+
+/**
+ * Amber "Awaiting signatures (1 of 2)" while a transfer is incomplete. A
+ * transfer only counts as done once BOTH people have signed — the giver for
+ * the return and the taker for the receipt.
+ */
+function TransferPill({ a }: { a: Assignment }) {
+  if (!a.transfer_id || !a.transfer_signatures) return null;
+  const t = a.transfer_signatures;
+  const role = a.transfer_role === 'to' ? 'received' : 'handed over';
+  if (t.complete) {
+    return (
+      <span
+        title={`Transfer complete — both signatures on file (keys ${role})`}
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#eaf5ec] text-[#2d7a3a] border border-[#c9e4d0]"
+      >
+        Transfer signed
+      </span>
+    );
+  }
+  return (
+    <span
+      title="A transfer is incomplete until both the releasing and the receiving holder have signed"
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#fff8e6] text-[#7a5a00] border border-[#e8cf8a]"
+    >
+      Awaiting signatures ({t.signed} of {t.total})
     </span>
   );
 }
@@ -124,13 +161,14 @@ function SortHeader({
 }
 
 export function CheckedOutTable({
-  rows, loading, sort, onSort, onCheckIn, onNotice,
+  rows, loading, sort, onSort, onCheckIn, onTransfer, onNotice,
 }: {
   rows: Assignment[];
   loading: boolean;
   sort: SortState;
   onSort: (k: string) => void;
   onCheckIn: (a: Assignment) => void;
+  onTransfer: (a: Assignment) => void;
   onNotice: (msg: string) => void;
 }) {
   return (
@@ -168,14 +206,26 @@ export function CheckedOutTable({
               <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{fmtDateTime(a.checked_out_at)}</td>
               <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{a.due_at ? fmtDate(a.due_at) : '—'}</td>
               <td className="px-3 py-3 text-center"><StatusPill overdue={a.overdue} /></td>
-              <td className="px-3 py-3"><SignaturePill a={a} onResent={onNotice} /></td>
+              <td className="px-3 py-3">
+                <SignaturePill a={a} kind="checkout" onResent={onNotice} />
+                {a.transfer_id && <div className="mt-1"><TransferPill a={a} /></div>}
+              </td>
               <td className="px-3 py-3 text-right whitespace-nowrap">
-                <button
-                  onClick={() => onCheckIn(a)}
-                  className="text-xs border border-[#1a1a1a] text-[#1a1a1a] rounded px-2.5 py-1 hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
-                >
-                  Check In
-                </button>
+                <div className="inline-flex gap-1.5">
+                  <button
+                    onClick={() => onCheckIn(a)}
+                    className="text-xs border border-[#1a1a1a] text-[#1a1a1a] rounded px-2.5 py-1 hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
+                  >
+                    Check In
+                  </button>
+                  <button
+                    onClick={() => onTransfer(a)}
+                    title={`Hand these keys directly to someone else`}
+                    className="text-xs border border-cw-border text-cw-text rounded px-2.5 py-1 hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
+                  >
+                    Transfer
+                  </button>
+                </div>
               </td>
             </tr>
           ))}
@@ -186,12 +236,13 @@ export function CheckedOutTable({
 }
 
 export function CheckedInTable({
-  rows, loading, sort, onSort,
+  rows, loading, sort, onSort, onNotice,
 }: {
   rows: Assignment[];
   loading: boolean;
   sort: SortState;
   onSort: (k: string) => void;
+  onNotice: (msg: string) => void;
 }) {
   return (
     <div className="card overflow-x-auto max-w-full">
@@ -204,14 +255,15 @@ export function CheckedInTable({
             <SortHeader label="Checked Out" sortKey="checked_out_at" sort={sort} onSort={onSort} />
             <SortHeader label="Returned" sortKey="returned_at" sort={sort} onSort={onSort} />
             <SortHeader label="Condition" sortKey="condition" sort={sort} onSort={onSort} />
+            <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Signature</th>
             <SortHeader label="Recorded By" sortKey="recorded_by" sort={sort} onSort={onSort} />
           </tr>
         </thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={7} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+            <tr><td colSpan={8} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
           ) : rows.length === 0 ? (
-            <tr><td colSpan={7} className="px-4 py-8 text-center text-cw-muted">No returned keys yet</td></tr>
+            <tr><td colSpan={8} className="px-4 py-8 text-center text-cw-muted">No returned keys yet</td></tr>
           ) : rows.map((a, i) => (
             <tr key={a.id} className={`border-b border-gray-100 ${i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'}`}>
               <td className="px-3 py-3 font-medium text-[#1a1a1a] whitespace-nowrap">
@@ -223,9 +275,15 @@ export function CheckedInTable({
               <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{fmtDateTime(a.checked_out_at)}</td>
               <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{fmtDateTime(a.returned_at)}</td>
               <td className="px-3 py-3 text-xs text-gray-700 whitespace-nowrap">
-                {a.condition_on_return
-                  ? CONDITION_LABEL[a.condition_on_return] || a.condition_on_return
-                  : <span className="text-gray-300">—</span>}
+                {a.return_reason === 'transferred'
+                  ? <span className="text-[#1a1a1a] font-medium">Transferred</span>
+                  : a.condition_on_return
+                    ? CONDITION_LABEL[a.condition_on_return] || a.condition_on_return
+                    : <span className="text-gray-300">—</span>}
+              </td>
+              <td className="px-3 py-3">
+                <SignaturePill a={a} kind="checkin" onResent={onNotice} />
+                {a.transfer_id && <div className="mt-1"><TransferPill a={a} /></div>}
               </td>
               <td className="px-3 py-3 text-xs text-gray-700 whitespace-nowrap">
                 {a.checkin_recorded_by || a.recorded_by || <span className="text-gray-300">—</span>}

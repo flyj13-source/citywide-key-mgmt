@@ -1,4 +1,4 @@
-import { caraAddress, brandedShell, MailResult, sendBranded } from './custodyMail';
+import { notifyAddresses, brandedShell, MailResult, sendBranded } from './custodyMail';
 
 // ── Key handover notice ──────────────────────────────────────────────────────
 // Sent after a bulk reassignment, to BOTH managers and Cara. It lists every
@@ -90,5 +90,7 @@ export async function sendHandoverNotice(d: HandoverMail): Promise<MailResult> {
     `${d.clients.length} client(s), ${totalKeys} key(s) total.`,
   ].join('\n');
 
-  return sendBranded(subject, html, text, [d.fromEmail || '', d.toEmail || '', caraAddress()]);
+  // notifyAddresses() returns the list, so several configured recipients each
+  // land as their own address rather than one comma-joined blob.
+  return sendBranded(subject, html, text, [d.fromEmail || '', d.toEmail || '', ...notifyAddresses()]);
 }

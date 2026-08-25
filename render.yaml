@@ -82,12 +82,16 @@ services:
         sync: false
       - key: SMTP_PASS
         sync: false
-      # Second recipient on every key custody email (with the holder).
+      # BOOTSTRAP ONLY for the second recipient on every key custody email (with
+      # the holder). The live value lives in the `settings` table and is edited
+      # under Settings → Key Custody Notifications; this seeds a new database
+      # and is the fallback until something is stored.
       - key: CARA_EMAIL
         sync: false
       - key: TEAMS_WEBHOOK_URL
         sync: false
-      # Public URL of the static site below — used to build sign-off magic links.
+      # Public URL of the static site below — used to build the check-out and
+      # check-in sign-off magic links.
       - key: FRONTEND_URL
         fromService:
           type: web

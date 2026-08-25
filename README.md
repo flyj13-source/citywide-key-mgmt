@@ -23,7 +23,10 @@ Open http://localhost:5173
 - **AES-256-GCM encrypted code vault** — alarm codes and door codes encrypted at rest, reveal button with 5-second auto-hide, every reveal audit logged
 - **Claude AI assistant** (claude-sonnet-4-6) with full registry context — ask natural language questions about keys, staff, codes
 - **Contractor magic link portal** — email invite, 48hr TTL token, HTML5 canvas e-signature, SHA-256 signature hash, PDF receipt generated with pdf-lib
-- **Key custody workflow inside the registry** — multi-key check-out (several key types and quantities in one transaction), per-client availability that blocks over-checkout, self-service *or* on-behalf recording (the audit trail names both the actor and the holder), CW-branded check-out/check-in emails to the holder **and** Cara, and a 48hr magic-link sign-off with an e-signature + branded PDF receipt
+- **Key custody workflow inside the registry** — multi-key check-out (several key types and quantities in one transaction), per-client availability that blocks over-checkout, self-service *or* on-behalf recording (the audit trail names both the actor and the holder), CW-branded check-out/check-in emails to the holder **and** the configured notification recipient, and a 48hr magic-link sign-off on **both** directions with an e-signature + branded PDF receipt emailed to both parties
+- **Person-to-person key transfer** — keys handed straight from one employee/IC to another move in ONE atomic operation, so custody never shows the same key held by two people or by nobody; the two records are cross-referenced and the transfer stays *Awaiting signatures (1 of 2)* until both the releasing and the receiving holder have signed
+- **Custody Report** — one filterable view over the whole check-out / check-in history (date range, holder, client, holder type, status, signature state) with a *N out · N overdue · N awaiting signature* summary bar, exportable to Excel and a branded PDF. Exports never contain door or alarm access codes
+- **Configurable notification recipient** — the "and Cara" copy of every custody email is stored in the database and edited under **Settings → Key Custody Notifications**, so it survives a staff change without a redeploy
 - **Bulk manager reassignment** — transfer a manager's clients and key responsibility to another manager in one atomic action, with per-client checkboxes for partial transfers, an audit entry per client plus a summary, a 30-day undo, an optional CW-branded key-handover email, and an amber "Handover pending" pill that keeps registry truth and physical truth separate
 - **M365 integrations:** Outlook SMTP, Teams adaptive card webhook, OneDrive folder sync
 - **Full audit trail** — every action timestamped, attributed, and paginated
@@ -33,7 +36,7 @@ Open http://localhost:5173
 1. **Login** — CW branded
 2. **Dashboard** — 4 metrics, overdue panel, recent activity
 3. **Key Registry** — searchable/paginated table of all accounts
-4. **Key Custody** — Check Out / In lives *inside* the Key Registry (header buttons + **Checked Out** / **Checked In** tabs), with a multi-key checkbox dropdown, availability guardrails, CW-branded emails, and a magic-link sign-off
+4. **Key Custody** — Check Out / In / Transfer live *inside* the Key Registry (header buttons + **Checked Out** / **Checked In** tabs), with a multi-key checkbox dropdown, availability guardrails, CW-branded emails, a magic-link sign-off on every event, and a **Custody Report** (⋯ More → Custody Report) with filters, a summary bar and Excel/PDF exports
 5. **Code Vault** — encrypted codes table, reveal button (5s auto-hide), audit logged
 6. **AI Assistant** — chat panel, full registry passed as context
 7. **Audit Log** — immutable table, filterable, Excel export

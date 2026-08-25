@@ -2,24 +2,72 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import SignaturePad, { type SignaturePadHandle } from '../components/SignaturePad';
 import { CWLogoSidebar } from '../components/CWLogo';
-import { getSignoffByToken, submitSignoff, type KeyLine } from '../lib/api';
+import { getSignoffByToken, submitSignoff, type SignoffView } from '../lib/api';
 
-// ── Public key check-out sign-off ────────────────────────────────────────────
-// Reached from the tokenized link in the check-out email (48h TTL, no login).
-// Applies to City Wide employees AND independent contractors alike.
+// ── Public key sign-off ──────────────────────────────────────────────────────
+// Reached from the tokenized link in a check-out OR check-in email (48h TTL, no
+// login). Applies to City Wide employees AND independent contractors alike.
+//
+// The two directions are DIFFERENT acts and are worded as such throughout: a
+// check-out form asks the holder to acknowledge that they are RECEIVING keys; a
+// check-in form asks them to confirm they are RETURNING them. Signing the wrong
+// wording would be evidence of the wrong event.
 
-interface SignoffView {
-  id: number;
-  holder: string;
-  holder_type: 'employee' | 'ic';
-  client: string;
-  keys: KeyLine[];
-  total_keys: number;
-  checked_out_at: string;
-  due_at: string | null;
-  recorded_by: string | null;
-  signed_at: string | null;
+const CONDITION_LABEL: Record<string, string> = {
+  good: 'Good', damaged: 'Damaged', missing_copy: 'Missing copy',
+};
+
+interface Copy {
+  pageTitle: string;
+  lead: string;
+  detailsTitle: string;
+  checkboxLabel: string;
+  terms: string[];
+  submitLabel: string;
+  submitBusy: string;
+  doneTitle: string;
+  doneBody: (holder: string, client: string) => string;
+  keysHeader: string;
 }
+
+const COPY: Record<'checkout' | 'checkin', Copy> = {
+  checkout: {
+    pageTitle: 'Key Receipt Acknowledgement',
+    lead: 'please review the keys below and sign to confirm you received them.',
+    detailsTitle: 'Check-out details',
+    checkboxLabel: 'I acknowledge receipt of these keys',
+    terms: [
+      'I will safeguard all keys and access credentials',
+      'I will not duplicate or share keys with unauthorized personnel',
+      'I will return all keys immediately upon request or at the end of my assignment',
+      'I will report any lost or stolen keys to City Wide Boston within 24 hours',
+    ],
+    submitLabel: 'Submit signature & acknowledge receipt',
+    submitBusy: 'Generating signed receipt…',
+    doneTitle: 'Receipt acknowledged',
+    doneBody: (holder, client) =>
+      `Thank you, ${holder}. Your signed receipt for ${client} has been stored securely with City Wide Boston.`,
+    keysHeader: 'Key type',
+  },
+  checkin: {
+    pageTitle: 'Key Return Confirmation',
+    lead: 'please review the keys below and sign to confirm you returned them.',
+    detailsTitle: 'Return details',
+    checkboxLabel: 'I confirm I have returned these keys',
+    terms: [
+      'I have handed back every key listed above',
+      'I have retained no copies or duplicates of them',
+      'I no longer hold access to the client site by means of these keys',
+      'I will report any discrepancy to City Wide Boston immediately',
+    ],
+    submitLabel: 'Submit signature & confirm return',
+    submitBusy: 'Generating signed receipt…',
+    doneTitle: 'Return confirmed',
+    doneBody: (holder, client) =>
+      `Thank you, ${holder}. Your signed return receipt for ${client} has been stored securely with City Wide Boston.`,
+    keysHeader: 'Key type returned',
+  },
+};
 
 const hasZone = (s: string) => /[Tt]/.test(s) || /[Zz]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s);
 
@@ -78,6 +126,9 @@ export default function KeySignoff() {
       .finally(() => setLoading(false));
   }, [token]);
 
+  const action: 'checkout' | 'checkin' = data?.action === 'checkin' ? 'checkin' : 'checkout';
+  const copy = COPY[action];
+
   const submit = async () => {
     const signature = padRef.current?.toDataURL();
     if (!signature) { setError('Please sign in the box before submitting.'); return; }
@@ -118,10 +169,9 @@ export default function KeySignoff() {
       <Shell>
         <div className="bg-white border border-green-200 rounded-lg p-8 text-center">
           <div className="text-green-600 text-4xl mb-3">✓</div>
-          <div className="text-xl font-bold text-cw-text mb-2">Receipt acknowledged</div>
+          <div className="text-xl font-bold text-cw-text mb-2">{copy.doneTitle}</div>
           <p className="text-sm text-cw-muted">
-            Thank you, {data?.holder}. Your signed receipt for <strong>{data?.client}</strong> has been stored securely
-            with City Wide Boston.
+            {copy.doneBody(data?.holder ?? '', data?.client ?? '')} A copy has been emailed to you and to City Wide.
           </p>
           {pdfNote && (
             <p className="text-xs text-[#7a5a00] bg-[#fff8e6] border border-[#e8cf8a] rounded px-3 py-2 mt-4">{pdfNote}</p>
@@ -134,28 +184,54 @@ export default function KeySignoff() {
   return (
     <Shell>
       <div className="bg-white border border-cw-border rounded-lg p-6">
-        <h1 className="text-xl font-bold mb-1">Key Receipt Acknowledgement</h1>
+        <h1 className="text-xl font-bold mb-1">{copy.pageTitle}</h1>
         <p className="text-sm text-cw-muted">
-          Hello <strong>{data?.holder}</strong>, please review the keys below and sign to confirm you received them.
+          Hello <strong>{data?.holder}</strong>, {copy.lead}
         </p>
+        <p className="mt-3 text-sm font-semibold text-[#C0272D]">
+          {action === 'checkin' ? 'You are returning these keys.' : 'You are receiving these keys.'}
+        </p>
+        {data?.is_transfer && data.transfer_counterparty && (
+          <p className="mt-2 text-xs text-cw-text bg-[#f4f4f2] border-l-4 border-[#C0272D] rounded px-3 py-2">
+            {action === 'checkin'
+              ? <>Handed directly to <strong>{data.transfer_counterparty}</strong> — this transfer is not complete until you both sign.</>
+              : <>Received directly from <strong>{data.transfer_counterparty}</strong> — this transfer is not complete until you both sign.</>}
+          </p>
+        )}
       </div>
 
       <div className="bg-white border border-cw-border rounded-lg overflow-hidden">
         <div className="px-5 py-3 bg-cw-black">
-          <h2 className="text-white font-semibold text-sm">Check-out details</h2>
+          <h2 className="text-white font-semibold text-sm">{copy.detailsTitle}</h2>
         </div>
         <dl className="px-5 py-4 text-sm grid grid-cols-[130px_1fr] gap-y-2">
-          <dt className="text-cw-muted">Client</dt><dd className="font-medium">{data?.client}</dd>
+          <dt className="text-cw-muted">Client</dt>
+          <dd className="font-medium">
+            {data?.client}
+            {data?.bc_number && <span className="text-cw-muted font-normal"> · BC #{data.bc_number}</span>}
+          </dd>
           <dt className="text-cw-muted">Holder</dt>
           <dd className="font-medium">{data?.holder} <span className="text-cw-muted font-normal">({data?.holder_type === 'ic' ? 'Independent Contractor' : 'City Wide Employee'})</span></dd>
           <dt className="text-cw-muted">Checked out</dt><dd className="font-medium">{fmt(data?.checked_out_at ?? null)}</dd>
-          <dt className="text-cw-muted">Due back</dt><dd className="font-medium">{fmtDay(data?.due_at ?? null)}</dd>
+          {action === 'checkin' ? (
+            <>
+              <dt className="text-cw-muted">Returned</dt><dd className="font-medium">{fmt(data?.returned_at ?? null)}</dd>
+              <dt className="text-cw-muted">Condition</dt>
+              <dd className="font-medium">
+                {data?.condition_on_return
+                  ? CONDITION_LABEL[data.condition_on_return] || data.condition_on_return
+                  : '—'}
+              </dd>
+            </>
+          ) : (
+            <><dt className="text-cw-muted">Due back</dt><dd className="font-medium">{fmtDay(data?.due_at ?? null)}</dd></>
+          )}
           {data?.recorded_by && (<><dt className="text-cw-muted">Recorded by</dt><dd className="font-medium">{data.recorded_by}</dd></>)}
         </dl>
         <table className="w-full text-sm border-t border-cw-border">
           <thead>
             <tr className="bg-[#f4f4f2] text-xs uppercase tracking-wide text-cw-muted">
-              <th className="text-left px-5 py-2 font-semibold">Key type</th>
+              <th className="text-left px-5 py-2 font-semibold">{copy.keysHeader}</th>
               <th className="text-right px-5 py-2 font-semibold">Qty</th>
             </tr>
           </thead>
@@ -182,13 +258,10 @@ export default function KeySignoff() {
             checked={acknowledged}
             onChange={(e) => setAcknowledged(e.target.checked)}
           />
-          <span className="text-cw-text font-medium">I acknowledge receipt of these keys</span>
+          <span className="text-cw-text font-medium">{copy.checkboxLabel}</span>
         </label>
         <ul className="list-disc list-inside space-y-1 text-xs text-cw-muted pl-7">
-          <li>I will safeguard all keys and access credentials</li>
-          <li>I will not duplicate or share keys with unauthorized personnel</li>
-          <li>I will return all keys immediately upon request or at the end of my assignment</li>
-          <li>I will report any lost or stolen keys to City Wide Boston within 24 hours</li>
+          {copy.terms.map((t) => <li key={t}>{t}</li>)}
         </ul>
       </div>
 
@@ -204,7 +277,7 @@ export default function KeySignoff() {
         disabled={signing || !acknowledged}
         className="w-full py-3 text-base bg-[#C0272D] text-white font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
-        {signing ? 'Generating signed receipt…' : 'Submit signature & acknowledge receipt'}
+        {signing ? copy.submitBusy : copy.submitLabel}
       </button>
 
       <p className="text-center text-xs text-cw-muted">

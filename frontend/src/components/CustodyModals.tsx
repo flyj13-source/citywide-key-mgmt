@@ -453,7 +453,7 @@ export function CheckInModal({
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [done, setDone] = useState<{ mail: MailOutcome; partial: boolean; holder: string } | null>(null);
+  const [done, setDone] = useState<{ mail: MailOutcome; partial: boolean; holder: string; link: string } | null>(null);
 
   // All open custody records; filtered to the chosen client below so a preset
   // row narrows the list without hiding the rest of the registry.
@@ -506,7 +506,7 @@ export function CheckInModal({
         notes: notes.trim() || null,
         on_behalf: (me?.name ?? '').trim().toLowerCase() !== selected.holder.trim().toLowerCase(),
       });
-      setDone({ mail: r.email, partial: r.partial, holder: selected.holder });
+      setDone({ mail: r.email, partial: r.partial, holder: selected.holder, link: r.signoff_link });
       onDone();
     } catch (e: any) {
       setError(e?.message || 'Check-in failed');
@@ -525,7 +525,13 @@ export function CheckInModal({
               : <>All keys returned by <span className="font-semibold">{done.holder}</span>. The record moved to Checked In.</>}
           </div>
           <MailBanner mail={done.mail} kind="checkin" />
-          <p className="text-xs text-cw-muted">No signature is required for a return.</p>
+          <div className="text-xs text-cw-muted">
+            Return signature link (48-hour expiry) — also included in the email:
+            <div className="mt-1 font-mono break-all bg-gray-50 border border-cw-border rounded px-2 py-1.5">{done.link}</div>
+          </div>
+          <p className="text-xs text-cw-muted">
+            The record shows <span className="font-semibold text-[#7a5a00]">Awaiting signature</span> until {done.holder} signs.
+          </p>
         </div>
         <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
           <button onClick={onClose} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">Done</button>
@@ -616,7 +622,7 @@ export function CheckInModal({
           {saving ? 'Checking in…' : `Check In${totalReturning ? ` ${totalReturning} Key${totalReturning === 1 ? '' : 's'}` : ''}`}
         </button>
         <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
-        <span className="text-[11px] text-gray-400 ml-auto">No signature required · emails the holder and Cara.</span>
+        <span className="text-[11px] text-gray-400 ml-auto">Emails the holder and Cara · sends a signature form.</span>
       </div>
     </Modal>
   );

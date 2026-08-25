@@ -160,3 +160,63 @@ export function checkAvailability(accountId: number, lines: KeyLine[]): string |
   }
   return null;
 }
+
+// ── Record context shared by the routes, the mailer and the PDFs ─────────────
+
+/**
+ * The client-facing account number. Customers carry a BC client number; IC
+ * vendor records carry a BC vendor number. Every custody notification and
+ * report shows whichever one the record actually has, rather than a blank
+ * column that reads as "this client has no number".
+ */
+export function bcNumberFor(account: any): string | null {
+  if (!account) return null;
+  const v = account.record_type === 'customer'
+    ? (account.bc_client_number || account.bc_vendor_number)
+    : (account.bc_vendor_number || account.bc_client_number);
+  const s = v == null ? '' : String(v).trim();
+  return s === '' ? null : s;
+}
+
+/** BC number for an assignment row, resolved through its account_id. */
+export function bcNumberForAssignment(row: any): string | null {
+  if (!row?.account_id) return null;
+  const raw = db.prepare('SELECT record_type, bc_client_number, bc_vendor_number FROM accounts WHERE id = ?')
+    .get(row.account_id) as any;
+  return raw ? bcNumberFor(Object.assign({}, raw)) : null;
+}
+
+export interface TransferSignatureState {
+  /** How many of the two required signatures have landed. */
+  signed: number;
+  total: 2;
+  complete: boolean;
+  from_signed: boolean;
+  to_signed: boolean;
+}
+
+/**
+ * A transfer is INCOMPLETE until both halves are signed: the releasing holder
+ * signs a check-IN, the receiving holder signs a check-OUT. Both sides of a
+ * transfer share a transfer_id, so the state is derived from the group rather
+ * than duplicated onto each row (where the two copies could disagree).
+ *
+ * A transfer that had to draw on several of the from-holder's open check-outs
+ * still produces exactly TWO signature forms: the check-in form lives on the
+ * PRIMARY from-record (transfer_role='from' with the lowest id) and covers the
+ * whole transferred key set.
+ */
+export function transferSignatureState(transferId: string): TransferSignatureState {
+  const rows = (db.prepare(
+    `SELECT id, transfer_role, signed_at, checkin_signed_at FROM key_assignments
+      WHERE transfer_id = ? ORDER BY id ASC`
+  ).all(transferId) as any[]).map((r) => Object.assign({}, r));
+
+  const fromRows = rows.filter((r) => r.transfer_role === 'from');
+  const toRow = rows.find((r) => r.transfer_role === 'to');
+
+  const from_signed = !!fromRows[0]?.checkin_signed_at;
+  const to_signed = !!toRow?.signed_at;
+  const signed = (from_signed ? 1 : 0) + (to_signed ? 1 : 0);
+  return { signed, total: 2, complete: signed === 2, from_signed, to_signed };
+}

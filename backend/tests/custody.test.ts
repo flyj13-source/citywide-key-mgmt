@@ -246,15 +246,16 @@ describe('MULTI-KEY CHECK-OUT', () => {
   });
 
   // ── Check-in ──────────────────────────────────────────────────────────────
-  it('check-in moves the record to Checked In, emails, and demands no signature', async () => {
+  it('check-in moves the record to Checked In, emails, and REQUESTS a signature', async () => {
     const res = await auth(request(app).post('/api/assignments/checkin')).send({
       id: assignmentId, condition_on_return: 'good', notes: 'All accounted for',
     });
     expect(res.status).toBe(200);
     expect(res.body.partial).toBe(false);
     expect(res.body.assignment.status).toBe('returned');
-    // No signature was requested for the return.
-    expect(res.body).not.toHaveProperty('signoff_link');
+    // Every custody EVENT generates a signature form — returns included.
+    expect(res.body.signoff_link).toMatch(/^https:\/\/keys\.example\.test\/key-signoff\/[a-f0-9]{64}$/);
+    expect(res.body.assignment.checkin_signoff_pending).toBe(true);
 
     const out = await auth(request(app).get('/api/assignments?status=checked_out&limit=100'));
     expect(out.body.assignments.find((a: any) => a.id === assignmentId)).toBeUndefined();
@@ -381,5 +382,417 @@ describe('LEGACY SINGLE-KEY ROWS', () => {
     expect(row.key_type).toBe('physical');
     // …and is surfaced as one best-effort key so nothing vanishes from the tab.
     expect(res.body.assignment.keys).toEqual([{ type: 'metal', label: 'Metal Key', qty: 1 }]);
+  });
+});
+
+// ═════════════════════════════ CHECK-IN SIGNATURE ═══════════════════════════
+// Every custody EVENT generates a signature form — a return is an event.
+describe('CHECK-IN SIGNATURE', () => {
+  let outId = 0;
+  let checkinToken = '';
+
+  it('a return mints its own 48h token, distinct from the check-out token', async () => {
+    const out = await auth(request(app).post('/api/assignments/checkout')).send({
+      account_id: clientId, holder: 'Signback Sam', holder_type: 'employee',
+      holder_email: 'sam@example.test', keys: [{ type: 'metal', qty: 1 }],
+    });
+    expect(out.status).toBe(201);
+    outId = out.body.id;
+    const checkoutToken = one('SELECT signoff_token FROM key_assignments WHERE id = ?', outId).signoff_token;
+
+    const back = await auth(request(app).post('/api/assignments/checkin')).send({
+      id: outId, condition_on_return: 'good',
+    });
+    expect(back.status).toBe(200);
+
+    const row = one('SELECT * FROM key_assignments WHERE id = ?', outId);
+    expect(row.checkin_signoff_token).toBeTruthy();
+    expect(row.checkin_signoff_token).not.toBe(checkoutToken);
+    expect(row.return_reason).toBe('returned');
+    checkinToken = row.checkin_signoff_token;
+
+    const expires = new Date(String(row.checkin_signoff_expires_at)).getTime() - Date.now();
+    expect(expires).toBeGreaterThan(47 * 3600 * 1000);
+    expect(expires).toBeLessThanOrEqual(48 * 3600 * 1000);
+  });
+
+  it('the public form loads as a RETURN, not a receipt', async () => {
+    const res = await request(app).get(`/api/signoff/${checkinToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('checkin');
+    expect(res.body.holder).toBe('Signback Sam');
+    expect(res.body.keys).toEqual([{ type: 'metal', label: 'Metal Key', qty: 1 }]);
+    expect(res.body.condition_on_return).toBe('good');
+  });
+
+  it('signing the return stores its OWN signature without touching the check-out one', async () => {
+    // Sign the check-out first so both signatures coexist on one record.
+    const checkoutToken = one('SELECT signoff_token FROM key_assignments WHERE id = ?', outId).signoff_token;
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const first = await request(app).post(`/api/signoff/${checkoutToken}/sign`).send({ signature_data: png });
+    expect(first.status).toBe(200);
+    expect(first.body.action).toBe('checkout');
+
+    const second = await request(app).post(`/api/signoff/${checkinToken}/sign`).send({ signature_data: png });
+    expect(second.status).toBe(200);
+    expect(second.body.action).toBe('checkin');
+
+    const row = one('SELECT * FROM key_assignments WHERE id = ?', outId);
+    expect(row.signed_at).toBeTruthy();
+    expect(row.checkin_signed_at).toBeTruthy();
+    expect(row.signature_hash).toHaveLength(64);
+    expect(row.checkin_signature_hash).toHaveLength(64);
+    // Both receipts exist as separate documents.
+    expect(row.pdf_path).toContain('keycheckout_');
+    expect(row.checkin_pdf_path).toContain('keycheckin_');
+    // Both tokens are burned.
+    expect(row.signoff_token).toBeNull();
+    expect(row.checkin_signoff_token).toBeNull();
+  });
+
+  it('audits checkin_signed and logs the signed-receipt email attempt', () => {
+    const signed = one("SELECT * FROM audit_log WHERE action = 'checkin_signed' ORDER BY id DESC LIMIT 1");
+    expect(signed).toBeTruthy();
+    expect(JSON.parse(signed.metadata).kind).toBe('checkin');
+
+    const mail = all("SELECT * FROM audit_log WHERE action IN ('custody_email_sent','custody_email_failed')")
+      .map((r) => JSON.parse(r.metadata))
+      .filter((m) => m.kind === 'signed_receipt');
+    expect(mail.length).toBeGreaterThanOrEqual(2);
+    expect(mail.some((m) => m.signed_kind === 'checkout')).toBe(true);
+    expect(mail.some((m) => m.signed_kind === 'checkin')).toBe(true);
+  });
+
+  it('a return cannot be signed twice', async () => {
+    const res = await request(app).post(`/api/signoff/${checkinToken}/sign`).send({
+      signature_data: 'data:image/png;base64,iVBORw0KGgo=',
+    });
+    // The token was cleared on the first signature, so the link is simply dead.
+    expect([404, 409]).toContain(res.status);
+  });
+
+  it('serves BOTH receipts, addressed by kind', async () => {
+    const out = await auth(request(app).get(`/api/assignments/${outId}/receipt?kind=checkout`));
+    expect(out.status).toBe(200);
+    expect(out.headers['content-type']).toBe('application/pdf');
+    const back = await auth(request(app).get(`/api/assignments/${outId}/receipt?kind=checkin`));
+    expect(back.status).toBe(200);
+    expect(back.headers['content-type']).toBe('application/pdf');
+  });
+
+  it('resend-signoff refuses to re-request a signature that already landed', async () => {
+    const res = await auth(request(app).post(`/api/assignments/${outId}/resend-signoff`)).send({ kind: 'checkin' });
+    expect(res.status).toBe(409);
+  });
+});
+
+// ═══════════════════════════ PERSON-TO-PERSON TRANSFER ══════════════════════
+describe('KEY TRANSFER', () => {
+  // Its own client with untouched inventory — the shared one has been drawn
+  // down by the check-out tests above, and a transfer test that fails on
+  // availability tells you nothing about transfers.
+  let xferClientId = 0;
+  let transfer: any = null;
+
+  beforeAll(async () => {
+    const created = await auth(request(app).post('/api/accounts')).send({
+      record_type: 'customer',
+      ic_company_name: 'TRANSFER TEST CLIENT',
+      bc_client_number: '01014000777',
+      am_metal: 4, am_card: 3, am_fob: 2, am_dispenser: 6,
+    });
+    expect(created.status).toBe(201);
+    xferClientId = created.body.id;
+  });
+
+  it('lists who currently holds keys at a client', async () => {
+    const out = await auth(request(app).post('/api/assignments/checkout')).send({
+      account_id: xferClientId, holder: 'Transfer Tina', holder_type: 'employee',
+      holder_email: 'tina@example.test', keys: [{ type: 'metal', qty: 2 }, { type: 'card', qty: 1 }],
+    });
+    expect(out.status).toBe(201);
+
+    const res = await auth(request(app).get(`/api/assignments/current-holders?account_id=${xferClientId}`));
+    expect(res.status).toBe(200);
+    const tina = res.body.holders.find((h: any) => h.holder === 'Transfer Tina');
+    expect(tina.total_keys).toBe(3);
+  });
+
+  it('reports exactly what the FROM holder has out at the client', async () => {
+    const res = await auth(request(app).get(
+      `/api/assignments/transferable?account_id=${xferClientId}&holder=${encodeURIComponent('Transfer Tina')}`
+    ));
+    expect(res.status).toBe(200);
+    expect(res.body.total_keys).toBe(3);
+    expect(res.body.keys.map((k: any) => k.type).sort()).toEqual(['card', 'metal']);
+  });
+
+  it('refuses a transfer of more keys than the holder actually has', async () => {
+    const res = await auth(request(app).post('/api/assignments/transfer')).send({
+      account_id: xferClientId, from_holder: 'Transfer Tina', to_holder: 'Receiving Rick',
+      to_holder_type: 'employee', keys: [{ type: 'metal', qty: 5 }],
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('cannot transfer 5');
+  });
+
+  it('refuses a transfer to the same person', async () => {
+    const res = await auth(request(app).post('/api/assignments/transfer')).send({
+      account_id: xferClientId, from_holder: 'Transfer Tina', to_holder: 'transfer tina',
+      to_holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('moves custody atomically and links both records', async () => {
+    const res = await auth(request(app).post('/api/assignments/transfer')).send({
+      account_id: xferClientId, from_holder: 'Transfer Tina',
+      to_holder: 'Receiving Rick', to_holder_type: 'ic', to_holder_email: 'rick@example.test',
+      keys: [{ type: 'metal', qty: 2 }, { type: 'card', qty: 1 }],
+    });
+    expect(res.status).toBe(201);
+    transfer = res.body;
+
+    const fromRow = one('SELECT * FROM key_assignments WHERE id = ?', transfer.from.record_id);
+    const toRow = one('SELECT * FROM key_assignments WHERE id = ?', transfer.to.record_id);
+
+    expect(fromRow.status).toBe('returned');
+    expect(fromRow.return_reason).toBe('transferred');
+    expect(fromRow.transfer_role).toBe('from');
+    expect(toRow.status).toBe('checked_out');
+    expect(toRow.transfer_role).toBe('to');
+    expect(toRow.assignee).toBe('Receiving Rick');
+    expect(toRow.holder_type).toBe('ic');
+
+    // Cross-referenced in both directions, under one transfer id.
+    expect(fromRow.transfer_id).toBe(toRow.transfer_id);
+    expect(fromRow.linked_assignment_id).toBe(toRow.id);
+    expect(toRow.linked_assignment_id).toBe(fromRow.id);
+  });
+
+  it('never shows the same key held by two people', async () => {
+    const out = await auth(request(app).get('/api/assignments?status=checked_out&limit=500'));
+    const atClient = out.body.assignments.filter((a: any) => a.account_id === xferClientId);
+    expect(atClient.some((a: any) => a.holder === 'Transfer Tina')).toBe(false);
+    const rick = atClient.filter((a: any) => a.holder === 'Receiving Rick');
+    expect(rick).toHaveLength(1);
+    expect(rick[0].total_keys).toBe(3);
+  });
+
+  it('generates TWO signature forms — a check-IN for the giver, a check-OUT for the taker', async () => {
+    expect(transfer.from.signoff_link).toMatch(/\/key-signoff\/[a-f0-9]{64}$/);
+    expect(transfer.to.signoff_link).toMatch(/\/key-signoff\/[a-f0-9]{64}$/);
+    expect(transfer.from.signoff_link).not.toBe(transfer.to.signoff_link);
+
+    const fromToken = transfer.from.signoff_link.split('/').pop();
+    const toToken = transfer.to.signoff_link.split('/').pop();
+
+    const giving = await request(app).get(`/api/signoff/${fromToken}`);
+    expect(giving.body.action).toBe('checkin');
+    expect(giving.body.holder).toBe('Transfer Tina');
+    expect(giving.body.is_transfer).toBe(true);
+    expect(giving.body.transfer_counterparty).toBe('Receiving Rick');
+    expect(giving.body.total_keys).toBe(3);
+
+    const taking = await request(app).get(`/api/signoff/${toToken}`);
+    expect(taking.body.action).toBe('checkout');
+    expect(taking.body.holder).toBe('Receiving Rick');
+    expect(taking.body.transfer_counterparty).toBe('Transfer Tina');
+    expect(taking.body.total_keys).toBe(3);
+  });
+
+  it('stays INCOMPLETE at 1 of 2 until both signatures land', async () => {
+    expect(transfer.signatures).toEqual({
+      signed: 0, total: 2, complete: false, from_signed: false, to_signed: false,
+    });
+
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const toToken = transfer.to.signoff_link.split('/').pop();
+    const first = await request(app).post(`/api/signoff/${toToken}/sign`).send({ signature_data: png });
+    expect(first.status).toBe(200);
+    expect(first.body.transfer_signatures).toMatchObject({ signed: 1, complete: false, to_signed: true });
+
+    const fromToken = transfer.from.signoff_link.split('/').pop();
+    const second = await request(app).post(`/api/signoff/${fromToken}/sign`).send({ signature_data: png });
+    expect(second.status).toBe(200);
+    expect(second.body.transfer_signatures).toEqual({
+      signed: 2, total: 2, complete: true, from_signed: true, to_signed: true,
+    });
+  });
+
+  it('audits keys_transferred with from, to, client and keys', () => {
+    const row = one("SELECT * FROM audit_log WHERE action = 'keys_transferred' ORDER BY id DESC LIMIT 1");
+    expect(row).toBeTruthy();
+    const meta = JSON.parse(row.metadata);
+    expect(meta.from).toBe('Transfer Tina');
+    expect(meta.to).toBe('Receiving Rick');
+    expect(meta.client).toBe('TRANSFER TEST CLIENT');
+    expect(meta.total_keys).toBe(3);
+    expect(meta.keys.map((k: any) => k.type).sort()).toEqual(['card', 'metal']);
+  });
+
+  it('splits a source check-out when only part of it is transferred', async () => {
+    const out = await auth(request(app).post('/api/assignments/checkout')).send({
+      account_id: xferClientId, holder: 'Partial Paula', holder_type: 'employee',
+      keys: [{ type: 'dispenser', qty: 4 }],
+    });
+    expect(out.status).toBe(201);
+
+    const res = await auth(request(app).post('/api/assignments/transfer')).send({
+      account_id: xferClientId, from_holder: 'Partial Paula', to_holder: 'Half Hank',
+      to_holder_type: 'employee', keys: [{ type: 'dispenser', qty: 1 }],
+    });
+    expect(res.status).toBe(201);
+
+    // Paula keeps the 3 she did not hand over; Hank holds exactly 1.
+    const stillOut = one('SELECT * FROM key_assignments WHERE id = ?', out.body.id);
+    expect(stillOut.status).toBe('checked_out');
+    expect(JSON.parse(stillOut.keys_json)).toEqual([{ type: 'dispenser', label: 'Dispenser Key', qty: 3 }]);
+
+    const hank = one("SELECT * FROM key_assignments WHERE assignee = 'Half Hank'");
+    expect(JSON.parse(hank.keys_json)).toEqual([{ type: 'dispenser', label: 'Dispenser Key', qty: 1 }]);
+
+    // The transferred slice became its own closed record, not a lost key.
+    const slice = one('SELECT * FROM key_assignments WHERE id = ?', res.body.from.record_id);
+    expect(slice.status).toBe('returned');
+    expect(slice.return_reason).toBe('transferred');
+    expect(JSON.parse(slice.keys_json)).toEqual([{ type: 'dispenser', label: 'Dispenser Key', qty: 1 }]);
+  });
+});
+
+// ═══════════════════════════════ CUSTODY REPORT ═════════════════════════════
+describe('CUSTODY REPORT', () => {
+  it('returns rows, a summary bar and the filter description', async () => {
+    const res = await auth(request(app).get('/api/exports/custody-report'));
+    expect(res.status).toBe(200);
+    expect(res.body.rows.length).toBeGreaterThan(0);
+    expect(res.body.summary).toMatchObject({
+      total: expect.any(Number),
+      currently_out: expect.any(Number),
+      overdue: expect.any(Number),
+      awaiting_signature: expect.any(Number),
+    });
+    expect(res.body.description).toBe('All custody records');
+
+    const row = res.body.rows[0];
+    for (const field of [
+      'holder', 'holder_type_label', 'client', 'bc_number', 'keys_summary',
+      'checked_out_at', 'due_at', 'returned_at', 'status_label', 'signature_label', 'recorded_by',
+    ]) {
+      expect(row).toHaveProperty(field);
+    }
+    // The BC number is resolved from the client record, not stored on the
+    // assignment — every row for a numbered client must carry it.
+    const onTestClient = res.body.rows.find((r: any) => r.client === 'CUSTODY TEST CLIENT');
+    expect(onTestClient.bc_number).toBe('01014000999');
+  });
+
+  it('filters by holder, holder type, status and signature state', async () => {
+    const byHolder = await auth(request(app).get('/api/exports/custody-report?holder=Receiving'));
+    expect(byHolder.body.rows.every((r: any) => r.holder.includes('Receiving'))).toBe(true);
+
+    const ics = await auth(request(app).get('/api/exports/custody-report?holder_type=ic'));
+    expect(ics.body.rows.every((r: any) => r.holder_type === 'ic')).toBe(true);
+
+    const active = await auth(request(app).get('/api/exports/custody-report?status=active'));
+    expect(active.body.rows.every((r: any) => r.status === 'checked_out')).toBe(true);
+    expect(active.body.summary.currently_out).toBe(active.body.summary.total);
+
+    const returned = await auth(request(app).get('/api/exports/custody-report?status=returned'));
+    expect(returned.body.rows.every((r: any) => r.status === 'returned')).toBe(true);
+
+    const awaiting = await auth(request(app).get('/api/exports/custody-report?signature=awaiting'));
+    expect(awaiting.body.rows.every((r: any) => r.signature_status !== 'signed')).toBe(true);
+
+    const signed = await auth(request(app).get('/api/exports/custody-report?signature=signed'));
+    expect(signed.body.rows.every((r: any) => r.signature_status === 'signed')).toBe(true);
+    expect(signed.body.summary.awaiting_signature).toBe(0);
+  });
+
+  it('filters by client and by date range', async () => {
+    const byClient = await auth(request(app).get('/api/exports/custody-report?client=CUSTODY%20TEST'));
+    expect(byClient.body.rows.length).toBeGreaterThan(0);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const inRange = await auth(request(app).get(`/api/exports/custody-report?date_from=${today}&date_to=${today}`));
+    expect(inRange.body.rows.length).toBeGreaterThan(0);
+    expect(inRange.body.description).toContain('–');
+
+    const longAgo = await auth(request(app).get('/api/exports/custody-report?date_from=2000-01-01&date_to=2000-12-31'));
+    expect(longAgo.body.rows).toHaveLength(0);
+    expect(longAgo.body.summary.total).toBe(0);
+  });
+
+  it('exports to Excel and to a branded PDF, with no access codes in either', async () => {
+    const xlsx = await auth(request(app).get('/api/exports/custody-report/download?format=xlsx'))
+      .buffer().parse((res, cb) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    expect(xlsx.status).toBe(200);
+    expect(xlsx.headers['content-type']).toContain('spreadsheetml');
+    expect(xlsx.headers['content-disposition']).toContain('CityWide-CustodyReport-');
+    expect(xlsx.body.length).toBeGreaterThan(1000);
+
+    const pdf = await auth(request(app).get('/api/exports/custody-report/download?format=pdf'))
+      .buffer().parse((res, cb) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    expect(pdf.status).toBe(200);
+    expect(pdf.headers['content-type']).toBe('application/pdf');
+    expect(pdf.body.subarray(0, 4).toString()).toBe('%PDF');
+
+    // The export is audited, and the audit records that no codes were included.
+    const audit = one("SELECT * FROM audit_log WHERE action = 'export_custody_report' ORDER BY id DESC LIMIT 1");
+    expect(JSON.parse(audit.metadata).codes_included).toBe(false);
+  });
+
+  it('rejects an unsupported export format', async () => {
+    const res = await auth(request(app).get('/api/exports/custody-report/download?format=docx'));
+    expect(res.status).toBe(400);
+  });
+});
+
+// ═══════════════════════════ NOTIFICATION RECIPIENT ═════════════════════════
+describe('CUSTODY NOTIFICATION SETTING', () => {
+  it('reads the stored recipient and what the mailer will actually use', async () => {
+    const res = await auth(request(app).get('/api/settings/custody-notification'));
+    expect(res.status).toBe(200);
+    expect(res.body.effective).toContain('cara@citywideboston.com');
+  });
+
+  it('accepts one or more addresses and audits the change', async () => {
+    const res = await auth(request(app).put('/api/settings/custody-notification'))
+      .send({ value: 'newkeeper@citywideboston.com, backup@citywideboston.com' });
+    expect(res.status).toBe(200);
+    expect(res.body.effective).toEqual(['newkeeper@citywideboston.com', 'backup@citywideboston.com']);
+    expect(res.body.source).toBe('settings');
+
+    const audit = one("SELECT * FROM audit_log WHERE action = 'settings_updated' ORDER BY id DESC LIMIT 1");
+    expect(JSON.parse(audit.metadata).key).toBe('custody_notification_email');
+  });
+
+  it('the new recipient is used by the very next custody email', async () => {
+    const res = await auth(request(app).post('/api/assignments/checkout')).send({
+      account_id: clientId, holder: 'Notify Nick', holder_type: 'employee',
+      holder_email: 'nick@example.test', keys: [{ type: 'metal', qty: 1 }],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.email.recipients).toEqual([
+      'nick@example.test', 'newkeeper@citywideboston.com', 'backup@citywideboston.com',
+    ]);
+    expect(res.body.email.cara).toBe('newkeeper@citywideboston.com, backup@citywideboston.com');
+  });
+
+  it('rejects a malformed address rather than silently notifying nobody', async () => {
+    const res = await auth(request(app).put('/api/settings/custody-notification'))
+      .send({ value: 'not-an-address' });
+    expect(res.status).toBe(400);
+    // The previous, valid recipient is untouched.
+    const still = await auth(request(app).get('/api/settings/custody-notification'));
+    expect(still.body.effective).toEqual(['newkeeper@citywideboston.com', 'backup@citywideboston.com']);
   });
 });
