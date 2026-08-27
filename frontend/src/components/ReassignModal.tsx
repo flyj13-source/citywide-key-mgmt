@@ -127,6 +127,11 @@ export default function ReassignModal({
   }), [selected]);
 
   const target = data?.targets.find((t) => String(t.id) === toId) ?? null;
+  // Roster rows carry the source's email; targets carry their own.
+  const unreachable = [
+    ...(data && !data.source.email ? [data.source.name] : []),
+    ...(target && !target.email ? [target.name] : []),
+  ];
   const canSubmit = !!data && !!target && selected.length > 0 && !saving;
 
   const submit = async () => {
@@ -361,6 +366,21 @@ export default function ReassignModal({
               </>
             )}
           </div>
+
+          {/* A handover notice that cannot reach one of the two managers is a
+              notice that did not happen — say so before it is sent. */}
+          {sendHandover && unreachable.length > 0 && (
+            <div className="rounded border-2 border-[#C0272D] bg-[#fbeaea] px-4 py-3 text-sm">
+              <div className="font-semibold text-[#C0272D]">
+                {unreachable.join(' and ')} {unreachable.length === 1 ? 'has' : 'have'} no email on file —
+                the handover notice will not reach {unreachable.length === 1 ? 'them' : 'either of them'}.
+              </div>
+              <p className="text-[12px] text-[#1a1a1a] mt-1">
+                Cara still receives it, and the clients stay flagged “Handover pending” either way. Add an
+                address on the CW Employees tab to close this properly.
+              </p>
+            </div>
+          )}
 
           <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
             <input

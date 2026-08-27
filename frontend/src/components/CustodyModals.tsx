@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Modal from './Modal';
 import { getManager } from '../lib/auth';
 import {
-  getAccounts, getKeyAvailability, getHolders, checkout, checkin, getAssignments,
+  getAccounts, getKeyAvailability, getHolders, checkout, checkin, getAssignments, saveHolderEmail,
   type Assignment, type HolderOption, type KeyAvailability, type KeyTypeKey, type MailOutcome,
+  type SignatureStatus,
 } from '../lib/api';
 
 // ── Shared pieces ────────────────────────────────────────────────────────────
@@ -46,6 +47,143 @@ export function MailBanner({ mail, kind }: { mail: MailOutcome; kind: 'checkout'
       ⚠ The record was saved, but the email did not send{mail.error ? `: ${mail.error}` : '.'}
       {mail.recipients.length > 0 && <> Intended recipients: {mail.recipients.join(', ')}.</>}
       {' '}It is logged in the Audit Log as <span className="font-mono">custody_email_failed</span>.
+    </div>
+  );
+}
+
+/**
+ * The missing-email gate. Shown the moment a holder with no address on file is
+ * selected — before anything is saved — offering the two ways forward the spec
+ * requires. Nothing here is a dead end: either the gap gets closed permanently,
+ * or the release is recorded with a written reason and flagged in red.
+ */
+export function MissingEmailWarning({
+  holder, holderType, holderId, onEmailSaved,
+  proceeding, setProceeding, reason, setReason,
+  context = 'signature',
+}: {
+  holder: string;
+  holderType: 'employee' | 'ic';
+  holderId: number | null;
+  onEmailSaved: (email: string) => void;
+  proceeding: boolean;
+  setProceeding: (v: boolean) => void;
+  reason: string;
+  setReason: (v: string) => void;
+  /** 'signature' blocks a sign-off; 'notification' only loses a confirmation. */
+  context?: 'signature' | 'notification';
+}) {
+  const [adding, setAdding] = useState(false);
+  const [email, setEmail] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = async () => {
+    if (holderId == null) {
+      // A free-typed name has no record to attach an address to.
+      onEmailSaved(email.trim());
+      setAdding(false);
+      return;
+    }
+    setSaving(true); setError('');
+    try {
+      const r = await saveHolderEmail({ holder_type: holderType, holder_id: holderId, email: email.trim() });
+      onEmailSaved(r.email);
+      setAdding(false);
+    } catch (e: any) {
+      setError(e?.message || 'Could not save the email');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="rounded border-2 border-[#C0272D] bg-[#fbeaea] px-4 py-3 space-y-3">
+      <div className="text-sm font-semibold text-[#C0272D]">
+        {holder} has no email on file — {context === 'signature'
+          ? 'signature cannot be sent.'
+          : 'they will not receive the confirmation.'}
+      </div>
+
+      {!adding && !proceeding && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="px-3 py-1.5 bg-[#C0272D] text-white text-xs font-medium rounded hover:bg-[#a82227] transition-colors"
+          >
+            Add email
+          </button>
+          <button
+            type="button"
+            onClick={() => setProceeding(true)}
+            className="px-3 py-1.5 border border-[#1a1a1a] text-[#1a1a1a] text-xs font-medium rounded hover:bg-white transition-colors"
+          >
+            {context === 'signature' ? 'Continue without signature' : 'Continue without notifying them'}
+          </button>
+        </div>
+      )}
+
+      {adding && (
+        <div className="space-y-2">
+          <label className="block text-xs font-medium text-[#1a1a1a]">
+            Email for {holder}
+            <span className="font-normal text-gray-500">
+              {holderId != null ? ' — saved to their record permanently' : ' — used for this record only'}
+            </span>
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="email"
+              autoFocus
+              className="input flex-1 focus:ring-[#C0272D] focus:border-[#C0272D]"
+              placeholder="name@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving || !email.trim()}
+              className="px-3 py-1.5 bg-[#C0272D] text-white text-xs font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAdding(false); setError(''); }}
+              className="px-3 py-1.5 border border-[#1a1a1a] text-[#1a1a1a] text-xs font-medium rounded hover:bg-white transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+          {error && <p className="text-xs text-[#C0272D]">{error}</p>}
+        </div>
+      )}
+
+      {proceeding && (
+        <div className="space-y-2">
+          <label className="block text-xs font-medium text-[#1a1a1a]">
+            Why are the keys being released without a signature? <span className="text-[#C0272D]">*</span>
+          </label>
+          <input
+            autoFocus
+            className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
+            placeholder="e.g. Subcontractor on site, address to follow"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+          <p className="text-[11px] text-[#1a1a1a]">
+            This record will be flagged <strong>No signature — no email on file</strong> in red until an email is
+            added or someone signs it in person. Cara is notified either way.
+          </p>
+          <button
+            type="button"
+            onClick={() => { setProceeding(false); setReason(''); }}
+            className="text-xs text-[#C0272D] hover:underline"
+          >
+            ← Back
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -282,7 +420,11 @@ export function CheckOutModal({
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [done, setDone] = useState<{ mail: MailOutcome; link: string; holder: string } | null>(null);
+  const [proceedUnsigned, setProceedUnsigned] = useState(false);
+  const [noEmailReason, setNoEmailReason] = useState('');
+  const [done, setDone] = useState<{
+    mail: MailOutcome; link: string | null; holder: string; status: SignatureStatus;
+  } | null>(null);
 
   useEffect(() => {
     if (!account) { setAvail([]); setPicks({}); return; }
@@ -297,13 +439,21 @@ export function CheckOutModal({
   useEffect(() => {
     if (mode === 'self') setEmail(me?.email ?? '');
     else setEmail(holder?.email ?? '');
+    // A new holder is a new decision — never carry a previous "proceed unsigned"
+    // choice onto a different person.
+    setProceedUnsigned(false);
+    setNoEmailReason('');
   }, [mode, holder, me?.email]);
 
   const holderName = mode === 'self' ? (me?.name ?? '') : (holder?.name ?? '');
   const holderType: 'employee' | 'ic' = mode === 'self' ? 'employee' : (holder?.type ?? 'employee');
   const lines = selectedLines(picks);
   const totalKeys = lines.reduce((n, l) => n + l.qty, 0);
-  const canSubmit = !!account && !!holderName && lines.length > 0 && !saving;
+  const holderChosen = mode === 'self' || !!holder;
+  const missingEmail = holderChosen && !email.trim();
+  // With no address, the only way forward is an explicit, written reason.
+  const emailResolved = !missingEmail || (proceedUnsigned && noEmailReason.trim().length > 0);
+  const canSubmit = !!account && !!holderName && lines.length > 0 && emailResolved && !saving;
 
   const submit = async () => {
     if (!canSubmit || !account) return;
@@ -320,8 +470,9 @@ export function CheckOutModal({
         due_at: dueAt || null,
         notes: notes.trim() || null,
         on_behalf: mode === 'other',
+        no_email_reason: missingEmail ? noEmailReason.trim() : null,
       });
-      setDone({ mail: r.email, link: r.signoff_link, holder: holderName });
+      setDone({ mail: r.email, link: r.signoff_link, holder: holderName, status: r.signature_status });
       onDone();
     } catch (e: any) {
       setError(e?.message || 'Check-out failed');
@@ -338,11 +489,21 @@ export function CheckOutModal({
             <span className="font-semibold">{totalKeys}</span> key{totalKeys === 1 ? '' : 's'} checked out to{' '}
             <span className="font-semibold">{done.holder}</span> for <span className="font-semibold">{account?.name}</span>.
           </div>
-          <MailBanner mail={done.mail} kind="checkout" />
-          <div className="text-xs text-cw-muted">
-            Sign-off link (48-hour expiry) — also included in the email:
-            <div className="mt-1 font-mono break-all bg-gray-50 border border-cw-border rounded px-2 py-1.5">{done.link}</div>
-          </div>
+          {done.status === 'signature_unavailable' ? (
+            <div className="text-sm bg-[#fbeaea] border-2 border-[#C0272D] text-[#C0272D] rounded px-3 py-2">
+              <strong>No signature was sent.</strong> {done.holder} has no email on file, so this record is
+              flagged <em>No signature — no email on file</em> in the registry. Cara was notified, and it will
+              stay flagged until someone adds an email or signs it in person.
+            </div>
+          ) : (
+            <MailBanner mail={done.mail} kind="checkout" />
+          )}
+          {done.link && (
+            <div className="text-xs text-cw-muted">
+              Sign-off link (48-hour expiry) — also included in the email:
+              <div className="mt-1 font-mono break-all bg-gray-50 border border-cw-border rounded px-2 py-1.5">{done.link}</div>
+            </div>
+          )}
         </div>
         <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
           <button onClick={onClose} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">Done</button>
@@ -403,6 +564,23 @@ export function CheckOutModal({
               placeholder="name@example.com"
             />
           </div>
+
+          {/* Blocked at entry — surfaced the moment the holder is chosen, not
+              after the record has already been written. */}
+          {missingEmail && (
+            <div className="mt-3">
+              <MissingEmailWarning
+                holder={holderName}
+                holderType={holderType}
+                holderId={mode === 'other' ? holder?.id ?? null : null}
+                onEmailSaved={(saved) => { setEmail(saved); setProceedUnsigned(false); setNoEmailReason(''); }}
+                proceeding={proceedUnsigned}
+                setProceeding={setProceedUnsigned}
+                reason={noEmailReason}
+                setReason={setNoEmailReason}
+              />
+            </div>
+          )}
         </div>
 
         <div>
@@ -427,7 +605,11 @@ export function CheckOutModal({
           {saving ? 'Checking out…' : `Check Out${totalKeys ? ` ${totalKeys} Key${totalKeys === 1 ? '' : 's'}` : ''}`}
         </button>
         <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
-        <span className="text-[11px] text-gray-400 ml-auto">Emails {me?.name ? 'the holder' : ''} and Cara on save.</span>
+        <span className="text-[11px] text-gray-400 ml-auto">
+          {missingEmail
+            ? 'No signature will be sent — Cara is still notified.'
+            : 'Emails the holder and Cara on save.'}
+        </span>
       </div>
     </Modal>
   );
@@ -453,6 +635,10 @@ export function CheckInModal({
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // A return needs no signature, so a missing address only costs the holder
+  // their confirmation copy — Cara is notified either way. Acknowledging that
+  // is enough; no written reason is demanded for something this low-stakes.
+  const [notifyAnyway, setNotifyAnyway] = useState(false);
   const [done, setDone] = useState<{ mail: MailOutcome; partial: boolean; holder: string } | null>(null);
 
   // All open custody records; filtered to the chosen client below so a preset
@@ -482,6 +668,8 @@ export function CheckInModal({
   // case is a full return; unchecking a line makes it partial. Depends on
   // `open` as well as the id: with a row-preselected id the transaction is not
   // in hand until the list finishes loading.
+  useEffect(() => { setNotifyAnyway(false); }, [selectedId]);
+
   useEffect(() => {
     if (!selected) { setPicks({}); return; }
     const next: Record<string, Pick> = {};
@@ -493,7 +681,8 @@ export function CheckInModal({
   const totalReturning = lines.reduce((n, l) => n + l.qty, 0);
   const totalOut = selected?.keys.reduce((n, k) => n + k.qty, 0) ?? 0;
   const isPartial = !!selected && selected.keys.length > 0 && totalReturning < totalOut;
-  const canSubmit = !!selected && (selected.keys.length === 0 || lines.length > 0) && !saving;
+  const canSubmit = !!selected && (selected.keys.length === 0 || lines.length > 0) && !saving
+    && (!!selected.holder_email || notifyAnyway);
 
   const submit = async () => {
     if (!selected) return;
@@ -580,6 +769,20 @@ export function CheckInModal({
                 </p>
               )}
             </div>
+
+            {!selected.holder_email && (
+              <MissingEmailWarning
+                holder={selected.holder}
+                holderType={selected.holder_type ?? 'employee'}
+                holderId={selected.holder_id}
+                context="notification"
+                onEmailSaved={() => setNotifyAnyway(true)}
+                proceeding={notifyAnyway}
+                setProceeding={setNotifyAnyway}
+                reason={''}
+                setReason={() => {}}
+              />
+            )}
 
             <div>
               <SectionLabel>Return details</SectionLabel>

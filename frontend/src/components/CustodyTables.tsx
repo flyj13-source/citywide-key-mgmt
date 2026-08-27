@@ -65,14 +65,42 @@ function StatusPill({ overdue }: { overdue: boolean }) {
     : <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap bg-[#eaf5ec] text-[#2d7a3a] border border-[#c9e4d0]">On time</span>;
 }
 
-/** Signed / Awaiting signature (amber) — plus the receipt download once signed. */
-function SignaturePill({ a, onResent }: { a: Assignment; onResent: (msg: string) => void }) {
+/**
+ * Signature state. The colour carries the meaning:
+ *   green  — signed
+ *   amber  — awaiting, a link is out and may still come back
+ *   RED    — no email on file, or the send failed: nothing will resolve this
+ *            without a person. These must never be mistaken for pending.
+ */
+function SignaturePill({
+  a, onResent, onSignInPerson,
+}: {
+  a: Assignment;
+  onResent: (msg: string) => void;
+  onSignInPerson: (a: Assignment) => void;
+}) {
   const [busy, setBusy] = useState(false);
-  if (a.signed_at) {
+
+  const signNow = (
+    <button
+      onClick={() => onSignInPerson(a)}
+      className="text-[11px] text-[#C0272D] hover:underline whitespace-nowrap font-semibold"
+      title="Capture a wet signature on this device"
+    >
+      Sign now
+    </button>
+  );
+
+  if (a.signature_status === 'signed' || a.signed_at) {
     return (
       <span className="inline-flex items-center gap-2">
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-[#eaf5ec] text-[#2d7a3a] border border-[#c9e4d0]" title={`Signed ${fmtDateTime(a.signed_at)}`}>
-          Signed
+        <span
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap bg-[#eaf5ec] text-[#2d7a3a] border border-[#c9e4d0]"
+          title={a.signed_in_person_by
+            ? `Signed ${fmtDateTime(a.signed_at)} — in person, witnessed by ${a.signed_in_person_by}`
+            : `Signed ${fmtDateTime(a.signed_at)}`}
+        >
+          Signed{a.signed_in_person_by ? ' in person' : ''}
         </span>
         {a.has_pdf && (
           <button onClick={() => downloadReceipt(a.id)} className="text-[11px] text-[#C0272D] hover:underline whitespace-nowrap">PDF</button>
@@ -80,6 +108,60 @@ function SignaturePill({ a, onResent }: { a: Assignment; onResent: (msg: string)
       </span>
     );
   }
+
+  if (a.signature_status === 'not_required') {
+    return <span className="text-xs text-gray-400 whitespace-nowrap">Not required</span>;
+  }
+
+  // ── RED states — a person has to act ──────────────────────────────────────
+  if (a.signature_status === 'signature_unavailable') {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <span
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap bg-[#fbeaea] text-[#C0272D] border-2 border-[#C0272D]"
+          title={a.no_email_reason ? `Reason given: ${a.no_email_reason}` : 'No email on file for this holder'}
+        >
+          No signature — no email on file
+        </span>
+        {signNow}
+      </span>
+    );
+  }
+
+  if (a.signature_status === 'signature_send_failed') {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <span
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap bg-[#fbeaea] text-[#C0272D] border-2 border-[#C0272D]"
+          title={a.signature_send_error
+            ? `Failed after ${a.signature_send_attempts} attempt(s): ${a.signature_send_error}`
+            : 'The signature request could not be delivered'}
+        >
+          Send failed
+        </span>
+        <button
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await resendSignoff(a.id);
+              onResent(r.email.ok
+                ? `Sign-off link re-sent to ${r.email.recipients.join(', ')}`
+                : `Still failing${r.email.error ? `: ${r.email.error}` : ''} — sign in person instead`);
+            } catch (e: any) {
+              onResent(e?.message || 'Could not re-send the sign-off email');
+            } finally { setBusy(false); }
+          }}
+          className="text-[11px] text-[#C0272D] hover:underline whitespace-nowrap disabled:opacity-50"
+        >
+          {busy ? '…' : 'Retry'}
+        </button>
+        {signNow}
+      </span>
+    );
+  }
+
+  // ── Amber — genuinely pending ─────────────────────────────────────────────
   return (
     <span className="inline-flex items-center gap-2">
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap bg-[#fff8e6] text-[#7a5a00] border border-[#e8cf8a]">
@@ -103,6 +185,7 @@ function SignaturePill({ a, onResent }: { a: Assignment; onResent: (msg: string)
       >
         {busy ? '…' : 'Resend'}
       </button>
+      {signNow}
     </span>
   );
 }
@@ -124,7 +207,7 @@ function SortHeader({
 }
 
 export function CheckedOutTable({
-  rows, loading, sort, onSort, onCheckIn, onNotice,
+  rows, loading, sort, onSort, onCheckIn, onNotice, onSignInPerson,
 }: {
   rows: Assignment[];
   loading: boolean;
@@ -132,6 +215,7 @@ export function CheckedOutTable({
   onSort: (k: string) => void;
   onCheckIn: (a: Assignment) => void;
   onNotice: (msg: string) => void;
+  onSignInPerson: (a: Assignment) => void;
 }) {
   return (
     <div className="card overflow-x-auto max-w-full">
@@ -168,7 +252,7 @@ export function CheckedOutTable({
               <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{fmtDateTime(a.checked_out_at)}</td>
               <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{a.due_at ? fmtDate(a.due_at) : '—'}</td>
               <td className="px-3 py-3 text-center"><StatusPill overdue={a.overdue} /></td>
-              <td className="px-3 py-3"><SignaturePill a={a} onResent={onNotice} /></td>
+              <td className="px-3 py-3"><SignaturePill a={a} onResent={onNotice} onSignInPerson={onSignInPerson} /></td>
               <td className="px-3 py-3 text-right whitespace-nowrap">
                 <button
                   onClick={() => onCheckIn(a)}

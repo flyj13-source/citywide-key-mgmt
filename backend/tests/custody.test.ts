@@ -292,6 +292,7 @@ describe('PARTIAL RETURN', () => {
   it('splits the transaction — returned subset moves, the rest stays out', async () => {
     const out = await auth(request(app).post('/api/assignments/checkout')).send({
       account_id: clientId, holder: 'Partial Pat', holder_type: 'ic',
+      holder_email: 'pat@example.test',
       keys: [{ type: 'dispenser', qty: 3 }, { type: 'card', qty: 2 }],
     });
     expect(out.status).toBe(201);
@@ -348,7 +349,7 @@ describe('CUSTODY EXPORTS', () => {
     expect(res.status).toBe(200);
     const csv = res.text || res.body.toString();
     expect(csv.split('\r\n')[0]).toBe(
-      'Holder,Type,Client,Keys,Total Keys,Checked Out,Due,Status,Signature,Recorded By'
+      'Holder,Type,Client,Keys,Total Keys,Checked Out,Due,Status,Signature,Signature Note,Recorded By'
     );
     expect(csv).toContain('Partial Pat');
     expect(csv).toContain('2 × Dispenser Key · 2 × Key Card');
@@ -371,7 +372,8 @@ describe('LEGACY SINGLE-KEY ROWS', () => {
   it('still check out and read back through the old key_type/keys_held shape', async () => {
     const res = await auth(request(app).post('/api/assignments/checkout')).send({
       account_id: clientId, account_name: 'CUSTODY TEST CLIENT',
-      assignee: 'Legacy Larry', key_type: 'physical', keys_held: 'Front door + closet',
+      assignee: 'Legacy Larry', assignee_email: 'larry@example.test',
+      key_type: 'physical', keys_held: 'Front door + closet',
     });
     expect(res.status).toBe(201);
     const row = one('SELECT * FROM key_assignments WHERE id = ?', res.body.id);

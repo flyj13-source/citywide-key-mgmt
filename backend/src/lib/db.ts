@@ -96,6 +96,8 @@ const needed: [string, string][] = [
   ['bc_client_number', 'TEXT'],
   ['account_manager', 'TEXT'],
   ['ccm_manager', 'TEXT'],
+  // Contact address for an IC vendor, so a contractor holder can be emailed.
+  ['ic_email', 'TEXT'],
 ];
 
 const existing = cols();
@@ -276,9 +278,39 @@ const assignmentNeeded: [string, string][] = [
   ['signature_hash', 'TEXT'],
   ['pdf_path', 'TEXT'],
 ];
+// Signature lifecycle. The status is EXPLICIT rather than inferred from
+// signed_at being null, because "waiting for a signature that is coming" and
+// "no signature will ever arrive" must never look the same to Cara:
+//   signed                 — captured, PDF delivered
+//   awaiting_signature     — link sent, holder has not signed yet   (amber)
+//   signature_unavailable  — holder has no email; nothing was sent  (RED)
+//   signature_send_failed  — email exists, SMTP gave up after 3 tries (RED)
+//   not_required           — check-ins, which never demand one
+assignmentNeeded.push(
+  ['signature_status', "TEXT"],
+  ['no_email_reason', 'TEXT'],            // typed justification for proceeding unsigned
+  ['signed_in_person_by', 'TEXT'],        // the witness who captured a wet signature
+  ['signature_send_attempts', 'INTEGER DEFAULT 0'],
+  ['signature_send_error', 'TEXT'],
+  ['signature_last_attempt_at', 'DATETIME'],
+  // The other party when keys pass directly between two holders. Both sides
+  // receive both signed PDFs.
+  ['counterparty_name', 'TEXT'],
+  ['counterparty_email', 'TEXT'],
+);
 for (const [col, def] of assignmentNeeded) {
   if (!assignmentCols.includes(col)) db.exec(`ALTER TABLE key_assignments ADD COLUMN ${col} ${def}`);
 }
+
+// Backfill the status for rows that predate the column, from what they already
+// prove: a signature means signed, an open check-out means awaiting, a returned
+// record never needed one.
+if (!assignmentCols.includes('signature_status')) {
+  db.exec("UPDATE key_assignments SET signature_status = 'signed' WHERE signed_at IS NOT NULL");
+  db.exec("UPDATE key_assignments SET signature_status = 'awaiting_signature' WHERE signature_status IS NULL AND status = 'checked_out'");
+  db.exec("UPDATE key_assignments SET signature_status = 'not_required' WHERE signature_status IS NULL");
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_sig_status ON key_assignments(signature_status)');
 // Token lookup is a public, unauthenticated path — keep it indexed.
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_signoff_token ON key_assignments(signoff_token)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_status ON key_assignments(status)');

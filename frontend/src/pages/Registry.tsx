@@ -9,8 +9,10 @@ import ExportMenu from '../components/ExportMenu';
 import { CheckOutModal, CheckInModal } from '../components/CustodyModals';
 import ReassignModal from '../components/ReassignModal';
 import ActionMenu, { type ActionItem } from '../components/ActionMenu';
+import SignInPersonModal from '../components/SignInPersonModal';
 import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
-import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, type Assignment } from '../lib/api';
+import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, getSignatureGaps,
+  type Assignment, type SignatureGaps } from '../lib/api';
 
 type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'checkedout' | 'checkedin' | 'all' | 'archived';
 
@@ -863,7 +865,21 @@ function CWEmployeesTable({
                 onClick={() => onSelect(s.id)}
                 title="View this employee's keys + accounts"
               >
-                <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap">{s.name}</td>
+                <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap">
+                  {s.name}
+                  {/* Surfaced proactively: this is the gap that becomes a
+                      blocked check-out at the next handover. */}
+                  {!s.email && (
+                    <div className="mt-0.5">
+                      <span
+                        title="No email on file — a key signature cannot be sent to this person"
+                        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#fbeaea] text-[#C0272D] border border-[#C0272D]"
+                      >
+                        No email on file
+                      </span>
+                    </div>
+                  )}
+                </td>
                 <td className="px-3 py-3"><StaffRoleBadges role_category={s.role_category} manager_type={s.manager_type} /></td>
                 <td className="px-3 py-3 whitespace-nowrap">
                   {shiftText
@@ -1051,6 +1067,10 @@ export default function Registry() {
   >(null);
   const [notice, setNotice] = useState('');
   const [reassign, setReassign] = useState<{ name: string | null; role: 'am' | 'ccm' } | null>(null);
+  const [signInPersonFor, setSignInPersonFor] = useState<Assignment | null>(null);
+  // "Missing signatures" narrows the Checked Out tab to what Cara has to chase.
+  const [signatureFilter, setSignatureFilter] = useState(searchParams.get('signature') === 'missing');
+  const [gaps, setGaps] = useState<SignatureGaps | null>(null);
   const LIMIT = 50;
 
   const isRosterTab = (tab === 'am' || tab === 'ccm') && !drill;
@@ -1130,13 +1150,20 @@ export default function Registry() {
         dir: custodySort.dir,
         page: String(page),
         limit: String(LIMIT),
+        ...(signatureFilter && tab === 'checkedout' ? { signature: 'missing' } : {}),
       });
       setCustody(data.assignments);
       setCustodyTotal(data.total);
     } finally {
       setCustodyLoading(false);
     }
-  }, [tab, debouncedSearch, custodySort, page]);
+  }, [tab, debouncedSearch, custodySort, page, signatureFilter]);
+
+  // Signature-gap counts drive the filter chip and the dashboard card.
+  const loadGaps = useCallback(() => {
+    getSignatureGaps().then(setGaps).catch(() => setGaps(null));
+  }, []);
+  useEffect(() => { loadGaps(); }, [loadGaps]);
 
   useEffect(() => {
     if (isCustodyTab) loadCustody();
@@ -1209,6 +1236,7 @@ export default function Registry() {
     setStaffSearch('');
     setNotice('');
     setCustodySort({ key: key === 'checkedin' ? 'returned_at' : 'checked_out_at', dir: 'desc' });
+    setSignatureFilter(false);
     setSearchParams(DEEP_LINK_TABS.includes(key) ? { tab: key } : {}, { replace: true });
   };
   const openPerson = (name: string) => {
@@ -1228,8 +1256,9 @@ export default function Registry() {
   // refresh both the visible list and the tab counts.
   const onCustodyChanged = useCallback(() => {
     refreshCounts();
+    loadGaps();
     if (isCustodyTab) loadCustody();
-  }, [refreshCounts, isCustodyTab, loadCustody]);
+  }, [refreshCounts, loadGaps, isCustodyTab, loadCustody]);
 
   // CW Employees — filter chip (role category) + search applied client-side.
   const filteredStaff = useMemo(() => {
@@ -1446,6 +1475,11 @@ export default function Registry() {
         {/* CW Employees filter chips + search */}
         {isStaffTab && (
           <div className="flex flex-wrap items-center gap-3">
+            {staff.filter((s) => !s.email).length > 0 && (
+              <span className="px-2.5 py-1 rounded text-xs font-semibold bg-[#fbeaea] text-[#C0272D] border border-[#C0272D]">
+                {staff.filter((s) => !s.email).length} with no email on file
+              </span>
+            )}
             <div className="flex border-b border-cw-border gap-6">
               {STAFF_CHIPS.map((c) => (
                 <button
@@ -1469,6 +1503,35 @@ export default function Registry() {
           </div>
         )}
 
+        {/* Missing-signature filter — only meaningful on the active-custody tab */}
+        {isCustodyTab && tab === 'checkedout' && gaps && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => { setSignatureFilter((v) => !v); setPage(1); }}
+              className={`px-3 py-1.5 text-xs font-medium rounded border transition-colors ${
+                signatureFilter
+                  ? 'bg-[#C0272D] text-white border-[#C0272D]'
+                  : 'border-cw-border text-[#1a1a1a] hover:border-[#C0272D] hover:text-[#C0272D]'
+              }`}
+            >
+              Missing signatures ({gaps.total_missing})
+            </button>
+            {gaps.needs_attention > 0 && (
+              <span className="text-xs text-[#C0272D] font-semibold">
+                {gaps.needs_attention} need manual follow-up
+                <span className="font-normal text-cw-muted">
+                  {' '}({gaps.no_email} no email · {gaps.send_failed} send failed)
+                </span>
+              </span>
+            )}
+            {signatureFilter && (
+              <button onClick={() => { setSignatureFilter(false); setPage(1); }} className="text-xs text-[#C0272D] hover:underline">
+                Clear filter
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Custody · Roster (AMs / CCMs) · CW Employees · Archived · client table */}
         {isCustodyTab ? (
           tab === 'checkedout' ? (
@@ -1482,6 +1545,7 @@ export default function Registry() {
                 account: a.account_id ? { id: a.account_id, name: a.account_name } : null,
               })}
               onNotice={setNotice}
+              onSignInPerson={setSignInPersonFor}
             />
           ) : (
             <CheckedInTable
@@ -1567,6 +1631,14 @@ export default function Registry() {
         <CheckOutModal
           presetAccount={selectedSnapshot}
           onClose={() => setCheckOutOpen(false)}
+          onDone={onCustodyChanged}
+        />
+      )}
+
+      {signInPersonFor && (
+        <SignInPersonModal
+          assignment={signInPersonFor}
+          onClose={() => setSignInPersonFor(null)}
           onDone={onCustodyChanged}
         />
       )}

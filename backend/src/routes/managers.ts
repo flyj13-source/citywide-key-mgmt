@@ -137,7 +137,10 @@ router.get('/:id/reassignable', requireAuth, (req: AuthRequest, res: Response) =
     }));
 
   res.json({
-    source: { id: source.id, name: source.name, manager_type: source.manager_type },
+    source: {
+      id: source.id, name: source.name, manager_type: source.manager_type,
+      email: source.email ?? null,
+    },
     role,
     role_label: ROLE_LABEL[role],
     clients,

@@ -110,7 +110,19 @@ CREATE TABLE IF NOT EXISTS key_assignments (
   signed_at DATETIME,
   signature_data TEXT,            -- base64 PNG data URL
   signature_hash TEXT,            -- sha256 of signature_data
-  pdf_path TEXT
+  pdf_path TEXT,
+  -- Signature lifecycle, explicit so "coming" and "never coming" never look
+  -- alike: signed | awaiting_signature | signature_unavailable |
+  -- signature_send_failed | not_required
+  signature_status TEXT,
+  no_email_reason TEXT,           -- typed reason for proceeding with no email
+  signed_in_person_by TEXT,       -- witness who captured a wet signature on-device
+  signature_send_attempts INTEGER DEFAULT 0,
+  signature_send_error TEXT,
+  signature_last_attempt_at DATETIME,
+  -- The other party when keys pass directly between two holders
+  counterparty_name TEXT,
+  counterparty_email TEXT
 );
 
 CREATE TABLE IF NOT EXISTS staff_key_holders (

@@ -4,7 +4,7 @@ import Layout from '../components/Layout';
 import Badge from '../components/Badge';
 import TestPill from '../components/TestPill';
 import ManagerModal from '../components/ManagerModal';
-import { getAccounts, getAssignments, getOverdue, getStaff, getAudit, getKeyHolderStats, getStaffManagers, type StaffManager } from '../lib/api';
+import { getAccounts, getAssignments, getOverdue, getStaff, getAudit, getKeyHolderStats, getStaffManagers, getSignatureGaps, type StaffManager, type SignatureGaps } from '../lib/api';
 
 interface Metric { label: string; value: string | number; sub?: string; color?: string; footer?: React.ReactNode; }
 
@@ -20,6 +20,7 @@ function MetricCard({ label, value, sub, color = '', footer }: Metric) {
 }
 
 export default function Dashboard() {
+  const [gaps, setGaps] = useState<SignatureGaps | null>(null);
   const navigate = useNavigate();
   const [icCount, setIcCount] = useState(0);
   const [customerCount, setCustomerCount] = useState(0);
@@ -34,6 +35,9 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   const loadManagers = () => getStaffManagers().then((d) => setStaffManagers(d.managers)).catch(() => {});
+
+  useEffect(() => { getSignatureGaps().then(setGaps).catch(() => setGaps(null)); }, []);
+
 
   useEffect(() => {
     Promise.all([
@@ -102,7 +106,7 @@ export default function Dashboard() {
         </div>
 
         {/* Metrics */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
           <MetricCard label="IC Vendors" value={icCount} sub="in key registry" />
           <MetricCard
             label="Customers"
@@ -120,6 +124,25 @@ export default function Dashboard() {
             color={overdueList.length > 0 ? 'text-red-600' : 'text-green-700'}
           />
           <MetricCard label="Staff Key Holders" value={staffCount} sub="active staff" />
+          {/* Signature gap — red whenever anything is unsigned, because an
+              unsigned key release is a liability, not a to-do. */}
+          <MetricCard
+            label="Without Signature"
+            value={gaps?.total_missing ?? 0}
+            sub={gaps && gaps.needs_attention > 0
+              ? `${gaps.needs_attention} need follow-up`
+              : gaps && gaps.total_missing > 0 ? 'awaiting signature' : 'all signed'}
+            color={gaps && gaps.total_missing > 0 ? 'text-red-600' : 'text-green-700'}
+            footer={gaps && gaps.total_missing > 0
+              ? <Link to="/registry?tab=checkedout&signature=missing" className="text-xs text-cw-red hover:underline">
+                  Review →
+                </Link>
+              : gaps && gaps.staff_without_email > 0
+                ? <Link to="/registry?tab=cwemployees" className="text-xs text-cw-red hover:underline">
+                    {gaps.staff_without_email} staff with no email →
+                  </Link>
+                : undefined}
+          />
         </div>
 
         {/* Keys Personally Held — by holder column (AM/CCM/IC/Office) */}

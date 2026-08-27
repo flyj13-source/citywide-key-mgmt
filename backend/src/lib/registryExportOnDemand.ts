@@ -257,6 +257,35 @@ const keysText = (row: any): string => {
 const isOverdue = (row: any): boolean =>
   !!row.due_at && new Date(`${row.due_at}`.replace(' ', 'T')) < new Date();
 
+// The export must carry the SAME distinction the screen does: a record with no
+// email is not "awaiting" anything. Labelling it that way in a spreadsheet is
+// exactly how an unsigned key release gets forgotten.
+function signatureCells(a: any): { signature: string; signature_note: string } {
+  const status = a.signature_status
+    || (a.signed_at ? 'signed' : a.status === 'checked_out' ? 'awaiting_signature' : 'not_required');
+  switch (status) {
+    case 'signed':
+      return {
+        signature: a.signed_in_person_by ? 'Signed in person' : 'Signed',
+        signature_note: a.signed_in_person_by ? `Witnessed by ${a.signed_in_person_by}` : '',
+      };
+    case 'signature_unavailable':
+      return {
+        signature: 'NO SIGNATURE — no email on file',
+        signature_note: a.no_email_reason || 'Needs manual follow-up',
+      };
+    case 'signature_send_failed':
+      return {
+        signature: 'NO SIGNATURE — send failed',
+        signature_note: a.signature_send_error || 'Needs manual follow-up',
+      };
+    case 'not_required':
+      return { signature: 'Not required', signature_note: '' };
+    default:
+      return { signature: 'Awaiting signature', signature_note: '' };
+  }
+}
+
 function checkedOutSheet(opts: ExportOpts): SheetSpec {
   const columns: Column[] = [
     { header: 'Holder', key: 'holder', width: 24 },
@@ -267,7 +296,8 @@ function checkedOutSheet(opts: ExportOpts): SheetSpec {
     { header: 'Checked Out', key: 'checked_out_at', width: 22 },
     { header: 'Due', key: 'due_at', width: 22 },
     { header: 'Status', key: 'custody_status', width: 12 },
-    { header: 'Signature', key: 'signature', width: 20 },
+    { header: 'Signature', key: 'signature', width: 26 },
+    { header: 'Signature Note', key: 'signature_note', width: 40 },
     { header: 'Recorded By', key: 'recorded_by', width: 22 },
   ];
   const rows = custodyRows('checked_out', opts).map((a) => ({
@@ -279,7 +309,7 @@ function checkedOutSheet(opts: ExportOpts): SheetSpec {
     checked_out_at: a.checked_out_at,
     due_at: a.due_at || '',
     custody_status: isOverdue(a) ? 'Overdue' : 'On time',
-    signature: a.signed_at ? 'Signed' : 'Awaiting signature',
+    ...signatureCells(a),
     recorded_by: a.recorded_by || '',
   }));
   return { name: 'Checked Out', columns, rows };

@@ -379,6 +379,7 @@ describe('ASSIGNMENTS', () => {
   it('check-out → status checked_out + audit row', async () => {
     const res = await auth(request(app).post('/api/assignments/checkout')).send({
       account_id: acctId, account_name: 'ASSIGN IC', assignee: 'Field Tech 1',
+      assignee_email: 'tech1@citywideboston.com',
       key_type: 'physical', keys_held: '2 metal',
     });
     expect(res.status).toBe(201);
@@ -703,6 +704,7 @@ describe('ARCHIVE / RESTORE / PURGE', () => {
     const id = created.body.id;
     await auth(request(app).post('/api/assignments/checkout')).send({
       account_id: id, account_name: 'HAS CUSTODY', assignee: 'Tech', key_type: 'physical',
+      assignee_email: 'tech@citywideboston.com',
     });
 
     const blocked = await auth(request(app).post(`/api/accounts/${id}/archive`));

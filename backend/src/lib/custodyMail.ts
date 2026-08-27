@@ -120,7 +120,12 @@ export interface MailResult {
   recipients: string[];
   error?: string;
   skipped?: boolean;
+  /** How many send attempts were made (0 when skipped before trying). */
+  attempts: number;
 }
+
+/** Backoff between SMTP retries: ~1s, ~4s. */
+const RETRY_BACKOFF_MS = [1000, 4000];
 
 export interface CheckoutMail {
   holder: string;
@@ -132,6 +137,8 @@ export interface CheckoutMail {
   recordedBy: string;
   onBehalf: boolean;
   signoffLink: string | null;
+  /** Set when the holder has no email — Cara is told plainly why nothing was sent. */
+  noEmailReason?: string | null;
 }
 
 export interface CheckinMail {
@@ -147,30 +154,58 @@ export interface CheckinMail {
 
 // Shared send path: builds recipients (holder + Cara), attaches the inline
 // logo, and converts any transport error into a reported failure.
-export async function sendBranded(subject: string, html: string, text: string, to: string[]): Promise<MailResult> {
+export interface SendOpts {
+  attachments?: { filename: string; path?: string; content?: Buffer; cid?: string }[];
+  /** Total attempts before giving up. 1 = no retry. */
+  attempts?: number;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function sendBranded(
+  subject: string, html: string, text: string, to: string[], opts: SendOpts = {},
+): Promise<MailResult> {
   const recipients = Array.from(new Set(to.filter(Boolean).map((t) => t.trim()).filter(Boolean)));
   if (!recipients.length) {
-    return { ok: false, recipients: [], skipped: true, error: 'No recipient address on file' };
+    return { ok: false, recipients: [], skipped: true, attempts: 0, error: 'No recipient address on file' };
   }
   if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    return { ok: false, recipients, skipped: true, error: 'SMTP is not configured (SMTP_USER / SMTP_PASS unset)' };
+    return {
+      ok: false, recipients, skipped: true, attempts: 0,
+      error: 'SMTP is not configured (SMTP_USER / SMTP_PASS unset)',
+    };
   }
+
   const logo = logoBytes();
-  try {
-    await createTransport().sendMail({
-      from: `City Wide Key Management <${process.env.SMTP_USER}>`,
-      to: recipients.join(', '),
-      subject,
-      text,
-      html,
-      attachments: logo
-        ? [{ filename: 'cw-logo.png', content: logo, cid: 'cwlogo', contentDisposition: 'inline' as const }]
-        : [],
-    });
-    return { ok: true, recipients };
-  } catch (err: any) {
-    return { ok: false, recipients, error: err?.message || 'SMTP send failed' };
+  const attachments = [
+    ...(logo ? [{ filename: 'cw-logo.png', content: logo, cid: 'cwlogo', contentDisposition: 'inline' as const }] : []),
+    ...(opts.attachments ?? []),
+  ];
+
+  // A transient SMTP hiccup must not become a permanently unsigned record, so
+  // retry with backoff before reporting failure. Backoff is skipped when only a
+  // single attempt is asked for (and in tests, where SMTP is unconfigured and
+  // we never reach this path at all).
+  const maxAttempts = Math.max(1, opts.attempts ?? 3);
+  let lastError = 'SMTP send failed';
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await createTransport().sendMail({
+        from: `City Wide Key Management <${process.env.SMTP_USER}>`,
+        to: recipients.join(', '),
+        subject,
+        text,
+        html,
+        attachments,
+      });
+      return { ok: true, recipients, attempts: attempt };
+    } catch (err: any) {
+      lastError = err?.message || 'SMTP send failed';
+      if (attempt < maxAttempts) await sleep(RETRY_BACKOFF_MS[attempt - 1] ?? 4000);
+    }
   }
+  return { ok: false, recipients, attempts: maxAttempts, error: lastError };
 }
 
 export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
@@ -178,6 +213,21 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
   const recordedLine: [string, string][] = d.onBehalf
     ? [['Recorded by', `${d.recordedBy} (on behalf of ${d.holder})`]]
     : [['Recorded by', d.recordedBy]];
+
+  // No holder email → no signature request went anywhere. Say so at the top of
+  // the email, in red, so it cannot be mistaken for a signature that is coming.
+  const noEmailBanner = !d.holderEmail
+    ? `<div style="margin:0 0 20px;padding:16px;border:2px solid ${CW_RED};border-radius:4px;background:#fbeaea">
+         <div style="font-weight:700;color:${CW_RED};font-size:15px;margin-bottom:4px">
+           No signature sent — ${esc(d.holder)} has no email on file.
+         </div>
+         <p style="margin:0;font-size:13px;color:${CW_CHARCOAL}">
+           This record needs manual follow-up: add an email to their record and resend, or
+           capture a signature in person from the Key Registry.
+         </p>
+         ${d.noEmailReason ? `<p style="margin:8px 0 0;font-size:12px;color:${CW_MUTED}">Reason given: ${esc(d.noEmailReason)}</p>` : ''}
+       </div>`
+    : '';
 
   const signoff = d.signoffLink
     ? `<div style="margin-top:24px;padding:18px;border:1px solid ${CW_BORDER};border-left:4px solid ${CW_RED};border-radius:4px;background:${CW_BG}">
@@ -193,7 +243,8 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
   const html = brandedShell(
     'Keys checked out',
     `${d.holder} has keys checked out for ${d.client}.`,
-    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
+    `${noEmailBanner}
+     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
        ${detailRows([
          ['Holder', d.holder],
          ['Client', d.client],
@@ -219,6 +270,10 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
 
   const text = [
     `Keys checked out — ${d.client}`,
+    ...(!d.holderEmail
+      ? [`** NO SIGNATURE SENT — ${d.holder} has no email on file. Manual follow-up required. **`,
+         ...(d.noEmailReason ? [`   Reason given: ${d.noEmailReason}`] : []), '']
+      : []),
     `Holder: ${d.holder}`,
     `Client: ${d.client}`,
     `Date out: ${fmtDate(d.checkedOutAt)}`,
@@ -277,4 +332,89 @@ export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
   ].join('\n');
 
   return sendBranded(subject, html, text, [d.holderEmail || '', caraAddress()]);
+}
+
+// ── Signed receipt delivery ──────────────────────────────────────────────────
+// On submission the signed PDF goes to THREE places:
+//   1. the signer — their own proof of what they accepted
+//   2. Cara — the notification recipient
+//   3. the counterparty, when the keys passed directly between two holders, so
+//      both sides hold both receipts
+export interface SignedReceiptMail {
+  signer: string;
+  signerEmail: string | null;
+  client: string;
+  keys: KeyLine[];
+  signedAt: string;
+  /** Present for a wet signature captured on a device at handover. */
+  witnessedBy?: string | null;
+  counterpartyName?: string | null;
+  counterpartyEmail?: string | null;
+  pdfPath: string | null;
+  pdfFilename: string | null;
+}
+
+export async function sendSignedReceipt(d: SignedReceiptMail): Promise<MailResult> {
+  const subject = `Signed key receipt — ${d.client}`;
+  const total = d.keys.reduce((n, k) => n + k.qty, 0);
+
+  const witness = d.witnessedBy
+    ? `<tr><td style="padding:5px 0;color:${CW_MUTED};font-size:13px;width:150px">Witnessed by</td>
+           <td style="padding:5px 0;color:${CW_CHARCOAL};font-size:13px;font-weight:600">${esc(d.witnessedBy)} (signed in person)</td></tr>`
+    : '';
+  const counterparty = d.counterpartyName
+    ? `<tr><td style="padding:5px 0;color:${CW_MUTED};font-size:13px">Handed over by</td>
+           <td style="padding:5px 0;color:${CW_CHARCOAL};font-size:13px;font-weight:600">${esc(d.counterpartyName)}</td></tr>`
+    : '';
+
+  const attachNote = d.pdfFilename
+    ? `<p style="margin:20px 0 0;font-size:13px;color:${CW_CHARCOAL}">
+         The signed receipt is attached as <strong>${esc(d.pdfFilename)}</strong>. Keep it for your records.
+       </p>`
+    : `<p style="margin:20px 0 0;font-size:13px;color:${CW_RED}">
+         The signature was recorded, but the PDF receipt could not be generated and is not attached.
+         City Wide has been notified.
+       </p>`;
+
+  const html = brandedShell(
+    'Signed key receipt',
+    `${d.signer} signed for ${total} key${total === 1 ? '' : 's'} at ${d.client}.`,
+    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
+       ${detailRows([['Signed by', d.signer], ['Client', d.client], ['Signed at', fmtDate(d.signedAt)]])}
+       ${witness}
+       ${counterparty}
+     </table>
+     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid ${CW_BORDER};border-radius:4px;border-collapse:separate;overflow:hidden">
+       <tr style="background:${CW_CHARCOAL};color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:1px">
+         <th align="left" style="padding:10px 14px;font-weight:600">Key type</th>
+         <th align="right" style="padding:10px 14px;font-weight:600">Qty</th>
+       </tr>
+       ${keyRows(d.keys)}
+       <tr style="background:${CW_BG}">
+         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};font-weight:700;color:${CW_CHARCOAL}">Total</td>
+         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};text-align:right;font-weight:700;color:${CW_RED}">${total}</td>
+       </tr>
+     </table>
+     ${attachNote}`,
+  );
+
+  const text = [
+    subject,
+    `Signed by: ${d.signer}`,
+    `Client: ${d.client}`,
+    `Signed at: ${fmtDate(d.signedAt)}`,
+    ...(d.witnessedBy ? [`Witnessed by: ${d.witnessedBy} (signed in person)`] : []),
+    ...(d.counterpartyName ? [`Handed over by: ${d.counterpartyName}`] : []),
+    '',
+    'Keys:',
+    ...d.keys.map((k) => `  ${k.qty} × ${k.label}`),
+    '',
+    d.pdfFilename
+      ? `The signed receipt is attached as ${d.pdfFilename}.`
+      : 'The signature was recorded, but the PDF receipt could not be generated and is not attached.',
+  ].join('\n');
+
+  return sendBranded(subject, html, text, [d.signerEmail || '', caraAddress(), d.counterpartyEmail || ''], {
+    attachments: d.pdfPath && d.pdfFilename ? [{ filename: d.pdfFilename, path: d.pdfPath }] : [],
+  });
 }

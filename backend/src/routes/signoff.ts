@@ -4,6 +4,7 @@ import db from '../lib/db';
 import { readKeyLines, totalQty } from '../lib/custody';
 import { hashSignature } from '../lib/pdf';
 import { generateCustodyReceipt } from '../lib/custodyPdf';
+import { sendSignedReceipt } from '../lib/custodyMail';
 
 const router = Router();
 
@@ -90,7 +91,8 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
 
   db.prepare(`
     UPDATE key_assignments
-       SET signed_at=?, signature_data=?, signature_hash=?, pdf_path=?, signoff_token=NULL
+       SET signed_at=?, signature_data=?, signature_hash=?, pdf_path=?,
+           signature_status='signed', signoff_token=NULL
      WHERE id=?
   `).run(signedAt, signature_data, hash, pdfPath, row.id);
 
@@ -107,11 +109,37 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
     }),
   );
 
+  // ── Deliver the signed PDF ────────────────────────────────────────────────
+  // Three recipients: the signer (their proof), Cara (the notification
+  // recipient), and the counterparty when the keys passed directly between two
+  // holders — so both sides end up holding both receipts.
+  const mail = await sendSignedReceipt({
+    signer: row.assignee,
+    signerEmail: row.assignee_email ?? null,
+    client: row.account_name,
+    keys,
+    signedAt,
+    counterpartyName: row.counterparty_name ?? null,
+    counterpartyEmail: row.counterparty_email ?? null,
+    pdfPath,
+    pdfFilename: pdfPath ? path.basename(pdfPath) : null,
+  });
+
+  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
+    mail.ok ? 'signed_receipt_sent' : 'signed_receipt_failed',
+    row.account_name, row.account_id ?? null, row.assignee,
+    JSON.stringify({
+      assignment_id: row.id, recipients: mail.recipients,
+      attempts: mail.attempts, error: mail.error,
+    }),
+  );
+
   res.json({
     success: true,
     signed_at: signedAt,
     pdf: pdfPath ? path.basename(pdfPath) : null,
     pdf_error: pdfError,
+    receipt_email: { ok: mail.ok, recipients: mail.recipients, error: mail.error },
   });
 });
 

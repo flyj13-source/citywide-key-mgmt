@@ -20,6 +20,8 @@ export interface CustodyReceiptData {
   recordedBy: string;
   signatureData: string;
   signedAt: string;
+  /** Set when a manager captured a wet signature on a device at handover. */
+  witnessedBy?: string | null;
 }
 
 const hasZone = (s: string) => /[Tt]/.test(s) || /[Zz]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s);
@@ -139,6 +141,12 @@ export async function generateCustodyReceipt(d: CustodyReceiptData): Promise<str
   page.drawText(`${d.holder} — Electronic Signature`, { x: 36, y, size: 9, font: regular, color: CW_GRAY });
   y -= 13;
   page.drawText(`Signed ${fmt(d.signedAt)}`, { x: 36, y, size: 9, font: regular, color: CW_GRAY });
+  if (d.witnessedBy) {
+    y -= 13;
+    page.drawText(`Signed in person, witnessed by ${d.witnessedBy}`, {
+      x: 36, y, size: 9, font: regular, color: CW_GRAY,
+    });
+  }
 
   const hash = hashSignature(d.signatureData);
   drawFooter(page, regular, `Signature SHA-256: ${hash}`);

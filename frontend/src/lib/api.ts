@@ -179,15 +179,35 @@ export interface Assignment {
   has_pdf: boolean;
   signoff_pending: boolean;
   signoff_expires_at: string | null;
+  signature_status: SignatureStatus;
+  no_email_reason: string | null;
+  signed_in_person_by: string | null;
+  signature_send_error: string | null;
+  signature_send_attempts: number;
+  counterparty_name: string | null;
+  counterparty_email: string | null;
 }
-export interface MailOutcome { ok: boolean; recipients: string[]; error?: string; cara?: string }
+export interface MailOutcome {
+  ok: boolean; recipients: string[]; error?: string; cara?: string; attempts?: number;
+}
 export interface HolderOption {
   id: number;
   name: string;
   email: string | null;
   type: 'employee' | 'ic';
   detail: string;
+  has_email: boolean;
 }
+
+// Explicit lifecycle so "a signature is coming" and "no signature will ever
+// arrive" are never rendered the same way.
+export type SignatureStatus =
+  | 'signed' | 'awaiting_signature' | 'signature_unavailable'
+  | 'signature_send_failed' | 'not_required';
+
+/** The two states that will NOT resolve on their own — always red. */
+export const SIGNATURE_NEEDS_ATTENTION: SignatureStatus[] =
+  ['signature_unavailable', 'signature_send_failed'];
 
 export const getAssignments = (params?: Record<string, string>) => {
   const q = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -210,10 +230,43 @@ export const checkout = (data: {
   due_at?: string | null;
   notes?: string | null;
   on_behalf: boolean;
+  /** Required when the holder has no email — states why keys go out unsigned. */
+  no_email_reason?: string | null;
+  counterparty_name?: string | null;
+  counterparty_email?: string | null;
 }) =>
-  req<{ id: number; assignment: Assignment; signoff_link: string; email: MailOutcome }>(
-    '/assignments/checkout', { method: 'POST', body: JSON.stringify(data) }
-  );
+  req<{
+    id: number; assignment: Assignment; signoff_link: string | null;
+    signature_status: SignatureStatus; email: MailOutcome;
+  }>('/assignments/checkout', { method: 'POST', body: JSON.stringify(data) });
+
+/** Save an address onto the person's staff/IC record so the gap closes for good. */
+export const saveHolderEmail = (data: {
+  holder_type: 'employee' | 'ic'; holder_id: number; email: string;
+}) =>
+  req<{ success: true; name: string; email: string }>('/assignments/holder-email', {
+    method: 'POST', body: JSON.stringify(data),
+  });
+
+/** In-person (wet) signature captured on a device at handover. */
+export const signInPerson = (id: number, signature_data: string) =>
+  req<{
+    success: true; signed_at: string; witnessed_by: string;
+    pdf: string | null; pdf_error: string | null;
+    assignment: Assignment; email: MailOutcome;
+  }>(`/assignments/${id}/sign-in-person`, {
+    method: 'POST', body: JSON.stringify({ signature_data }),
+  });
+
+export interface SignatureGaps {
+  no_email: number;
+  send_failed: number;
+  awaiting: number;
+  needs_attention: number;
+  total_missing: number;
+  staff_without_email: number;
+}
+export const getSignatureGaps = () => req<SignatureGaps>('/assignments/signature-gaps');
 export const checkin = (data: {
   id: number;
   keys?: { type: KeyTypeKey; qty: number }[];
@@ -476,7 +529,7 @@ export interface ReassignTarget {
   clients_managed: number;
 }
 export interface ReassignablePayload {
-  source: { id: number; name: string; manager_type: string };
+  source: { id: number; name: string; manager_type: string; email: string | null };
   role: 'am' | 'ccm';
   role_label: string;
   clients: ReassignClient[];
