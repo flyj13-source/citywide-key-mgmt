@@ -9,7 +9,11 @@ import ExportMenu from '../components/ExportMenu';
 import { CheckOutModal, CheckInModal } from '../components/CustodyModals';
 import ReassignModal from '../components/ReassignModal';
 import TransferModal from '../components/TransferModal';
-import ActionMenu, { type ActionItem } from '../components/ActionMenu';
+import { ActionRow, ActionGroup, ActionDivider, ActionButton } from '../components/ActionRow';
+import {
+  IconCheckOut, IconCheckIn, IconTransfer, IconCustomer, IconIC, IconManagerAdd,
+  IconImport, IconReport, IconExport, IconReassign, IconDelete, IconCheck,
+} from '../components/Icons';
 import SignInPersonModal from '../components/SignInPersonModal';
 import { ManagerRosterTable, type RosterChip } from '../components/ManagerRoster';
 import ManagerPanel from '../components/ManagerPanel';
@@ -1367,48 +1371,13 @@ export default function Registry() {
   const baseColSpan = tableTab === 'customer' ? 22 : tableTab === 'all' ? 16 : 15;
   const colSpan = canDelete ? baseColSpan : baseColSpan - 1;
 
-  // Lower-frequency header actions, grouped under ⋯ More. Selection-dependent
-  // entries stay listed but disabled, with the reason spelled out — a hidden
-  // action is indistinguishable from a missing one.
-  const moreActions: ActionItem[] = [
-    {
-      label: '+ Add Manager…',
-      onSelect: () => setManagerModal({ mode: 'add' }),
-    },
-    {
-      label: 'Custody Report…',
-      onSelect: () => navigate('/registry/custody-report'),
-      separated: true,
-    },
-    ...(canDelete || isAdmin ? [{
-      label: 'Reassign Manager…',
-      onSelect: () => setReassign({ name: null, role: 'am' as const }),
-      separated: true,
-    }] : []),
-    { label: 'Export…', onSelect: () => setShowExport(true), separated: !(canDelete || isAdmin) },
-    ...(canDelete ? [
-      {
-        label: 'Edit Account',
-        onSelect: () => selectedAccount && openEditId(selectedAccount.id),
-        disabled: !selectedAccount,
-        hint: 'Select a client row first',
-        separated: true,
-      },
-      {
-        label: 'Delete Account',
-        onSelect: () => { setArchiveError(''); setArchiveTarget(selectedAccount); },
-        disabled: !selectedAccount,
-        hint: 'Select a client row first',
-        danger: true,
-      },
-    ] : []),
-  ];
-
   return (
     <Layout>
       <div className="p-6 max-w-full mx-auto space-y-4">
-        {/* Header */}
-        <div className="flex items-center justify-between">
+        {/* Header — the title sits on its own line so the action row gets the
+            full content width. Eleven buttons need ~1580px; sharing a line with
+            the title capped it ~90px short of that even on a 1920px screen. */}
+        <div className="space-y-3">
           <div>
             <h1 className="text-xl font-bold text-[#1a1a1a]">Key Registry</h1>
             <p className="text-sm text-cw-muted">
@@ -1420,57 +1389,134 @@ export default function Registry() {
             </p>
           </div>
           {/* ── Action row ────────────────────────────────────────────────
-              Visible: the five high-frequency daily actions. Everything
-              lower-frequency (Reassign Manager, Export, Edit, Delete) lives in
-              the ⋯ More overflow so this row stays scannable. The handover
-              confirm is contextual — it only exists while a flagged row is
-              selected, so it adds no permanent clutter. */}
-          <div className="flex flex-wrap gap-2 justify-end items-start">
-            <button
-              onClick={() => setCheckOutOpen(true)}
-              title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Check keys out to an employee or IC'}
-              className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors"
-            >
-              ↗ Check Out Keys
-            </button>
-            <button
-              onClick={() => setCheckInFor({ assignmentId: null, account: selectedSnapshot })}
-              title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Record returned keys'}
-              className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
-            >
-              ↙ Check In Keys
-            </button>
-            <button
-              onClick={() => setTransferFor({ account: selectedSnapshot, holder: null })}
-              title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Hand keys straight from one person to another'}
-              className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
-            >
-              ⇄ Transfer Keys
-            </button>
-            <span className="w-px bg-cw-border self-stretch mx-1" aria-hidden="true" />
-            <button onClick={() => openAdd('customer')} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">
-              + Add Customer
-            </button>
-            <button onClick={() => openAdd('ic')} className="px-4 py-2 border border-cw-border text-cw-text text-sm font-medium rounded hover:bg-gray-50 transition-colors">
-              + Add IC
-            </button>
-            <button onClick={() => setShowImport(true)} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] transition-colors">
-              ↑ Import from Excel
-            </button>
+              All eleven actions stay visible — nothing is hidden behind an
+              overflow menu. They are ordered by WEIGHT instead: filled red for
+              the daily custody moves, charcoal outline for records, borderless
+              for reports and admin, with a hairline between each group. The row
+              wraps as whole groups on narrow screens rather than collapsing.
+              The handover confirm is contextual — it exists only while a
+              flagged row is selected, so it adds no permanent clutter. */}
+          <ActionRow>
+            {/* GROUP 1 — daily custody. The only filled buttons on the page. */}
+            <ActionGroup label="Daily custody">
+              <ActionButton
+                weight="primary"
+                icon={<IconCheckOut />}
+                label="Check Out"
+                onClick={() => setCheckOutOpen(true)}
+                title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Check keys out to an employee or IC'}
+              />
+              <ActionButton
+                weight="primary"
+                icon={<IconCheckIn />}
+                label="Check In"
+                onClick={() => setCheckInFor({ assignmentId: null, account: selectedSnapshot })}
+                title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Record returned keys'}
+              />
+              <ActionButton
+                weight="primary"
+                icon={<IconTransfer />}
+                label="Transfer Keys"
+                onClick={() => setTransferFor({ account: selectedSnapshot, holder: null })}
+                title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Hand keys straight from one person to another'}
+              />
+            </ActionGroup>
 
+            <ActionDivider />
+
+            {/* GROUP 2 — records. */}
+            <ActionGroup label="Records">
+              <ActionButton
+                weight="secondary"
+                icon={<IconCustomer />}
+                label="Add Customer"
+                onClick={() => openAdd('customer')}
+                title="Add a customer site to the registry"
+              />
+              <ActionButton
+                weight="secondary"
+                icon={<IconIC />}
+                label="Add IC"
+                onClick={() => openAdd('ic')}
+                title="Add an independent contractor vendor"
+              />
+              <ActionButton
+                weight="secondary"
+                icon={<IconManagerAdd />}
+                label="Add Manager"
+                onClick={() => setManagerModal({ mode: 'add' })}
+                title="Add an account or contract compliance manager to the roster"
+              />
+              <ActionButton
+                weight="secondary"
+                icon={<IconImport />}
+                label="Import from Excel"
+                onClick={() => setShowImport(true)}
+                title="Bulk-import accounts from a spreadsheet"
+              />
+            </ActionGroup>
+
+            <ActionDivider />
+
+            {/* GROUP 3 — reports and admin. Text-with-icon, no border. */}
+            <ActionGroup label="Reports and admin">
+              <ActionButton
+                weight="tertiary"
+                icon={<IconReport />}
+                label="Custody Report"
+                onClick={() => navigate('/registry/custody-report')}
+                title="Who holds what, and which sign-offs are outstanding"
+              />
+              <ActionButton
+                weight="tertiary"
+                icon={<IconExport />}
+                label="Export"
+                onClick={() => setShowExport(true)}
+                title="Export the current view"
+              />
+              {(canDelete || isAdmin) && (
+                <ActionButton
+                  weight="tertiary"
+                  icon={<IconReassign />}
+                  label="Reassign Manager"
+                  onClick={() => setReassign({ name: null, role: 'am' })}
+                  title="Move a manager's clients and key responsibility to someone else"
+                />
+              )}
+              {canDelete && (
+                <ActionButton
+                  weight="tertiary"
+                  danger
+                  icon={<IconDelete />}
+                  label="Delete Account"
+                  onClick={() => { setArchiveError(''); setArchiveTarget(selectedAccount); }}
+                  disabled={!selectedAccount}
+                  title={selectedAccount
+                    ? `Archive ${selectedAccount.ic_company_name}`
+                    : 'Select a client row first'}
+                />
+              )}
+            </ActionGroup>
+
+            {/* Contextual — only while a flagged row is selected. */}
             {(canDelete || isAdmin) && selectedAccount?.pending_handover && (
-              <button
-                onClick={doConfirmHandover}
-                disabled={busy}
-                title={`Mark the physical keys for ${selectedAccount.ic_company_name} as handed over`}
-                className="px-4 py-2 border border-[#e8cf8a] bg-[#fff8e6] text-[#7a5a00] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-50 transition-colors"
-              >
-                ✓ Confirm physical handover
-              </button>
+              <>
+                <ActionDivider />
+                <ActionGroup label="Pending handover">
+                  <button
+                    type="button"
+                    onClick={doConfirmHandover}
+                    disabled={busy}
+                    title={`Mark the physical keys for ${selectedAccount.ic_company_name} as handed over`}
+                    className="inline-flex items-center gap-1.5 h-[34px] px-3 rounded text-sm font-medium whitespace-nowrap border border-[#e8cf8a] bg-[#fff8e6] text-[#7a5a00] hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-50 transition-colors"
+                  >
+                    <IconCheck />
+                    <span>Confirm physical handover</span>
+                  </button>
+                </ActionGroup>
+              </>
             )}
-
-            <ActionMenu items={moreActions} />
-          </div>
+          </ActionRow>
         </div>
 
         {/* Tab bar */}
