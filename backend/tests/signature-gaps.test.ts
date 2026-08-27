@@ -158,6 +158,38 @@ describe('UNSIGNED BY NECESSITY', () => {
   });
 });
 
+// ═══════════════════════ TRANSFER GATE ═════════════════════════════════════
+describe('TRANSFER — the gate applies to both parties', () => {
+  it('refuses a transfer when the receiving holder has no email', async () => {
+    const out = await auth(request(app).post('/api/assignments/checkout')).send({
+      account_id: clientId, holder: 'Giver Gina', holder_type: 'employee',
+      holder_email: 'gina@example.test', keys: [{ type: 'card', qty: 2 }],
+    });
+    expect(out.status).toBe(201);
+
+    const res = await auth(request(app).post('/api/assignments/transfer')).send({
+      account_id: clientId, from_holder: 'Giver Gina', to_holder: 'Unreachable Uma',
+      to_holder_type: 'employee', keys: [{ type: 'card', qty: 1 }],
+    });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('HOLDER_EMAIL_MISSING');
+    expect(res.body.unreachable).toEqual(['Unreachable Uma']);
+  });
+
+  it('proceeds with a reason, flagging the receiving record red', async () => {
+    const res = await auth(request(app).post('/api/assignments/transfer')).send({
+      account_id: clientId, from_holder: 'Giver Gina', to_holder: 'Unreachable Uma',
+      to_holder_type: 'employee', keys: [{ type: 'card', qty: 1 }],
+      no_email_reason: 'New hire, address not issued yet',
+    });
+    expect(res.status).toBe(201);
+    const row = one("SELECT * FROM key_assignments WHERE assignee = 'Unreachable Uma'");
+    expect(row.signature_status).toBe('signature_unavailable');
+    expect(row.signoff_token).toBeNull();
+    expect(row.no_email_reason).toBe('New hire, address not issued yet');
+  });
+});
+
 // ═══════════════════════ SEND FAILURE ═══════════════════════════════════════
 describe('SMTP SEND FAILURE', () => {
   it('an email that exists but cannot be sent lands in signature_send_failed, not amber', async () => {

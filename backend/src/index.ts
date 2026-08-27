@@ -23,6 +23,7 @@ import staffManagersRouter from './routes/staffManagers';
 import formsRouter from './routes/forms';
 import exportsRouter from './routes/exports';
 import signoffRouter from './routes/signoff';
+import settingsRouter from './routes/settings';
 import diagRouter from './routes/diag';
 
 // Catch crashes before the health check has a chance to respond
@@ -87,6 +88,7 @@ app.use('/api/staff', staffRouter);
 app.use('/api/exports', exportsRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/backups', backupsRouter);
+app.use('/api/settings', settingsRouter);
 app.use('/api/claude', claudeRouter);
 app.use('/api/contractors', contractorsRouter);
 // Public contractor routes (no JWT)

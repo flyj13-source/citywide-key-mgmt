@@ -22,6 +22,7 @@ import Forms from './pages/Forms';
 import ManagerRoster from './pages/ManagerRoster';
 import ManagerDetail from './pages/ManagerDetail';
 import StaffDetail from './pages/StaffDetail';
+import CustodyReport from './pages/CustodyReport';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   return isAuthenticated() ? <>{children}</> : <Navigate to="/login" replace />;
@@ -37,6 +38,9 @@ export default function App() {
         <Route path="/key-signoff/:token" element={<KeySignoff />} />
         <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
         <Route path="/registry" element={<RequireAuth><Registry /></RequireAuth>} />
+        {/* Declared BEFORE /registry/:accountId so the literal path wins over
+            the id parameter. */}
+        <Route path="/registry/custody-report" element={<RequireAuth><CustodyReport /></RequireAuth>} />
         <Route path="/registry/:accountId" element={<RequireAuth><AccountDetail /></RequireAuth>} />
         <Route path="/managers" element={<RequireAuth><ManagerRoster /></RequireAuth>} />
         <Route path="/managers/:id" element={<RequireAuth><ManagerDetail /></RequireAuth>} />

@@ -104,23 +104,44 @@ CREATE TABLE IF NOT EXISTS key_assignments (
   condition_on_return TEXT,
   notes TEXT,
   status TEXT DEFAULT 'checked_out',
-  -- Sign-off (check-OUT only; a return needs no signature per spec)
+  -- Check-OUT sign-off ("You are receiving these keys")
   signoff_token TEXT,
   signoff_expires_at DATETIME,
   signed_at DATETIME,
   signature_data TEXT,            -- base64 PNG data URL
   signature_hash TEXT,            -- sha256 of signature_data
+  signature_typed_name TEXT,      -- the signer's typed name confirmation
   pdf_path TEXT,
-  -- Signature lifecycle, explicit so "coming" and "never coming" never look
-  -- alike: signed | awaiting_signature | signature_unavailable |
-  -- signature_send_failed | not_required
+  -- Check-IN sign-off ("You are returning these keys") — the mirror set, so a
+  -- record that was signed for on the way out AND on the way back carries both
+  -- signatures independently instead of one overwriting the other.
+  checkin_signoff_token TEXT,
+  checkin_signoff_expires_at DATETIME,
+  checkin_signed_at DATETIME,
+  checkin_signature_data TEXT,
+  checkin_signature_hash TEXT,
+  checkin_signature_typed_name TEXT,
+  checkin_pdf_path TEXT,
+  -- Person-to-person transfer linkage. Both sides of a transfer share a
+  -- transfer_id; transfer_role says which end this row is, and
+  -- linked_assignment_id cross-references the other end.
+  transfer_id TEXT,
+  transfer_role TEXT,             -- 'from' | 'to'
+  linked_assignment_id INTEGER,
+  return_reason TEXT,             -- 'returned' | 'transferred'
+  -- Signature DELIVERABILITY, orthogonal to whether a signature exists: it
+  -- records whether one could ever be collected. Explicit so "coming" and
+  -- "never coming" never look alike:
+  --   signed | awaiting_signature | signature_unavailable |
+  --   signature_send_failed | not_required
   signature_status TEXT,
   no_email_reason TEXT,           -- typed reason for proceeding with no email
   signed_in_person_by TEXT,       -- witness who captured a wet signature on-device
   signature_send_attempts INTEGER DEFAULT 0,
   signature_send_error TEXT,
   signature_last_attempt_at DATETIME,
-  -- The other party when keys pass directly between two holders
+  -- Explicit counterparty, for a handover with no linked record of its own.
+  -- When linked_assignment_id is set, THAT row is the authoritative other end.
   counterparty_name TEXT,
   counterparty_email TEXT
 );
@@ -131,6 +152,15 @@ CREATE TABLE IF NOT EXISTS staff_key_holders (
   account TEXT NOT NULL,
   keys_held TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- System settings — operator-editable key/value configuration that must survive
+-- staff changes without a redeploy (e.g. who receives every key custody email).
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (

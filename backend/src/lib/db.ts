@@ -276,7 +276,24 @@ const assignmentNeeded: [string, string][] = [
   ['signed_at', 'DATETIME'],
   ['signature_data', 'TEXT'],
   ['signature_hash', 'TEXT'],
+  ['signature_typed_name', 'TEXT'],
   ['pdf_path', 'TEXT'],
+  // Check-IN sign-off — the mirror of the check-out set above. Kept as its own
+  // columns rather than reusing signed_at/pdf_path so a record signed on the
+  // way out AND on the way back keeps BOTH receipts; one overwriting the other
+  // would destroy the very evidence the signature exists to provide.
+  ['checkin_signoff_token', 'TEXT'],
+  ['checkin_signoff_expires_at', 'DATETIME'],
+  ['checkin_signed_at', 'DATETIME'],
+  ['checkin_signature_data', 'TEXT'],
+  ['checkin_signature_hash', 'TEXT'],
+  ['checkin_signature_typed_name', 'TEXT'],
+  ['checkin_pdf_path', 'TEXT'],
+  // Person-to-person transfer linkage (both sides share transfer_id).
+  ['transfer_id', 'TEXT'],
+  ['transfer_role', 'TEXT'],
+  ['linked_assignment_id', 'INTEGER'],
+  ['return_reason', 'TEXT'],
 ];
 // Signature lifecycle. The status is EXPLICIT rather than inferred from
 // signed_at being null, because "waiting for a signature that is coming" and
@@ -311,9 +328,24 @@ if (!assignmentCols.includes('signature_status')) {
   db.exec("UPDATE key_assignments SET signature_status = 'not_required' WHERE signature_status IS NULL");
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_sig_status ON key_assignments(signature_status)');
-// Token lookup is a public, unauthenticated path — keep it indexed.
+// Token lookup is a public, unauthenticated path — keep both indexed.
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_signoff_token ON key_assignments(signoff_token)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_checkin_token ON key_assignments(checkin_signoff_token)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_status ON key_assignments(status)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_key_assignments_transfer ON key_assignments(transfer_id)');
+
+// ── System settings ─────────────────────────────────────────────────────────
+// Operator-editable configuration (who receives every custody email, …) that
+// must outlive a staff change without a redeploy. Created here too (idempotent)
+// so the settings API works on a DB whose schema.sql predates it.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT
+  )
+`);
 
 // ── Manager reassignment: physical-handover tracking ────────────────────────
 // Reassigning a manager moves REGISTRY responsibility instantly; the physical

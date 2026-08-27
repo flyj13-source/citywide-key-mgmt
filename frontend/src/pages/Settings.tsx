@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/Layout';
-import { changePassword, getBackupStatus, runBackupNow, type BackupStatus } from '../lib/api';
+import {
+  changePassword, getBackupStatus, runBackupNow, getCustodyNotification, setCustodyNotification,
+  type BackupStatus, type CustodyNotificationSetting,
+} from '../lib/api';
 import { getManager } from '../lib/auth';
 
 function fmtBytes(n: number | null): string {
@@ -24,6 +27,46 @@ export default function Settings() {
   const [pwToast, setPwToast] = useState(false);
 
   const isAdmin = getManager()?.role === 'admin';
+
+  // ── Key custody notification recipient ─────────────────────────────────────
+  // Stored in the database, not in a constant or an env var, so it survives the
+  // person currently in that seat moving on.
+  const [notify, setNotify] = useState<CustodyNotificationSetting | null>(null);
+  const [notifyValue, setNotifyValue] = useState('');
+  const [notifyLoading, setNotifyLoading] = useState(true);
+  const [notifySaving, setNotifySaving] = useState(false);
+  const [notifyError, setNotifyError] = useState('');
+  const [notifyToast, setNotifyToast] = useState(false);
+
+  const loadNotify = useCallback(async () => {
+    setNotifyLoading(true);
+    try {
+      const d = await getCustodyNotification();
+      setNotify(d);
+      setNotifyValue(d.value || d.effective.join(', '));
+    } catch {
+      setNotify(null);
+    } finally {
+      setNotifyLoading(false);
+    }
+  }, []);
+  useEffect(() => { loadNotify(); }, [loadNotify]);
+
+  const handleSaveNotify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNotifySaving(true); setNotifyError('');
+    try {
+      const d = await setCustodyNotification(notifyValue);
+      setNotify(d);
+      setNotifyValue(d.value);
+      setNotifyToast(true);
+      setTimeout(() => setNotifyToast(false), 3000);
+    } catch (err: any) {
+      setNotifyError(err?.message || 'Could not update the recipient');
+    } finally {
+      setNotifySaving(false);
+    }
+  };
   const [backup, setBackup] = useState<BackupStatus | null>(null);
   const [backupLoading, setBackupLoading] = useState(true);
   const [backupRunning, setBackupRunning] = useState(false);
@@ -87,6 +130,63 @@ export default function Settings() {
         <div>
           <h1 className="text-xl font-bold">Settings</h1>
           <p className="text-sm text-cw-muted">M365 integrations and system configuration</p>
+        </div>
+
+        {/* Key custody notifications */}
+        <div className="card overflow-hidden">
+          <div className="px-5 py-3 bg-cw-black">
+            <h2 className="text-white font-semibold text-sm">Key Custody Notifications</h2>
+          </div>
+          <form onSubmit={handleSaveNotify} className="px-5 py-4 space-y-4">
+            <p className="text-sm text-cw-muted">
+              Every key check-out, check-in, transfer and signed receipt is emailed to the holder <em>and</em> to the
+              address below. Separate multiple recipients with commas.
+            </p>
+
+            <div>
+              <label className="block text-sm font-medium text-cw-text mb-1">Notification recipient</label>
+              <input
+                type="text"
+                value={notifyValue}
+                onChange={(e) => setNotifyValue(e.target.value)}
+                disabled={notifyLoading || notifySaving}
+                className="input w-full"
+                placeholder="cara@citywideboston.com"
+                autoComplete="off"
+              />
+            </div>
+
+            {notify && (
+              <p className="text-xs text-cw-muted">
+                Currently receiving: <span className="font-semibold text-[#1a1a1a]">{notify.effective.join(', ') || 'nobody'}</span>
+                {notify.source !== 'settings' && (
+                  <span className="ml-1 text-[#7a5a00]">
+                    (falling back to the {notify.source === 'environment' ? 'CARA_EMAIL environment variable' : 'built-in default'} — save to store it here)
+                  </span>
+                )}
+                {notify.updated_at && notify.updated_by && (
+                  <> · last changed by {notify.updated_by} on {fmtWhen(notify.updated_at)}</>
+                )}
+              </p>
+            )}
+
+            {notifyError && (
+              <p className="text-sm text-[#C0272D] bg-[#fbeaea] border border-[#f0c9cb] rounded px-3 py-2">{notifyError}</p>
+            )}
+            {notifyToast && (
+              <p className="text-sm text-green-800 bg-green-50 border border-green-200 rounded px-3 py-2">
+                ✓ Saved — the next custody email goes to this address.
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={notifyLoading || notifySaving || !notifyValue.trim()}
+              className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors"
+            >
+              {notifySaving ? 'Saving…' : 'Save recipient'}
+            </button>
+          </form>
         </div>
 
         {/* Change Password */}

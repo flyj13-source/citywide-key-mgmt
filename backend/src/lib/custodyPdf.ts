@@ -8,20 +8,37 @@ import {
 import { hashSignature } from './pdf';
 import type { KeyLine } from './custody';
 
+// ── Branded signed receipts ──────────────────────────────────────────────────
+// One generator, two directions. A check-OUT receipt acknowledges RECEIVING
+// keys; a check-IN receipt acknowledges RETURNING them. They are separate
+// documents with separate acknowledgement text — a return signed against
+// "I acknowledge receipt of the keys listed above" would be evidence of the
+// wrong event.
+
+export type CustodyAction = 'checkout' | 'checkin';
+
 export interface CustodyReceiptData {
   assignmentId: number;
+  action: CustodyAction;
   holder: string;
   holderType: 'employee' | 'ic';
   holderEmail: string | null;
   client: string;
+  bcNumber?: string | null;
   keys: KeyLine[];
   checkedOutAt: string;
   dueAt: string | null;
+  returnedAt?: string | null;
+  condition?: string | null;
   recordedBy: string;
   signatureData: string;
+  /** The name the signer typed to confirm the drawn mark is theirs. */
+  typedName?: string | null;
   signedAt: string;
   /** Set when a manager captured a wet signature on a device at handover. */
   witnessedBy?: string | null;
+  /** Set when this receipt is one half of a person-to-person transfer. */
+  transferCounterparty?: string | null;
 }
 
 const hasZone = (s: string) => /[Tt]/.test(s) || /[Zz]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s);
@@ -47,18 +64,54 @@ const fmtDay = (iso: string | null | undefined): string => {
   return d.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric' });
 };
 
-const ACKNOWLEDGEMENT = [
+const CONDITION_LABEL: Record<string, string> = {
+  good: 'Good', damaged: 'Damaged', missing_copy: 'Missing copy',
+};
+
+const RECEIVE_ACKNOWLEDGEMENT = [
   'I acknowledge receipt of the keys listed above and agree to: (1) safeguard all keys and',
   'access credentials, (2) not duplicate or share keys with unauthorized personnel, (3) return',
   'all keys immediately upon request or upon termination of my assignment/contract, and',
   '(4) report any lost or stolen keys to City Wide Boston within 24 hours.',
 ];
 
+const RETURN_ACKNOWLEDGEMENT = [
+  'I confirm that I have returned the keys listed above to City Wide Boston, that I have',
+  'retained no copies or duplicates of them, and that I no longer hold access to the client',
+  'site by means of these keys. I understand this record closes my custody of them as of the',
+  'date and time shown below.',
+];
+
+const COPY: Record<CustodyAction, {
+  title: string; subtitle: string; label: string; ack: string[]; sigCaption: string; file: string;
+}> = {
+  checkout: {
+    title: 'Key Check-Out Receipt',
+    subtitle: 'BOSTON — Signed acknowledgement of key custody',
+    label: 'Receipt',
+    ack: RECEIVE_ACKNOWLEDGEMENT,
+    sigCaption: 'Electronic Signature — keys received',
+    file: 'keycheckout',
+  },
+  checkin: {
+    title: 'Key Check-In Receipt',
+    subtitle: 'BOSTON — Signed acknowledgement of key return',
+    label: 'Return receipt',
+    ack: RETURN_ACKNOWLEDGEMENT,
+    sigCaption: 'Electronic Signature — keys returned',
+    file: 'keycheckin',
+  },
+};
+
+export const receiptDir = (): string => path.join(__dirname, '../../uploads/signatures');
+
 /**
- * Branded one-page receipt for a signed key check-out. Written to
- * uploads/signatures and referenced from the assignment row (pdf_path).
+ * Branded one-page receipt for a signed key check-out or check-in. Written to
+ * uploads/signatures and referenced from the assignment row (pdf_path for a
+ * check-out, checkin_pdf_path for a return).
  */
 export async function generateCustodyReceipt(d: CustodyReceiptData): Promise<string> {
+  const copy = COPY[d.action];
   const doc = await PDFDocument.create();
   const page = doc.addPage([612, 792]);
   const { width } = page.getSize();
@@ -66,22 +119,26 @@ export async function generateCustodyReceipt(d: CustodyReceiptData): Promise<str
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const logo = await embedLogo(doc);
 
-  let y = drawBrandedHeader(
-    page, { bold, regular }, logo,
-    'Key Check-Out Receipt',
-    'BOSTON — Signed acknowledgement of key custody',
-  );
+  let y = drawBrandedHeader(page, { bold, regular }, logo, copy.title, copy.subtitle);
 
-  page.drawText(`Receipt #${d.assignmentId}`, { x: 36, y, size: 14, font: bold, color: CW_CHARCOAL });
+  page.drawText(`${copy.label} #${d.assignmentId}`, { x: 36, y, size: 14, font: bold, color: CW_CHARCOAL });
   y -= 26;
 
   // ── Details block ──────────────────────────────────────────────────────────
   const rows: [string, string][] = [
     ['Holder', `${d.holder}  (${d.holderType === 'ic' ? 'Independent Contractor' : 'City Wide Employee'})`],
     ['Email', d.holderEmail || '—'],
-    ['Client', d.client],
+    ['Client', d.bcNumber ? `${d.client}  (BC #${d.bcNumber})` : d.client],
     ['Checked out', fmt(d.checkedOutAt)],
-    ['Due back', fmtDay(d.dueAt)],
+    ...(d.action === 'checkout'
+      ? ([['Due back', fmtDay(d.dueAt)]] as [string, string][])
+      : ([
+        ['Returned', fmt(d.returnedAt)],
+        ['Condition', CONDITION_LABEL[String(d.condition ?? '')] || d.condition || '—'],
+      ] as [string, string][])),
+    ...(d.transferCounterparty
+      ? ([[d.action === 'checkout' ? 'Received from' : 'Handed to', d.transferCounterparty]] as [string, string][])
+      : []),
     ['Recorded by', d.recordedBy],
   ];
   for (const [label, value] of rows) {
@@ -117,7 +174,7 @@ export async function generateCustodyReceipt(d: CustodyReceiptData): Promise<str
   // ── Acknowledgement ────────────────────────────────────────────────────────
   page.drawText('ACKNOWLEDGEMENT', { x: 36, y, size: 9, font: bold, color: CW_CHARCOAL });
   y -= 16;
-  for (const line of ACKNOWLEDGEMENT) {
+  for (const line of copy.ack) {
     page.drawText(line, { x: 36, y, size: 9, font: regular, color: CW_GRAY });
     y -= 13;
   }
@@ -138,7 +195,11 @@ export async function generateCustodyReceipt(d: CustodyReceiptData): Promise<str
 
   page.drawLine({ start: { x: 36, y }, end: { x: 300, y }, thickness: 1, color: CW_BORDER });
   y -= 13;
-  page.drawText(`${d.holder} — Electronic Signature`, { x: 36, y, size: 9, font: regular, color: CW_GRAY });
+  page.drawText(`${d.holder} — ${copy.sigCaption}`, { x: 36, y, size: 9, font: regular, color: CW_GRAY });
+  if (d.typedName) {
+    y -= 13;
+    page.drawText(`Typed name confirmation: ${d.typedName}`, { x: 36, y, size: 9, font: regular, color: CW_GRAY });
+  }
   y -= 13;
   page.drawText(`Signed ${fmt(d.signedAt)}`, { x: 36, y, size: 9, font: regular, color: CW_GRAY });
   if (d.witnessedBy) {
@@ -152,11 +213,11 @@ export async function generateCustodyReceipt(d: CustodyReceiptData): Promise<str
   drawFooter(page, regular, `Signature SHA-256: ${hash}`);
 
   const bytes = await doc.save();
-  const dir = path.join(__dirname, '../../uploads/signatures');
+  const dir = receiptDir();
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const file = path.join(
     dir,
-    `keycheckout_${d.assignmentId}_${d.holder.replace(/[^a-z0-9]+/gi, '_')}.pdf`,
+    `${copy.file}_${d.assignmentId}_${d.holder.replace(/[^a-z0-9]+/gi, '_')}.pdf`,
   );
   fs.writeFileSync(file, bytes);
   return file;

@@ -176,9 +176,26 @@ export interface Assignment {
   checkin_recorded_by: string | null;
   signed_at: string | null;
   signature_hash: string | null;
+  signature_typed_name: string | null;
   has_pdf: boolean;
   signoff_pending: boolean;
   signoff_expires_at: string | null;
+  // Check-IN signature — tracked independently of the check-out one, so a
+  // record can be signed out and still awaiting its return signature.
+  checkin_signed_at: string | null;
+  checkin_signature_hash: string | null;
+  checkin_signature_typed_name: string | null;
+  has_checkin_pdf: boolean;
+  checkin_signoff_pending: boolean;
+  checkin_signoff_expires_at: string | null;
+  // Person-to-person transfer linkage.
+  transfer_id: string | null;
+  transfer_role: 'from' | 'to' | null;
+  linked_assignment_id: number | null;
+  return_reason: string | null;
+  transfer_signatures: TransferSignatures | null;
+  // Signature DELIVERABILITY — whether one could ever be collected, which is a
+  // different question from whether one exists.
   signature_status: SignatureStatus;
   no_email_reason: string | null;
   signed_in_person_by: string | null;
@@ -187,9 +204,22 @@ export interface Assignment {
   counterparty_name: string | null;
   counterparty_email: string | null;
 }
-export interface MailOutcome {
-  ok: boolean; recipients: string[]; error?: string; cara?: string; attempts?: number;
+export interface TransferSignatures {
+  signed: number;
+  total: 2;
+  complete: boolean;
+  from_signed: boolean;
+  to_signed: boolean;
 }
+export interface MailOutcome {
+  ok: boolean;
+  recipients: string[];
+  error?: string;
+  cara?: string;
+  /** How many send attempts were made (0 when skipped before trying). */
+  attempts?: number;
+}
+
 export interface HolderOption {
   id: number;
   name: string;
@@ -249,13 +279,13 @@ export const saveHolderEmail = (data: {
   });
 
 /** In-person (wet) signature captured on a device at handover. */
-export const signInPerson = (id: number, signature_data: string) =>
+export const signInPerson = (id: number, signature_data: string, kind: 'checkout' | 'checkin' = 'checkout') =>
   req<{
     success: true; signed_at: string; witnessed_by: string;
     pdf: string | null; pdf_error: string | null;
     assignment: Assignment; email: MailOutcome;
   }>(`/assignments/${id}/sign-in-person`, {
-    method: 'POST', body: JSON.stringify({ signature_data }),
+    method: 'POST', body: JSON.stringify({ signature_data, kind }),
   });
 
 export interface SignatureGaps {
@@ -274,26 +304,179 @@ export const checkin = (data: {
   notes?: string | null;
   on_behalf?: boolean;
 }) =>
-  req<{ success: true; partial: boolean; still_out: KeyLine[]; assignment: Assignment; email: MailOutcome }>(
-    '/assignments/checkin', { method: 'POST', body: JSON.stringify(data) }
+  req<{
+    success: true; partial: boolean; still_out: KeyLine[]; assignment: Assignment;
+    signoff_link: string; email: MailOutcome;
+  }>('/assignments/checkin', { method: 'POST', body: JSON.stringify(data) });
+
+export type SignoffKind = 'checkout' | 'checkin';
+
+export const resendSignoff = (id: number, kind?: SignoffKind) =>
+  req<{ success: true; kind: SignoffKind; signoff_link: string; email: MailOutcome }>(
+    `/assignments/${id}/resend-signoff`, { method: 'POST', body: JSON.stringify({ kind }) }
   );
-export const resendSignoff = (id: number) =>
-  req<{ success: true; signoff_link: string; email: MailOutcome }>(
-    `/assignments/${id}/resend-signoff`, { method: 'POST' }
-  );
-export const downloadReceipt = async (id: number) => {
-  const res = await reqRaw(`/assignments/${id}/receipt`);
-  await saveResponseAsFile(res, `CityWide-KeyReceipt-${id}.pdf`);
+export const downloadReceipt = async (id: number, kind: SignoffKind = 'checkout') => {
+  const res = await reqRaw(`/assignments/${id}/receipt?kind=${kind}`);
+  await saveResponseAsFile(res, `CityWide-KeyReceipt-${kind}-${id}.pdf`);
 };
 
+// ── Person-to-person transfer ───────────────────────────────────────────────
+export interface CurrentHolder {
+  holder: string;
+  holder_type: 'employee' | 'ic' | null;
+  holder_email: string | null;
+  holder_id: number | null;
+  assignments: number;
+  keys: KeyLine[];
+  total_keys: number;
+}
+export const getCurrentHolders = (accountId: number) =>
+  req<{ holders: CurrentHolder[] }>(`/assignments/current-holders?account_id=${accountId}`);
+
+export const getTransferable = (accountId: number, holder: string) =>
+  req<{
+    account: { id: number; name: string; bc_number: string | null };
+    holder: string;
+    holder_type: 'employee' | 'ic' | null;
+    holder_email: string | null;
+    keys: KeyLine[];
+    total_keys: number;
+    assignments: Assignment[];
+  }>(`/assignments/transferable?account_id=${accountId}&holder=${encodeURIComponent(holder)}`);
+
+export interface TransferResult {
+  success: true;
+  transfer_id: string;
+  from: { record_id: number; all_record_ids: number[]; holder: string; signoff_link: string; assignment: Assignment };
+  to: { record_id: number; holder: string; signoff_link: string; assignment: Assignment };
+  keys: KeyLine[];
+  total_keys: number;
+  signatures: TransferSignatures;
+  email: { from: MailOutcome; to: MailOutcome; cara?: string };
+}
+export const transferKeys = (data: {
+  account_id: number;
+  from_holder: string;
+  to_holder: string;
+  to_holder_type: 'employee' | 'ic';
+  to_holder_id?: number | null;
+  to_holder_email?: string | null;
+  keys: { type: KeyTypeKey; qty: number }[];
+  due_at?: string | null;
+  notes?: string | null;
+}) => req<TransferResult>('/assignments/transfer', { method: 'POST', body: JSON.stringify(data) });
+
+// ── Custody Report ──────────────────────────────────────────────────────────
+export interface CustodyReportFilters {
+  date_from?: string;
+  date_to?: string;
+  holder?: string;
+  client?: string;
+  holder_type?: 'all' | 'employee' | 'ic';
+  status?: 'all' | 'active' | 'returned' | 'overdue';
+  signature?: 'all' | 'signed' | 'awaiting' | 'missing' | 'unresolvable';
+}
+export interface CustodyReportRow {
+  id: number;
+  holder: string;
+  holder_type: 'employee' | 'ic' | null;
+  holder_type_label: string;
+  client: string;
+  bc_number: string | null;
+  keys: KeyLine[];
+  keys_summary: string;
+  total_keys: number;
+  checked_out_at: string | null;
+  due_at: string | null;
+  returned_at: string | null;
+  status: 'checked_out' | 'returned';
+  overdue: boolean;
+  status_label: string;
+  signed_out_at: string | null;
+  signed_in_at: string | null;
+  signature_status: 'signed' | 'partial' | 'awaiting';
+  signature_label: string;
+  recorded_by: string | null;
+  transfer_id: string | null;
+  transfer_role: 'from' | 'to' | null;
+  linked_assignment_id: number | null;
+  return_reason: string | null;
+}
+export interface CustodyReportSummary {
+  total: number;
+  currently_out: number;
+  overdue: number;
+  awaiting_signature: number;
+  no_email: number;
+  send_failed: number;
+  needs_follow_up: number;
+  total_keys_out: number;
+}
+
+const custodyQuery = (f: CustodyReportFilters): string => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) {
+    if (v !== undefined && v !== null && v !== '' && v !== 'all') p.set(k, String(v));
+  }
+  const q = p.toString();
+  return q ? `?${q}` : '';
+};
+
+export const getCustodyReport = (f: CustodyReportFilters) =>
+  req<{ rows: CustodyReportRow[]; summary: CustodyReportSummary; description: string }>(
+    `/exports/custody-report${custodyQuery(f)}`
+  );
+
+export const exportCustodyReport = async (f: CustodyReportFilters, format: 'xlsx' | 'pdf') => {
+  const q = custodyQuery({ ...f });
+  const res = await reqRaw(`/exports/custody-report/download${q ? `${q}&` : '?'}format=${format}`);
+  await saveResponseAsFile(res, `CityWide-CustodyReport.${format}`);
+};
+
+// ── Custody notification recipient (Settings) ───────────────────────────────
+export interface CustodyNotificationSetting {
+  value: string;
+  effective: string[];
+  source: 'settings' | 'environment' | 'default';
+  updated_at: string | null;
+  updated_by: string | null;
+}
+export const getCustodyNotification = () =>
+  req<CustodyNotificationSetting>('/settings/custody-notification');
+export const setCustodyNotification = (value: string) =>
+  req<CustodyNotificationSetting & { success: true }>('/settings/custody-notification', {
+    method: 'PUT', body: JSON.stringify({ value }),
+  });
+
 // Public sign-off portal (no JWT — the 48h token is the credential)
+export interface SignoffView {
+  id: number;
+  action: 'checkout' | 'checkin';
+  holder: string;
+  holder_type: 'employee' | 'ic';
+  client: string;
+  bc_number: string | null;
+  keys: KeyLine[];
+  total_keys: number;
+  checked_out_at: string;
+  due_at: string | null;
+  returned_at: string | null;
+  condition_on_return: string | null;
+  recorded_by: string | null;
+  signed_at: string | null;
+  status: string;
+  is_transfer: boolean;
+  transfer_counterparty: string | null;
+}
 export const getSignoffByToken = (token: string) =>
   fetch(`${API_ORIGIN}/api/signoff/${token}`).then((r) => r.json());
-export const submitSignoff = (token: string, signature_data: string) =>
+// Both factors travel together: the drawn mark and the typed name that ties it
+// to the person the keys are recorded against.
+export const submitSignoff = (token: string, signature_data: string, typed_name: string) =>
   fetch(`${API_ORIGIN}/api/signoff/${token}/sign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ signature_data }),
+    body: JSON.stringify({ signature_data, typed_name }),
   }).then((r) => r.json());
 
 // Vault

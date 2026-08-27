@@ -10,9 +10,11 @@ import { signInPerson, type Assignment, type MailOutcome } from '../lib/api';
 // signature on a tablet at handover. The witness is recorded, because "they
 // signed remotely" and "someone watched them sign" are different claims.
 export default function SignInPersonModal({
-  assignment, onClose, onDone,
+  assignment, kind, onClose, onDone,
 }: {
   assignment: Assignment;
+  /** Which direction is being signed — a return is acknowledged, not received. */
+  kind: 'checkout' | 'checkin';
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -28,7 +30,7 @@ export default function SignInPersonModal({
     if (!signature) { setError('Ask them to sign in the box before submitting.'); return; }
     setSaving(true); setError('');
     try {
-      const r = await signInPerson(assignment.id, signature);
+      const r = await signInPerson(assignment.id, signature, kind);
       setDone({ mail: r.email, pdfError: r.pdf_error });
       onDone();
     } catch (e: any) {
@@ -68,7 +70,7 @@ export default function SignInPersonModal({
   }
 
   return (
-    <Modal title="Sign in person" onClose={onClose} width="max-w-lg">
+    <Modal title={kind === 'checkin' ? 'Sign for return, in person' : 'Sign in person'} onClose={onClose} width="max-w-lg">
       <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
         <div className="rounded border border-cw-border bg-[#f4f4f2] px-4 py-3 text-sm">
           <div className="font-semibold text-[#1a1a1a]">{assignment.holder}</div>
@@ -97,8 +99,9 @@ export default function SignInPersonModal({
             onChange={(e) => setAcknowledged(e.target.checked)}
           />
           <span className="text-cw-text">
-            {assignment.holder} acknowledges receipt of these keys, and agrees to safeguard them, not duplicate
-            or share them, return them on request, and report any loss within 24 hours.
+            {kind === 'checkin'
+              ? `${assignment.holder} confirms they are returning these keys to City Wide Boston.`
+              : `${assignment.holder} acknowledges receipt of these keys, and agrees to safeguard them, not duplicate or share them, return them on request, and report any loss within 24 hours.`}
           </span>
         </label>
 

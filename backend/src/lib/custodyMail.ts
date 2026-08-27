@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { createTransport } from './mailer';
+import { custodyNotifyRecipients, custodyNotifyDisplay } from './settings';
 import type { KeyLine } from './custody';
 
 // ── CW-branded custody notifications ─────────────────────────────────────────
@@ -17,9 +18,18 @@ const CW_BG = '#f4f4f2';
 const CW_BORDER = '#e0e0dd';
 const CW_MUTED = '#6b6b68';
 
-/** Where the "and Cara" copy of every custody email goes. */
+/**
+ * Where the "and Cara" copy of every custody email goes. Read from the settings
+ * table (Settings → Key custody notifications), NOT from a constant or an env
+ * var, so the address survives a staff change without a redeploy.
+ */
+export function notifyAddresses(): string[] {
+  return custodyNotifyRecipients();
+}
+
+/** Display form of the same list — what the UI echoes back after a send. */
 export function caraAddress(): string {
-  return process.env.CARA_EMAIL || process.env.SMTP_USER || 'cara@citywideboston.com';
+  return custodyNotifyDisplay();
 }
 
 // Same resolution order as the PDF branding — the logo is bundled under
@@ -115,6 +125,11 @@ export function brandedShell(title: string, subtitle: string, body: string, hasL
 </body></html>`;
 }
 
+/** Backoff between SMTP retries: ~1s, then ~4s. */
+const RETRY_BACKOFF_MS = [1000, 4000];
+const MAX_SEND_ATTEMPTS = 3;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export interface MailResult {
   ok: boolean;
   recipients: string[];
@@ -124,158 +139,205 @@ export interface MailResult {
   attempts: number;
 }
 
-/** Backoff between SMTP retries: ~1s, ~4s. */
-const RETRY_BACKOFF_MS = [1000, 4000];
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
 
-export interface CheckoutMail {
+/** Fields every custody notification carries about WHO and WHERE. */
+interface CustodyParty {
   holder: string;
   holderEmail: string | null;
+  holderType: 'employee' | 'ic' | null;
   client: string;
+  bcNumber: string | null;
+}
+
+export interface CheckoutMail extends CustodyParty {
   keys: KeyLine[];
   checkedOutAt: string;
   dueAt: string | null;
   recordedBy: string;
   onBehalf: boolean;
   signoffLink: string | null;
-  /** Set when the holder has no email — Cara is told plainly why nothing was sent. */
+  /** Set when this check-out is the receiving half of a person-to-person transfer. */
+  transferFrom?: string | null;
+  /** Set when the holder has no email — the recipient is told plainly why
+   *  nothing was sent, so an unsigned release cannot pass unnoticed. */
   noEmailReason?: string | null;
 }
 
-export interface CheckinMail {
-  holder: string;
-  holderEmail: string | null;
-  client: string;
+export interface CheckinMail extends CustodyParty {
   keys: KeyLine[];
   returnedAt: string;
   condition: string;
   recordedBy: string;
   onBehalf: boolean;
+  signoffLink: string | null;
+  /** Set when this return is the releasing half of a person-to-person transfer. */
+  transferTo?: string | null;
 }
 
-// Shared send path: builds recipients (holder + Cara), attaches the inline
-// logo, and converts any transport error into a reported failure.
-export interface SendOpts {
-  attachments?: { filename: string; path?: string; content?: Buffer; cid?: string }[];
-  /** Total attempts before giving up. 1 = no retry. */
-  attempts?: number;
+export interface SignedReceiptMail extends CustodyParty {
+  action: 'checkout' | 'checkin';
+  keys: KeyLine[];
+  signedAt: string;
+  pdf: MailAttachment | null;
+  pdfError?: string | null;
+  /** Recorded when a manager captured a wet signature on a device at handover. */
+  witnessedBy?: string | null;
+  /** The other side of a person-to-person transfer — they receive it too, so
+   *  both parties end up holding both receipts. */
+  counterpartyName?: string | null;
+  counterpartyEmail?: string | null;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const holderTypeLabel = (t: 'employee' | 'ic' | null | undefined): string =>
+  t === 'ic' ? 'Independent Contractor (IC)' : t === 'employee' ? 'City Wide Employee' : 'Unspecified';
 
+/** Holder + client, the shape every custody subject line uses. */
+const subjectFor = (lead: string, holder: string, client: string): string =>
+  `${lead} — ${holder} — ${client}`;
+
+/** The identity block shared by every custody email. */
+function partyRows(d: CustodyParty): [string, string][] {
+  return [
+    ['Holder', `${d.holder} (${holderTypeLabel(d.holderType)})`],
+    ['Client', d.bcNumber ? `${d.client} (BC #${d.bcNumber})` : d.client],
+  ];
+}
+
+function keyTable(keys: KeyLine[], header: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid ${CW_BORDER};border-radius:4px;border-collapse:separate;overflow:hidden">
+       <tr style="background:${CW_CHARCOAL};color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:1px">
+         <th align="left" style="padding:10px 14px;font-weight:600">${esc(header)}</th>
+         <th align="right" style="padding:10px 14px;font-weight:600">Qty</th>
+       </tr>
+       ${keyRows(keys)}
+       <tr style="background:${CW_BG}">
+         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};font-weight:700;color:${CW_CHARCOAL}">Total</td>
+         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};text-align:right;font-weight:700;color:${CW_RED}">${keys.reduce((n, k) => n + k.qty, 0)}</td>
+       </tr>
+     </table>`;
+}
+
+/**
+ * The red "sign here" call-to-action. Wording differs by direction so the
+ * signer is never asked to acknowledge RECEIVING keys they are handing back.
+ */
+function signoffBlock(link: string, action: 'checkout' | 'checkin'): string {
+  const line = action === 'checkout'
+    ? 'Please acknowledge that you are RECEIVING these keys.'
+    : 'Please acknowledge that you are RETURNING these keys.';
+  return `<div style="margin-top:24px;padding:18px;border:1px solid ${CW_BORDER};border-left:4px solid ${CW_RED};border-radius:4px;background:${CW_BG}">
+         <div style="font-weight:700;color:${CW_CHARCOAL};font-size:14px;margin-bottom:6px">Signature required</div>
+         <p style="margin:0 0 14px;font-size:13px;color:${CW_MUTED}">
+           ${esc(line)} No login is needed — the link expires in 48 hours.
+         </p>
+         <a href="${esc(link)}" style="display:inline-block;padding:12px 22px;background:${CW_RED};color:#ffffff;text-decoration:none;border-radius:4px;font-weight:600;font-size:14px">Sign for these keys</a>
+         <p style="margin:14px 0 0;font-size:11px;color:${CW_MUTED};word-break:break-all">${esc(link)}</p>
+       </div>`;
+}
+
+// Shared send path: de-duplicates recipients, attaches the inline logo (plus any
+// document attachment), and converts any transport error into a REPORTED
+// failure. Nothing here ever throws — a caller always gets a MailResult it can
+// write to audit_log and show in the UI.
 export async function sendBranded(
-  subject: string, html: string, text: string, to: string[], opts: SendOpts = {},
+  subject: string, html: string, text: string, to: string[], attachments: MailAttachment[] = [],
 ): Promise<MailResult> {
   const recipients = Array.from(new Set(to.filter(Boolean).map((t) => t.trim()).filter(Boolean)));
   if (!recipients.length) {
     return { ok: false, recipients: [], skipped: true, attempts: 0, error: 'No recipient address on file' };
   }
   if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    return {
-      ok: false, recipients, skipped: true, attempts: 0,
-      error: 'SMTP is not configured (SMTP_USER / SMTP_PASS unset)',
-    };
+    return { ok: false, recipients, skipped: true, attempts: 0, error: 'SMTP is not configured (SMTP_USER / SMTP_PASS unset)' };
   }
-
   const logo = logoBytes();
-  const attachments = [
-    ...(logo ? [{ filename: 'cw-logo.png', content: logo, cid: 'cwlogo', contentDisposition: 'inline' as const }] : []),
-    ...(opts.attachments ?? []),
-  ];
+  const payload = {
+    from: `City Wide Key Management <${process.env.SMTP_USER}>`,
+    to: recipients.join(', '),
+    subject,
+    text,
+    html,
+    attachments: [
+      ...(logo
+        ? [{ filename: 'cw-logo.png', content: logo, cid: 'cwlogo', contentDisposition: 'inline' as const }]
+        : []),
+      ...attachments.map((a) => ({ filename: a.filename, content: a.content, contentType: a.contentType })),
+    ],
+  };
 
   // A transient SMTP hiccup must not become a permanently unsigned record, so
-  // retry with backoff before reporting failure. Backoff is skipped when only a
-  // single attempt is asked for (and in tests, where SMTP is unconfigured and
-  // we never reach this path at all).
-  const maxAttempts = Math.max(1, opts.attempts ?? 3);
+  // retry with backoff before reporting failure. Only after the last attempt
+  // does the caller mark the record 'signature_send_failed'.
   let lastError = 'SMTP send failed';
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt++) {
     try {
-      await createTransport().sendMail({
-        from: `City Wide Key Management <${process.env.SMTP_USER}>`,
-        to: recipients.join(', '),
-        subject,
-        text,
-        html,
-        attachments,
-      });
+      await createTransport().sendMail(payload);
       return { ok: true, recipients, attempts: attempt };
     } catch (err: any) {
       lastError = err?.message || 'SMTP send failed';
-      if (attempt < maxAttempts) await sleep(RETRY_BACKOFF_MS[attempt - 1] ?? 4000);
+      if (attempt < MAX_SEND_ATTEMPTS) await sleep(RETRY_BACKOFF_MS[attempt - 1] ?? 4000);
     }
   }
-  return { ok: false, recipients, attempts: maxAttempts, error: lastError };
+  return { ok: false, recipients, attempts: MAX_SEND_ATTEMPTS, error: lastError };
 }
 
 export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
-  const subject = `Keys checked out — ${d.client}`;
-  const recordedLine: [string, string][] = d.onBehalf
-    ? [['Recorded by', `${d.recordedBy} (on behalf of ${d.holder})`]]
-    : [['Recorded by', d.recordedBy]];
-
-  // No holder email → no signature request went anywhere. Say so at the top of
-  // the email, in red, so it cannot be mistaken for a signature that is coming.
+  // No holder email means no signature request went anywhere. Lead the email
+  // with that, in red, so it can never be mistaken for a signature in flight.
   const noEmailBanner = !d.holderEmail
     ? `<div style="margin:0 0 20px;padding:16px;border:2px solid ${CW_RED};border-radius:4px;background:#fbeaea">
          <div style="font-weight:700;color:${CW_RED};font-size:15px;margin-bottom:4px">
            No signature sent — ${esc(d.holder)} has no email on file.
          </div>
          <p style="margin:0;font-size:13px;color:${CW_CHARCOAL}">
-           This record needs manual follow-up: add an email to their record and resend, or
-           capture a signature in person from the Key Registry.
+           This record needs manual follow-up: add an email to their record and resend, or capture a
+           signature in person from the Key Registry.
          </p>
          ${d.noEmailReason ? `<p style="margin:8px 0 0;font-size:12px;color:${CW_MUTED}">Reason given: ${esc(d.noEmailReason)}</p>` : ''}
        </div>`
     : '';
 
-  const signoff = d.signoffLink
-    ? `<div style="margin-top:24px;padding:18px;border:1px solid ${CW_BORDER};border-left:4px solid ${CW_RED};border-radius:4px;background:${CW_BG}">
-         <div style="font-weight:700;color:${CW_CHARCOAL};font-size:14px;margin-bottom:6px">Signature required</div>
-         <p style="margin:0 0 14px;font-size:13px;color:${CW_MUTED}">
-           Please acknowledge receipt of these keys. No login is needed — the link expires in 48 hours.
-         </p>
-         <a href="${esc(d.signoffLink)}" style="display:inline-block;padding:12px 22px;background:${CW_RED};color:#ffffff;text-decoration:none;border-radius:4px;font-weight:600;font-size:14px">Sign for these keys</a>
-         <p style="margin:14px 0 0;font-size:11px;color:${CW_MUTED};word-break:break-all">${esc(d.signoffLink)}</p>
-       </div>`
+  const subject = subjectFor('Keys checked out', d.holder, d.client);
+  const recorded: [string, string] = d.onBehalf
+    ? ['Recorded by', `${d.recordedBy} (on behalf of ${d.holder})`]
+    : ['Recorded by', d.recordedBy];
+
+  const transferNote = d.transferFrom
+    ? `<p style="margin:0 0 16px;font-size:13px;color:${CW_CHARCOAL};background:${CW_BG};border-left:4px solid ${CW_RED};padding:10px 14px;border-radius:3px">
+         Received directly from <strong>${esc(d.transferFrom)}</strong> — person-to-person transfer.
+       </p>`
     : '';
 
   const html = brandedShell(
     'Keys checked out',
     `${d.holder} has keys checked out for ${d.client}.`,
-    `${noEmailBanner}
+    `${noEmailBanner}${transferNote}
      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
        ${detailRows([
-         ['Holder', d.holder],
-         ['Client', d.client],
+         ...partyRows(d),
          ['Date out', fmtDate(d.checkedOutAt)],
          ['Due back', fmtDay(d.dueAt)],
-         ...recordedLine,
+         recorded,
        ])}
      </table>
-     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid ${CW_BORDER};border-radius:4px;border-collapse:separate;overflow:hidden">
-       <tr style="background:${CW_CHARCOAL};color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:1px">
-         <th align="left" style="padding:10px 14px;font-weight:600">Key type</th>
-         <th align="right" style="padding:10px 14px;font-weight:600">Qty</th>
-       </tr>
-       ${keyRows(d.keys)}
-       <tr style="background:${CW_BG}">
-         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};font-weight:700;color:${CW_CHARCOAL}">Total</td>
-         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};text-align:right;font-weight:700;color:${CW_RED}">${d.keys.reduce((n, k) => n + k.qty, 0)}</td>
-       </tr>
-     </table>
-     ${signoff}`,
+     ${keyTable(d.keys, 'Key type')}
+     ${d.signoffLink ? signoffBlock(d.signoffLink, 'checkout') : ''}`,
     !!logoBytes(),
   );
 
   const text = [
-    `Keys checked out — ${d.client}`,
+    subject,
     ...(!d.holderEmail
       ? [`** NO SIGNATURE SENT — ${d.holder} has no email on file. Manual follow-up required. **`,
          ...(d.noEmailReason ? [`   Reason given: ${d.noEmailReason}`] : []), '']
       : []),
-    `Holder: ${d.holder}`,
-    `Client: ${d.client}`,
+    ...(d.transferFrom ? [`Received directly from ${d.transferFrom} (person-to-person transfer).`, ''] : []),
+    `Holder: ${d.holder} (${holderTypeLabel(d.holderType)})`,
+    `Client: ${d.client}${d.bcNumber ? ` (BC #${d.bcNumber})` : ''}`,
     `Date out: ${fmtDate(d.checkedOutAt)}`,
     `Due back: ${fmtDay(d.dueAt)}`,
     `Recorded by: ${d.recordedBy}${d.onBehalf ? ` (on behalf of ${d.holder})` : ''}`,
@@ -285,136 +347,114 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
     ...(d.signoffLink ? ['', `Sign for these keys (expires in 48 hours): ${d.signoffLink}`] : []),
   ].join('\n');
 
-  return sendBranded(subject, html, text, [d.holderEmail || '', caraAddress()]);
+  return sendBranded(subject, html, text, [d.holderEmail || '', ...notifyAddresses()]);
 }
 
 export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
-  const subject = `Keys returned — ${d.client}`;
+  const subject = subjectFor('Keys returned', d.holder, d.client);
+
+  const transferNote = d.transferTo
+    ? `<p style="margin:0 0 16px;font-size:13px;color:${CW_CHARCOAL};background:${CW_BG};border-left:4px solid ${CW_RED};padding:10px 14px;border-radius:3px">
+         Handed directly to <strong>${esc(d.transferTo)}</strong> — person-to-person transfer.
+       </p>`
+    : '';
+
   const html = brandedShell(
     'Keys returned',
-    `${d.holder} has returned keys for ${d.client}. No signature is required.`,
-    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
+    `${d.holder} has returned keys for ${d.client}.`,
+    `${transferNote}
+     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
        ${detailRows([
-         ['Holder', d.holder],
-         ['Client', d.client],
+         ...partyRows(d),
          ['Date returned', fmtDate(d.returnedAt)],
          ['Condition', d.condition],
          ['Recorded by', d.onBehalf ? `${d.recordedBy} (on behalf of ${d.holder})` : d.recordedBy],
        ])}
      </table>
-     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid ${CW_BORDER};border-radius:4px;border-collapse:separate;overflow:hidden">
-       <tr style="background:${CW_CHARCOAL};color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:1px">
-         <th align="left" style="padding:10px 14px;font-weight:600">Key type returned</th>
-         <th align="right" style="padding:10px 14px;font-weight:600">Qty</th>
-       </tr>
-       ${keyRows(d.keys)}
-       <tr style="background:${CW_BG}">
-         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};font-weight:700;color:${CW_CHARCOAL}">Total</td>
-         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};text-align:right;font-weight:700;color:${CW_RED}">${d.keys.reduce((n, k) => n + k.qty, 0)}</td>
-       </tr>
-     </table>
-     <p style="margin:20px 0 0;font-size:12px;color:${CW_MUTED}">This is a confirmation only — no signature is required for a return.</p>`,
+     ${keyTable(d.keys, 'Key type returned')}
+     ${d.signoffLink ? signoffBlock(d.signoffLink, 'checkin') : ''}`,
     !!logoBytes(),
   );
 
   const text = [
-    `Keys returned — ${d.client}`,
-    `Holder: ${d.holder}`,
-    `Client: ${d.client}`,
+    subject,
+    ...(d.transferTo ? [`Handed directly to ${d.transferTo} (person-to-person transfer).`, ''] : []),
+    `Holder: ${d.holder} (${holderTypeLabel(d.holderType)})`,
+    `Client: ${d.client}${d.bcNumber ? ` (BC #${d.bcNumber})` : ''}`,
     `Date returned: ${fmtDate(d.returnedAt)}`,
     `Condition: ${d.condition}`,
     `Recorded by: ${d.recordedBy}${d.onBehalf ? ` (on behalf of ${d.holder})` : ''}`,
     '',
     'Keys returned:',
     ...d.keys.map((k) => `  ${k.qty} × ${k.label}`),
-    '',
-    'No signature is required for a return.',
+    ...(d.signoffLink ? ['', `Sign for this return (expires in 48 hours): ${d.signoffLink}`] : []),
   ].join('\n');
 
-  return sendBranded(subject, html, text, [d.holderEmail || '', caraAddress()]);
+  return sendBranded(subject, html, text, [d.holderEmail || '', ...notifyAddresses()]);
 }
 
-// ── Signed receipt delivery ──────────────────────────────────────────────────
-// On submission the signed PDF goes to THREE places:
-//   1. the signer — their own proof of what they accepted
-//   2. Cara — the notification recipient
-//   3. the counterparty, when the keys passed directly between two holders, so
-//      both sides hold both receipts
-export interface SignedReceiptMail {
-  signer: string;
-  signerEmail: string | null;
-  client: string;
-  keys: KeyLine[];
-  signedAt: string;
-  /** Present for a wet signature captured on a device at handover. */
-  witnessedBy?: string | null;
-  counterpartyName?: string | null;
-  counterpartyEmail?: string | null;
-  pdfPath: string | null;
-  pdfFilename: string | null;
-}
-
+/**
+ * The signed PDF receipt, emailed the moment a signature lands — to the
+ * notification recipient AND back to the signer, so both ends hold the same
+ * document. A PDF that failed to render still sends the notification, with the
+ * failure stated in the body rather than an email that quietly has no
+ * attachment.
+ */
 export async function sendSignedReceipt(d: SignedReceiptMail): Promise<MailResult> {
-  const subject = `Signed key receipt — ${d.client}`;
-  const total = d.keys.reduce((n, k) => n + k.qty, 0);
+  const subject = subjectFor('Signed key receipt', d.holder, d.client);
+  const actionLine = d.action === 'checkout'
+    ? `${d.holder} has signed for RECEIVING these keys.`
+    : `${d.holder} has signed for RETURNING these keys.`;
 
-  const witness = d.witnessedBy
-    ? `<tr><td style="padding:5px 0;color:${CW_MUTED};font-size:13px;width:150px">Witnessed by</td>
-           <td style="padding:5px 0;color:${CW_CHARCOAL};font-size:13px;font-weight:600">${esc(d.witnessedBy)} (signed in person)</td></tr>`
-    : '';
-  const counterparty = d.counterpartyName
-    ? `<tr><td style="padding:5px 0;color:${CW_MUTED};font-size:13px">Handed over by</td>
-           <td style="padding:5px 0;color:${CW_CHARCOAL};font-size:13px;font-weight:600">${esc(d.counterpartyName)}</td></tr>`
-    : '';
-
-  const attachNote = d.pdfFilename
-    ? `<p style="margin:20px 0 0;font-size:13px;color:${CW_CHARCOAL}">
-         The signed receipt is attached as <strong>${esc(d.pdfFilename)}</strong>. Keep it for your records.
-       </p>`
-    : `<p style="margin:20px 0 0;font-size:13px;color:${CW_RED}">
-         The signature was recorded, but the PDF receipt could not be generated and is not attached.
-         City Wide has been notified.
+  const attachNote = d.pdf
+    ? `<p style="margin:20px 0 0;font-size:12px;color:${CW_MUTED}">The signed PDF receipt is attached to this email.</p>`
+    : `<p style="margin:20px 0 0;font-size:12px;color:#7a5a00;background:#fff8e6;border:1px solid #e8cf8a;border-radius:4px;padding:10px 12px">
+         The signature was recorded successfully, but the PDF receipt could not be generated${d.pdfError ? ` (${esc(d.pdfError)})` : ''}.
+         The signature and its SHA-256 hash are stored on the assignment record.
        </p>`;
 
   const html = brandedShell(
     'Signed key receipt',
-    `${d.signer} signed for ${total} key${total === 1 ? '' : 's'} at ${d.client}.`,
+    actionLine,
     `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
-       ${detailRows([['Signed by', d.signer], ['Client', d.client], ['Signed at', fmtDate(d.signedAt)]])}
-       ${witness}
-       ${counterparty}
+       ${detailRows([
+         ...partyRows(d),
+         ['Action', d.action === 'checkout' ? 'Received keys' : 'Returned keys'],
+         ['Signed', fmtDate(d.signedAt)],
+         ...(d.witnessedBy
+           ? [['Witnessed by', `${d.witnessedBy} (signed in person)`] as [string, string]] : []),
+         ...(d.counterpartyName
+           ? [[d.action === 'checkout' ? 'Handed over by' : 'Handed over to', d.counterpartyName] as [string, string]] : []),
+       ])}
      </table>
-     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid ${CW_BORDER};border-radius:4px;border-collapse:separate;overflow:hidden">
-       <tr style="background:${CW_CHARCOAL};color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:1px">
-         <th align="left" style="padding:10px 14px;font-weight:600">Key type</th>
-         <th align="right" style="padding:10px 14px;font-weight:600">Qty</th>
-       </tr>
-       ${keyRows(d.keys)}
-       <tr style="background:${CW_BG}">
-         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};font-weight:700;color:${CW_CHARCOAL}">Total</td>
-         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};text-align:right;font-weight:700;color:${CW_RED}">${total}</td>
-       </tr>
-     </table>
+     ${keyTable(d.keys, d.action === 'checkout' ? 'Key type received' : 'Key type returned')}
      ${attachNote}`,
+    !!logoBytes(),
   );
 
   const text = [
     subject,
-    `Signed by: ${d.signer}`,
-    `Client: ${d.client}`,
-    `Signed at: ${fmtDate(d.signedAt)}`,
+    actionLine,
+    `Holder: ${d.holder} (${holderTypeLabel(d.holderType)})`,
+    `Client: ${d.client}${d.bcNumber ? ` (BC #${d.bcNumber})` : ''}`,
+    `Signed: ${fmtDate(d.signedAt)}`,
     ...(d.witnessedBy ? [`Witnessed by: ${d.witnessedBy} (signed in person)`] : []),
-    ...(d.counterpartyName ? [`Handed over by: ${d.counterpartyName}`] : []),
+    ...(d.counterpartyName
+      ? [`${d.action === 'checkout' ? 'Handed over by' : 'Handed over to'}: ${d.counterpartyName}`] : []),
     '',
     'Keys:',
     ...d.keys.map((k) => `  ${k.qty} × ${k.label}`),
     '',
-    d.pdfFilename
-      ? `The signed receipt is attached as ${d.pdfFilename}.`
-      : 'The signature was recorded, but the PDF receipt could not be generated and is not attached.',
+    d.pdf
+      ? 'The signed PDF receipt is attached.'
+      : `The signature was recorded, but the PDF receipt could not be generated${d.pdfError ? ` (${d.pdfError})` : ''}.`,
   ].join('\n');
 
-  return sendBranded(subject, html, text, [d.signerEmail || '', caraAddress(), d.counterpartyEmail || ''], {
-    attachments: d.pdfPath && d.pdfFilename ? [{ filename: d.pdfFilename, path: d.pdfPath }] : [],
-  });
+  // Three recipients: the signer (their own proof), the custody notification
+  // address from Settings, and the counterparty on a transfer.
+  return sendBranded(
+    subject, html, text,
+    [d.holderEmail || '', ...notifyAddresses(), d.counterpartyEmail || ''],
+    d.pdf ? [{ ...d.pdf, contentType: 'application/pdf' }] : [],
+  );
 }
