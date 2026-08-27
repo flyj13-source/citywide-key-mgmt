@@ -122,6 +122,96 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   ).all();
   res.json({ managers: rows.map(serialize) });
 });
+// ── GET /api/staff-managers/roster?role=am|ccm ───────────────────────────────
+// The registry's Account Managers / Contract Compliance Mgrs tabs.
+//
+// ROSTER-DRIVEN, deliberately. The previous version of these tabs grouped the
+// `accounts` rows by manager NAME, which meant two different populations were
+// on screen depending on where you looked:
+//   · a real roster hire with no clients yet was INVISIBLE, and
+//   · a typo or a departed person left on a client row appeared as a manager
+//     who does not exist.
+// Starting from staff_managers fixes both. Names found on client rows with no
+// roster record are still returned — under `unmatched`, flagged — because they
+// hold real keys and silently dropping them would be worse than showing them.
+router.get('/roster', requireAuth, (req: AuthRequest, res: Response) => {
+  const role: 'am' | 'ccm' = req.query.role === 'ccm' ? 'ccm' : 'am';
+  const nameCol = role === 'am' ? 'account_manager' : 'ccm_manager';
+  const wantedType = role === 'am' ? 'account_manager' : 'ccm';
+
+  const people = (db.prepare(
+    `SELECT * FROM staff_managers
+      WHERE COALESCE(role_category, 'manager') IN ('manager', 'both')
+        AND (manager_type = ? OR manager_type = 'both')
+      ORDER BY name ASC`
+  ).all(wantedType) as any[]).map((r) => Object.assign({}, r));
+
+  // One aggregate query per person, over the clients they hold in THIS role.
+  const agg = db.prepare(`
+    SELECT
+      COUNT(*)                                  AS clients_managed,
+      COALESCE(SUM(${role}_metal), 0)           AS personal_metal,
+      COALESCE(SUM(${role}_card), 0)            AS personal_cards,
+      COALESCE(SUM(${role}_fob), 0)             AS personal_fobs,
+      COALESCE(SUM(${role}_dispenser), 0)       AS personal_dispenser,
+      COALESCE(SUM(${role}_keys), 0)            AS total_held,
+      COALESCE(SUM(
+        COALESCE(metal_keys,0) + COALESCE(key_cards,0) +
+        COALESCE(has_fob,0) + COALESCE(dispenser_keys,0)
+      ), 0)                                     AS total_client_keys
+    FROM accounts
+    WHERE ${CLIENT_FILTER} AND ${nameCol} = ?
+  `);
+
+  const managers = people.map((p) => {
+    const a = Object.assign({}, agg.get(p.name) as any);
+    return {
+      id: p.id,
+      name: p.name,
+      manager_type: p.manager_type,
+      role_category: p.role_category ?? 'manager',
+      shift: p.shift ?? null,
+      day_night: p.day_night ?? null,
+      email: p.email ?? null,
+      phone: p.phone ?? null,
+      active: p.active === 0 ? 0 : 1,
+      clients_managed: Number(a.clients_managed) || 0,
+      personal_metal: Number(a.personal_metal) || 0,
+      personal_cards: Number(a.personal_cards) || 0,
+      personal_fobs: Number(a.personal_fobs) || 0,
+      personal_dispenser: Number(a.personal_dispenser) || 0,
+      total_held: Number(a.total_held) || 0,
+      total_client_keys: Number(a.total_client_keys) || 0,
+      on_roster: true as const,
+    };
+  });
+
+  // Names on client rows that match nobody on the roster.
+  const rosterNames = new Set(
+    (db.prepare('SELECT name FROM staff_managers').all() as any[])
+      .map((r) => String(Object.assign({}, r).name).trim().toLowerCase())
+  );
+  const unmatched = (db.prepare(`
+    SELECT ${nameCol} AS person,
+           COUNT(*) AS clients_managed,
+           COALESCE(SUM(${role}_keys), 0) AS total_held
+      FROM accounts
+     WHERE ${CLIENT_FILTER}
+       AND ${nameCol} IS NOT NULL AND TRIM(${nameCol}) <> ''
+     GROUP BY ${nameCol}
+     ORDER BY ${nameCol} ASC
+  `).all() as any[])
+    .map((r) => Object.assign({}, r))
+    .filter((r) => !rosterNames.has(String(r.person).trim().toLowerCase()))
+    .map((r) => ({
+      person: r.person,
+      clients_managed: Number(r.clients_managed) || 0,
+      total_held: Number(r.total_held) || 0,
+    }));
+
+  res.json({ role, managers, unmatched });
+});
+
 
 // ── GET /api/staff-managers/:id — one manager + their client book ────────────
 router.get('/:id', requireAuth, (req: AuthRequest, res: Response) => {
@@ -143,6 +233,10 @@ router.get('/:id', requireAuth, (req: AuthRequest, res: Response) => {
       SELECT id, ic_company_name, bc_client_number, ic_name,
              account_manager, ccm_manager,
              COALESCE(am_keys,0) AS am_keys, COALESCE(ccm_keys,0) AS ccm_keys,
+             COALESCE(am_metal,0) AS am_metal, COALESCE(am_card,0) AS am_card,
+             COALESCE(am_fob,0) AS am_fob, COALESCE(am_dispenser,0) AS am_dispenser,
+             COALESCE(ccm_metal,0) AS ccm_metal, COALESCE(ccm_card,0) AS ccm_card,
+             COALESCE(ccm_fob,0) AS ccm_fob, COALESCE(ccm_dispenser,0) AS ccm_dispenser,
              COALESCE(contractor_keys,0) AS contractor_keys, COALESCE(office_keys_held,0) AS office_keys_held,
              COALESCE(metal_keys,0) AS metal_keys, COALESCE(key_cards,0) AS key_cards,
              COALESCE(has_fob,0) AS key_fobs, COALESCE(dispenser_keys,0) AS dispenser_keys
@@ -158,9 +252,18 @@ router.get('/:id', requireAuth, (req: AuthRequest, res: Response) => {
       const roles: string[] = [];
       if (isAm) roles.push('AM');
       if (isCcm) roles.push('CCM');
-      // Keys THIS person personally holds at THIS client (their grid columns).
+      // Keys THIS person personally holds at THIS client (their grid columns),
+      // broken out by type so the detail panel can show what they actually hold
+      // rather than just a total.
       const keys_here = (isAm ? client.am_keys : 0) + (isCcm ? client.ccm_keys : 0);
+      const perType = [
+        { type: 'metal', label: 'Metal Key', qty: (isAm ? client.am_metal : 0) + (isCcm ? client.ccm_metal : 0) },
+        { type: 'card', label: 'Key Card', qty: (isAm ? client.am_card : 0) + (isCcm ? client.ccm_card : 0) },
+        { type: 'fob', label: 'Key Fob', qty: (isAm ? client.am_fob : 0) + (isCcm ? client.ccm_fob : 0) },
+        { type: 'dispenser', label: 'Dispenser Key', qty: (isAm ? client.am_dispenser : 0) + (isCcm ? client.ccm_dispenser : 0) },
+      ].filter((k) => k.qty > 0);
       return {
+        keys_by_type: perType,
         id: client.id,
         ic_company_name: client.ic_company_name,
         bc_client_number: client.bc_client_number,

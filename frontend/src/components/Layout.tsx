@@ -106,7 +106,6 @@ function SyncStatusFooter() {
 const mainNavItems = [
   { path: '/dashboard', label: 'Dashboard', icon: '⊞' },
   { path: '/registry', label: 'Key Registry', icon: '🔑' },
-  { path: '/managers', label: 'Manager Roster', icon: '👥' },
   { path: '/vault', label: 'Code Vault', icon: '🔒' },
   { path: '/assistant', label: 'AI Assistant', icon: '✦' },
   { path: '/audit', label: 'Audit Log', icon: '📋' },

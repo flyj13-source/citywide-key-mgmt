@@ -11,9 +11,13 @@ import ReassignModal from '../components/ReassignModal';
 import TransferModal from '../components/TransferModal';
 import ActionMenu, { type ActionItem } from '../components/ActionMenu';
 import SignInPersonModal from '../components/SignInPersonModal';
+import { ManagerRosterTable, type RosterChip } from '../components/ManagerRoster';
+import ManagerPanel from '../components/ManagerPanel';
+import ManagerModal from '../components/ManagerModal';
 import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
-import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getAccountManagers, getCcms, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, getSignatureGaps,
-  type Assignment, type SignatureGaps } from '../lib/api';
+import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getManagerRoster, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, getSignatureGaps,
+  type Assignment, type SignatureGaps, type ManagerRosterRow, type UnmatchedManager,
+  type StaffManager } from '../lib/api';
 
 type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'checkedout' | 'checkedin' | 'all' | 'archived';
 
@@ -1020,15 +1024,20 @@ export default function Registry() {
   const [searchParams, setSearchParams] = useSearchParams();
   const isAdmin = getManager()?.role === 'admin';
   const canDelete = !!getManager()?.can_delete;
+  // Longer aliases keep external links readable and stable — /registry
+  // ?tab=account-managers is what the retired /managers page redirects to.
+  const TAB_ALIASES: Record<string, TabType> = {
+    'account-managers': 'am', managers: 'am', am: 'am',
+    'contract-compliance': 'ccm', ccm: 'ccm',
+    archived: 'archived', cwemployees: 'cwemployees',
+    checkedout: 'checkedout', checkedin: 'checkedin',
+  };
   const initialTab = searchParams.get('tab');
-  const [tab, setTab] = useState<TabType>(
-    (['archived', 'cwemployees', 'checkedout', 'checkedin'] as string[]).includes(initialTab || '')
-      ? (initialTab as TabType)
-      : 'customer'
-  );
+  const [tab, setTab] = useState<TabType>(TAB_ALIASES[initialTab || ''] ?? 'customer');
   const [accounts, setAccounts] = useState<any[]>([]);
   const [counts, setCounts] = useState({
     ic: 0, customer: 0, office: 0, staff: 0, all: 0, archived: 0, checkedOut: 0, checkedIn: 0,
+    am: 0, ccm: 0,
   });
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
@@ -1038,8 +1047,14 @@ export default function Registry() {
   const [modal, setModal] = useState<ModalState>(null);
   const [showImport, setShowImport] = useState(false);
   const [showExport, setShowExport] = useState(false);
-  const [roster, setRoster] = useState<any[]>([]);
+  const [roster, setRoster] = useState<ManagerRosterRow[]>([]);
+  const [rosterUnmatched, setRosterUnmatched] = useState<UnmatchedManager[]>([]);
   const [rosterLoading, setRosterLoading] = useState(false);
+  const [rosterChip, setRosterChip] = useState<RosterChip>('all');
+  const [rosterSearch, setRosterSearch] = useState('');
+  // Manager detail opens as a slide-over ON the registry — never a route away.
+  const [managerPanelId, setManagerPanelId] = useState<number | null>(null);
+  const [managerModal, setManagerModal] = useState<{ mode: 'add' | 'edit'; manager?: any } | null>(null);
   // CW Boston Employees (unified staff roster) — its own state + view filters.
   const [staff, setStaff] = useState<any[]>([]);
   const [staffLoading, setStaffLoading] = useState(false);
@@ -1122,11 +1137,14 @@ export default function Registry() {
   }, [debouncedSearch, page, tab, drill]);
 
   // People roster — aggregated server-side (GROUP BY), one row per person.
+  // Roster-driven: staff_managers records with their aggregates, plus any
+  // client-row names that have no roster record (surfaced, not dropped).
   const loadRoster = useCallback(async () => {
     setRosterLoading(true);
     try {
-      const data = tab === 'am' ? await getAccountManagers() : await getCcms();
+      const data = await getManagerRoster(tab === 'ccm' ? 'ccm' : 'am');
       setRoster(data.managers);
+      setRosterUnmatched(data.unmatched);
     } finally {
       setRosterLoading(false);
     }
@@ -1181,7 +1199,7 @@ export default function Registry() {
   // Tab/type counts — independent of search, so they are NOT refetched while
   // typing. Refreshed on mount and after any mutation.
   const refreshCounts = useCallback(async () => {
-    const [icData, custData, officeData, allData, archData, staffData, outData, inData] = await Promise.all([
+    const [icData, custData, officeData, allData, archData, staffData, outData, inData, amRoster, ccmRoster] = await Promise.all([
       getAccounts({ limit: '1', type: 'ic' }),
       getAccounts({ limit: '1', type: 'customer' }),
       getAccounts({ limit: '1', type: 'customer', office_keys: '1' }),
@@ -1190,11 +1208,14 @@ export default function Registry() {
       getStaff({ includeInactive: false }).catch(() => [] as any[]),
       getAssignments({ limit: '1', status: 'checked_out' }).catch(() => ({ total: 0, assignments: [] })),
       getAssignments({ limit: '1', status: 'returned' }).catch(() => ({ total: 0, assignments: [] })),
+      getManagerRoster('am').catch(() => ({ managers: [] as any[] })),
+      getManagerRoster('ccm').catch(() => ({ managers: [] as any[] })),
     ]);
     setCounts({
       ic: icData.total, customer: custData.total, office: officeData.total,
       staff: staffData.length, all: allData.total, archived: archData.total,
       checkedOut: outData.total, checkedIn: inData.total,
+      am: amRoster.managers.length, ccm: ccmRoster.managers.length,
     });
   }, []);
 
@@ -1222,8 +1243,8 @@ export default function Registry() {
   const tabs: { key: TabType; label: string }[] = useMemo(() => [
     { key: 'customer', label: `Customers (${counts.customer})` },
     { key: 'ic', label: `IC Vendors (${counts.ic})` },
-    { key: 'am', label: 'Account Managers' },
-    { key: 'ccm', label: 'Contract Compliance Mgrs' },
+    { key: 'am', label: `Account Managers (${counts.am})` },
+    { key: 'ccm', label: `Contract Compliance Mgrs (${counts.ccm})` },
     { key: 'office', label: `Office (${counts.office})` },
     { key: 'cwemployees', label: `CW Employees (${counts.staff})` },
     { key: 'checkedout', label: `Checked Out (${counts.checkedOut})` },
@@ -1232,7 +1253,7 @@ export default function Registry() {
     { key: 'archived', label: `Archived (${counts.archived})` },
   ], [counts]);
 
-  const DEEP_LINK_TABS: TabType[] = ['archived', 'cwemployees', 'checkedout', 'checkedin'];
+  const DEEP_LINK_TABS: TabType[] = ['archived', 'cwemployees', 'checkedout', 'checkedin', 'am', 'ccm'];
 
   const selectTab = (key: TabType) => {
     setTab(key);
@@ -1240,6 +1261,8 @@ export default function Registry() {
     setDrill(null);
     setStaffChip('all');
     setStaffSearch('');
+    setRosterChip('all');
+    setRosterSearch('');
     setNotice('');
     setCustodySort({ key: key === 'checkedin' ? 'returned_at' : 'checked_out_at', dir: 'desc' });
     setSignatureFilter(false);
@@ -1349,8 +1372,13 @@ export default function Registry() {
   // action is indistinguishable from a missing one.
   const moreActions: ActionItem[] = [
     {
+      label: '+ Add Manager…',
+      onSelect: () => setManagerModal({ mode: 'add' }),
+    },
+    {
       label: 'Custody Report…',
       onSelect: () => navigate('/registry/custody-report'),
+      separated: true,
     },
     ...(canDelete || isAdmin ? [{
       label: 'Reassign Manager…',
@@ -1386,7 +1414,9 @@ export default function Registry() {
             <p className="text-sm text-cw-muted">
               {isCustodyTab
                 ? `${custodyTotal} ${tab === 'checkedin' ? 'returned' : 'active'} custody record${custodyTotal !== 1 ? 's' : ''}`
-                : `${total} record${total !== 1 ? 's' : ''}`}
+                : isRosterTab
+                  ? `${roster.length} ${tab === 'ccm' ? 'contract compliance manager' : 'account manager'}${roster.length !== 1 ? 's' : ''} on the roster`
+                  : `${total} record${total !== 1 ? 's' : ''}`}
             </p>
           </div>
           {/* ── Action row ────────────────────────────────────────────────
@@ -1586,13 +1616,19 @@ export default function Registry() {
             onSelect={openStaff}
           />
         ) : isRosterTab ? (
-          <RosterTable
-            role={tab as 'am' | 'ccm'}
+          <ManagerRosterTable
+            role={tab === 'ccm' ? 'ccm' : 'am'}
             rows={roster}
+            unmatched={rosterUnmatched}
             loading={rosterLoading}
-            onSelect={openPerson}
+            chip={rosterChip}
+            onChip={setRosterChip}
+            search={rosterSearch}
+            onSearch={setRosterSearch}
             canReassign={canDelete || isAdmin}
-            onReassign={(person) => setReassign({ name: person, role: tab === 'ccm' ? 'ccm' : 'am' })}
+            onEdit={(m) => setManagerModal({ mode: 'edit', manager: m })}
+            onReassign={(m) => setReassign({ name: m.name, role: tab === 'ccm' ? 'ccm' : 'am' })}
+            onView={(m) => setManagerPanelId(m.id)}
           />
         ) : isArchivedTab ? (
           <ArchivedTable
@@ -1656,6 +1692,28 @@ export default function Registry() {
           presetAccount={selectedSnapshot}
           onClose={() => setCheckOutOpen(false)}
           onDone={onCustodyChanged}
+        />
+      )}
+
+      {managerPanelId != null && (
+        <ManagerPanel
+          staffId={managerPanelId}
+          canReassign={canDelete || isAdmin}
+          onClose={() => setManagerPanelId(null)}
+          onEdit={(m: StaffManager) => { setManagerPanelId(null); setManagerModal({ mode: 'edit', manager: m }); }}
+          onReassign={(m: StaffManager) => {
+            setManagerPanelId(null);
+            setReassign({ name: m.name, role: m.manager_type === 'ccm' ? 'ccm' : 'am' });
+          }}
+        />
+      )}
+
+      {managerModal && (
+        <ManagerModal
+          mode={managerModal.mode}
+          initial={managerModal.mode === 'edit' ? managerModal.manager : undefined}
+          onClose={() => setManagerModal(null)}
+          onSaved={() => { setManagerModal(null); loadRoster(); refreshCounts(); }}
         />
       )}
 

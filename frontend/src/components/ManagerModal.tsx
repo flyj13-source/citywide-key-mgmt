@@ -158,13 +158,28 @@ export default function ManagerModal({
           <SectionLabel>Contact</SectionLabel>
           <div className="space-y-3">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Email</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Email
+                <span className="ml-1 font-normal text-[#C0272D]">
+                  — required for signature forms and notifications
+                </span>
+              </label>
               <input
-                className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
+                type="email"
+                className={`input focus:ring-[#C0272D] focus:border-[#C0272D] ${
+                  form.email.trim() ? '' : 'border-[#C0272D] bg-[#fbeaea]'}`}
                 value={form.email}
                 onChange={(e) => f('email', e.target.value)}
                 placeholder="name@citywideboston.com"
               />
+              {/* Not blocked — a manager can exist without one — but never let
+                  it be left blank silently: it is what a key sign-off needs. */}
+              {!form.email.trim() && (
+                <p className="text-[11px] text-[#C0272D] mt-1">
+                  Without an email this person cannot be sent a key signature request, and
+                  check-outs to them will be flagged “No signature — no email on file”.
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Phone</label>

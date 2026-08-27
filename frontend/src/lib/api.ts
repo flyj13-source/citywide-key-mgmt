@@ -125,6 +125,38 @@ export const createStaffManager = (data: Partial<StaffManager>) =>
 export const updateStaffManager = (id: number, data: Partial<StaffManager>) =>
   req<{ manager: StaffManager }>(`/staff-managers/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 
+// Roster-driven manager tabs: staff_managers records WITH their aggregates.
+// `unmatched` carries names found on client rows that have no roster record —
+// surfaced rather than dropped, since they hold real keys.
+export interface ManagerRosterRow {
+  id: number;
+  name: string;
+  manager_type: 'account_manager' | 'ccm' | 'both';
+  role_category: string;
+  shift: '1st' | '2nd' | '3rd' | null;
+  day_night: 'day' | 'night' | null;
+  email: string | null;
+  phone: string | null;
+  active: number;
+  clients_managed: number;
+  personal_metal: number;
+  personal_cards: number;
+  personal_fobs: number;
+  personal_dispenser: number;
+  total_held: number;
+  total_client_keys: number;
+  on_roster: true;
+}
+export interface UnmatchedManager {
+  person: string;
+  clients_managed: number;
+  total_held: number;
+}
+export const getManagerRoster = (role: 'am' | 'ccm') =>
+  req<{ role: 'am' | 'ccm'; managers: ManagerRosterRow[]; unmatched: UnmatchedManager[] }>(
+    `/staff-managers/roster?role=${role}`
+  );
+
 export const getAccountManagers = () =>
   req<{ managers: any[] }>('/managers/account-managers');
 export const getCcms = () =>

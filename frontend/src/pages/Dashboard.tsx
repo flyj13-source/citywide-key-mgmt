@@ -163,8 +163,9 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Managers roster summary — counts by type + shift, click through to roster */}
-        <Link to="/managers" className="card p-5 block hover:border-[#C0272D] transition-colors">
+        {/* Managers roster summary — counts by type + shift, click through to
+            the roster tab inside the Key Registry. */}
+        <Link to="/registry?tab=account-managers" className="card p-5 block hover:border-[#C0272D] transition-colors">
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-semibold text-sm text-cw-text">Managers</h2>
             <span className="text-xs text-cw-red hover:underline">View roster →</span>
@@ -256,7 +257,11 @@ export default function Dashboard() {
         <ManagerModal
           mode="add"
           onClose={() => setShowAddManager(false)}
-          onSaved={() => { setShowAddManager(false); loadManagers(); navigate('/managers'); }}
+          onSaved={() => {
+            setShowAddManager(false);
+            loadManagers();
+            navigate('/registry?tab=account-managers');
+          }}
         />
       )}
     </Layout>

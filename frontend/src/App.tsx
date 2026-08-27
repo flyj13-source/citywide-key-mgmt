@@ -19,8 +19,6 @@ import KeySignoff from './pages/KeySignoff';
 import ICChange from './pages/ICChange';
 import CustomerLookup from './pages/CustomerLookup';
 import Forms from './pages/Forms';
-import ManagerRoster from './pages/ManagerRoster';
-import ManagerDetail from './pages/ManagerDetail';
 import StaffDetail from './pages/StaffDetail';
 import CustodyReport from './pages/CustodyReport';
 
@@ -42,8 +40,10 @@ export default function App() {
             the id parameter. */}
         <Route path="/registry/custody-report" element={<RequireAuth><CustodyReport /></RequireAuth>} />
         <Route path="/registry/:accountId" element={<RequireAuth><AccountDetail /></RequireAuth>} />
-        <Route path="/managers" element={<RequireAuth><ManagerRoster /></RequireAuth>} />
-        <Route path="/managers/:id" element={<RequireAuth><ManagerDetail /></RequireAuth>} />
+        {/* The Manager Roster now lives INSIDE the Key Registry. Old links and
+            bookmarks land on the right tab instead of 404ing. */}
+        <Route path="/managers" element={<Navigate to="/registry?tab=account-managers" replace />} />
+        <Route path="/managers/:id" element={<Navigate to="/registry?tab=account-managers" replace />} />
         <Route path="/staff/:id" element={<RequireAuth><StaffDetail /></RequireAuth>} />
         {/* Check Out / In now lives INSIDE the Key Registry — old links land on
             the Checked Out tab rather than 404ing. */}
