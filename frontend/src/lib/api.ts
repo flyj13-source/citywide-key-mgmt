@@ -693,13 +693,61 @@ export const previewImport = async (file: File) => {
     const e = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(e.error || 'Import failed');
   }
-  return res.json() as Promise<{ valid: any[]; warnings: any[]; errors: any[]; total: number }>;
+  // The uploader handles three sheet shapes. The two email backfills come back
+  // tagged with `kind` and a DRY-RUN preview instead of the valid/warnings/
+  // errors triple the customer registry sheet returns.
+  return res.json() as Promise<ImportPreview>;
 };
+
+export type EmailImportKind = 'staff-emails' | 'ic-emails';
+
+export interface StaffEmailPreview {
+  totalRows: number;
+  matchedUpdated: { name: string; email: string }[];
+  matchedAlreadyHadEmail: { name: string; existing: string; incoming: string }[];
+  created: { name: string; email: string; role_category: string; manager_type: string }[];
+  ambiguous: { name: string; ids: number[] }[];
+  invalidEmail: { row: number; name: string; value: string }[];
+  remainingWithoutEmail: { id: number; name: string; role_category: string }[];
+}
+
+export interface IcEmailPreview {
+  totalRows: number;
+  matchedUpdated: { vendor: string; dba: string; contact: string; email: string }[];
+  matchedAlreadyPopulated: { vendor: string; dba: string }[];
+  created: { vendor: string; dba: string; contact: string; email: string }[];
+  missingEmail: { row: number; dba: string; vendor: string }[];
+  missingVendorNo: { row: number; dba: string; email: string }[];
+  invalidEmail: { row: number; dba: string; value: string }[];
+  duplicateVendorNos: { vendor: string; count: number }[];
+}
+
+export interface IcResolution {
+  totalCustomers: number;
+  resolved: number;
+  unresolvedNoVendorNo: number;
+  unresolvedNoMatchingIc: number;
+  unresolvedIcHasNoEmail: number;
+  samples: { customer: string; bc_vendor_number: string; reason: string }[];
+}
+
+export type ImportPreview =
+  | { kind?: undefined; valid: any[]; warnings: any[]; errors: any[]; total: number;
+      unmappedHeaders?: string[]; fieldCollisions?: { field: string; headers: string[] }[] }
+  | { kind: 'staff-emails'; sheet: string; rows: any[]; preview: StaffEmailPreview }
+  | { kind: 'ic-emails'; sheet: string; rows: any[]; preview: IcEmailPreview; resolutionBefore: IcResolution };
 
 export const confirmImport = (rows: any[], mode?: 'insert' | 'upsert') =>
   req<{ inserted: number; updated?: number; skipped: number; errors?: any[] }>('/accounts/import/confirm', {
     method: 'POST', body: JSON.stringify({ rows, mode }),
   });
+
+/** Apply an email backfill. Idempotent — only ever fills blanks. */
+export const confirmEmailImport = (kind: EmailImportKind, rows: any[]) =>
+  req<{ kind: EmailImportKind; report: any; resolution?: IcResolution }>(
+    '/accounts/import/emails/confirm',
+    { method: 'POST', body: JSON.stringify({ kind, rows }) },
+  );
 
 export const downloadImportTemplate = async () => {
   const res = await reqRaw('/accounts/import/template');

@@ -1,8 +1,21 @@
 import { useState, useRef, DragEvent } from 'react';
 import Modal from './Modal';
-import { previewImport, confirmImport, downloadImportTemplate } from '../lib/api';
+import {
+  previewImport, confirmImport, confirmEmailImport, downloadImportTemplate,
+  type EmailImportKind, type StaffEmailPreview, type IcEmailPreview, type IcResolution,
+} from '../lib/api';
+import EmailImportPreview, { EmailImportSummary } from './EmailImportPreview';
 
 type Step = 'upload' | 'preview' | 'done';
+
+/** The employee / IC email backfills, previewed as a dry run before applying. */
+interface EmailImportState {
+  kind: EmailImportKind;
+  sheet: string;
+  rows: any[];
+  preview: StaffEmailPreview | IcEmailPreview;
+  resolutionBefore?: IcResolution;
+}
 
 interface ImportResult {
   valid: any[]; warnings: any[]; errors: any[]; total: number;
@@ -18,6 +31,8 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
   const [result, setResult] = useState<ImportResult | null>(null);
   const [upsertMode, setUpsertMode] = useState(false);
   const [summary, setSummary] = useState<{ inserted: number; updated?: number; skipped: number; errors?: any[] } | null>(null);
+  const [emailImport, setEmailImport] = useState<EmailImportState | null>(null);
+  const [emailSummary, setEmailSummary] = useState<{ kind: EmailImportKind; report: any; resolution?: IcResolution } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = async (file: File) => {
@@ -27,7 +42,16 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
     setLoading(true); setError('');
     try {
       const res = await previewImport(file);
-      setResult(res);
+      if (res.kind === 'staff-emails' || res.kind === 'ic-emails') {
+        setEmailImport({
+          kind: res.kind, sheet: res.sheet, rows: res.rows, preview: res.preview,
+          resolutionBefore: res.kind === 'ic-emails' ? res.resolutionBefore : undefined,
+        });
+        setResult(null);
+      } else {
+        setResult(res);
+        setEmailImport(null);
+      }
       setStep('preview');
     } catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
@@ -54,6 +78,21 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
       setStep('done');
     } catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
+  };
+
+  const handleEmailConfirm = async () => {
+    if (!emailImport) return;
+    setLoading(true); setError('');
+    try {
+      setEmailSummary(await confirmEmailImport(emailImport.kind, emailImport.rows));
+      setStep('done');
+    } catch (e: any) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  const reset = () => {
+    setStep('upload'); setResult(null); setSummary(null);
+    setEmailImport(null); setEmailSummary(null); setError('');
   };
 
   const statusIcon = (type: 'valid' | 'warning' | 'error') => {
@@ -98,6 +137,21 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
       )}
 
       {/* Step 2 — Preview */}
+      {/* Step 2a — an email backfill sheet. Shown as a DRY RUN: nothing has
+          been written yet, and applying it only ever fills blanks. */}
+      {step === 'preview' && emailImport && (
+        <EmailImportPreview
+          kind={emailImport.kind}
+          sheet={emailImport.sheet}
+          preview={emailImport.preview}
+          resolutionBefore={emailImport.resolutionBefore}
+          loading={loading}
+          error={error}
+          onCancel={reset}
+          onConfirm={handleEmailConfirm}
+        />
+      )}
+
       {step === 'preview' && result && (
         <div className="space-y-4">
           {/* Unmapped-column warning — the exact class of bug that silently
@@ -223,6 +277,17 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
         </div>
       )}
 
+      {/* Step 3a — Done, email backfill */}
+      {step === 'done' && emailSummary && (
+        <EmailImportSummary
+          kind={emailSummary.kind}
+          report={emailSummary.report}
+          resolution={emailSummary.resolution}
+          onDone={() => { onDone(); onClose(); }}
+          onAnother={reset}
+        />
+      )}
+
       {/* Step 3 — Done */}
       {step === 'done' && summary && (
         <div className="space-y-4 text-center py-4">
@@ -243,7 +308,7 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
             <button onClick={() => { onDone(); onClose(); }} className="btn-primary">
               View Registry →
             </button>
-            <button onClick={() => { setStep('upload'); setResult(null); setSummary(null); }} className="btn-secondary">
+            <button onClick={reset} className="btn-secondary">
               Import another file
             </button>
           </div>

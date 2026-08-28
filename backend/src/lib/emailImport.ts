@@ -1,0 +1,432 @@
+// ── Email backfill importers ─────────────────────────────────────────────────
+// Two source files, two match strategies, one goal: give every signature
+// recipient a reachable address so check-outs stop landing as
+// "No signature — no email on file".
+//
+//   CW employees  → staff_managers, matched on full name
+//   ICs           → accounts (record_type='ic'), matched on bc_vendor_number
+//
+// Both importers are IDEMPOTENT. Re-running is a no-op: a row that already has
+// an email is never overwritten, and a row created on the first run matches on
+// the second. Neither importer ever clears a value.
+
+import type { DatabaseSync } from 'node:sqlite';
+
+/** Every cell in these sheets may carry trailing spaces. Trim everything. */
+export function cell(v: any): string {
+  if (v === null || v === undefined) return '';
+  return String(v).trim();
+}
+
+/**
+ * BC vendor numbers are zero-padded 11-digit TEXT ('02014100437'). Excel
+ * happily reads that as the number 2014100437 and drops the leading zero, so
+ * anything numeric is re-padded back to 11. A value that is already text is
+ * only trimmed — we never truncate or reformat a string we were given.
+ */
+export function vendorNo(v: any): string {
+  const s = cell(v);
+  if (!s) return '';
+  if (/^\d+$/.test(s) && s.length < 11) return s.padStart(11, '0');
+  return s;
+}
+
+/** Deliberately permissive — this rejects blanks and obvious junk, not TLDs. */
+export function isValidEmail(v: any): boolean {
+  const s = cell(v);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
+/** Case-insensitive, whitespace-collapsed key for name matching. */
+export function nameKey(v: any): string {
+  return cell(v).toLowerCase().replace(/\s+/g, ' ');
+}
+
+// ── Header recognition ───────────────────────────────────────────────────────
+// Both sheets are identified by their header row alone, so the same shapes work
+// from the CLI scripts and from the registry's Import from Excel.
+
+const STAFF_HEADERS = {
+  first: ['first name', 'firstname', 'first'],
+  last: ['last name', 'lastname', 'last'],
+  email: ['email address', 'email', 'e-mail', 'email addresss'],
+};
+
+const IC_HEADERS = {
+  dba: ['dba name', 'dba', 'company name', 'vendor name'],
+  vendor: ['bc vendor no', 'bc vendor no.', 'bc vendor number', 'bc vendor #', 'vendor no', 'vendor number'],
+  contact: ['primary contact', 'primary contact name', 'contact'],
+  email: [
+    'email (primary contact) (contact)',
+    'email (primary contact)',
+    'primary contact email',
+    'email',
+  ],
+};
+
+function headerIndex(headers: string[], names: string[]): number {
+  for (const n of names) {
+    const i = headers.indexOf(n);
+    if (i !== -1) return i;
+  }
+  return -1;
+}
+
+/** Lowercase + trim a header cell. Also drops the Dynamics "(Do Not Modify)". */
+export function normalizeHeaderCell(v: any): string {
+  return cell(v).toLowerCase().replace(/\s+/g, ' ');
+}
+
+export type SheetShape = 'staff-emails' | 'ic-emails' | null;
+
+/**
+ * Which of the two email sheets is this, if either? Returns null for anything
+ * else (including the customer registry sheet) so the caller falls through to
+ * its existing handling.
+ */
+export function detectShape(headerRow: any[]): SheetShape {
+  const h = headerRow.map(normalizeHeaderCell);
+  // "(Do Not Modify)" columns from the Dynamics export are ignored outright.
+  const staffOk =
+    headerIndex(h, STAFF_HEADERS.first) !== -1 &&
+    headerIndex(h, STAFF_HEADERS.last) !== -1 &&
+    headerIndex(h, STAFF_HEADERS.email) !== -1;
+  if (staffOk) return 'staff-emails';
+
+  // The IC sheet is identified by a vendor-number column PLUS a contact column;
+  // requiring both keeps it from swallowing the customer registry sheet, which
+  // also carries a BC Vendor Number.
+  const icOk =
+    headerIndex(h, IC_HEADERS.vendor) !== -1 &&
+    (headerIndex(h, IC_HEADERS.contact) !== -1 || headerIndex(h, IC_HEADERS.email) !== -1) &&
+    headerIndex(h, IC_HEADERS.dba) !== -1;
+  if (icOk) return 'ic-emails';
+
+  return null;
+}
+
+// ── Row parsing ──────────────────────────────────────────────────────────────
+
+export interface StaffEmailRow { row: number; first: string; last: string; name: string; email: string }
+export interface IcEmailRow { row: number; dba: string; vendor: string; contact: string; email: string }
+
+export function parseStaffRows(raw: any[][]): StaffEmailRow[] {
+  if (raw.length < 2) return [];
+  const h = raw[0].map(normalizeHeaderCell);
+  const iF = headerIndex(h, STAFF_HEADERS.first);
+  const iL = headerIndex(h, STAFF_HEADERS.last);
+  const iE = headerIndex(h, STAFF_HEADERS.email);
+  const out: StaffEmailRow[] = [];
+  raw.slice(1).forEach((r, i) => {
+    const first = cell(r[iF]);
+    const last = cell(r[iL]);
+    const email = cell(iE === -1 ? '' : r[iE]);
+    if (!first && !last && !email) return; // blank spacer row
+    out.push({ row: i + 2, first, last, name: `${first} ${last}`.trim(), email });
+  });
+  return out;
+}
+
+export function parseIcRows(raw: any[][]): IcEmailRow[] {
+  if (raw.length < 2) return [];
+  const h = raw[0].map(normalizeHeaderCell);
+  const iD = headerIndex(h, IC_HEADERS.dba);
+  const iV = headerIndex(h, IC_HEADERS.vendor);
+  const iC = headerIndex(h, IC_HEADERS.contact);
+  const iE = headerIndex(h, IC_HEADERS.email);
+  const out: IcEmailRow[] = [];
+  raw.slice(1).forEach((r, i) => {
+    const dba = cell(r[iD]);
+    const vendor = vendorNo(iV === -1 ? '' : r[iV]);
+    const contact = cell(iC === -1 ? '' : r[iC]);
+    const email = cell(iE === -1 ? '' : r[iE]);
+    if (!dba && !vendor && !contact && !email) return;
+    out.push({ row: i + 2, dba, vendor, contact, email });
+  });
+  return out;
+}
+
+// ── Staff email import ───────────────────────────────────────────────────────
+
+export interface StaffImportReport {
+  totalRows: number;
+  matchedUpdated: { name: string; email: string }[];
+  matchedAlreadyHadEmail: { name: string; existing: string; incoming: string }[];
+  created: { name: string; email: string; role_category: string; manager_type: string }[];
+  ambiguous: { name: string; ids: number[] }[];
+  invalidEmail: { row: number; name: string; value: string }[];
+  /** staff_managers rows STILL without an email after the run — the residual gap. */
+  remainingWithoutEmail: { id: number; name: string; role_category: string }[];
+}
+
+/**
+ * Does this person appear as a manager on any client row? Decides whether an
+ * unmatched name lands as 'manager' or 'crew', and which manager_type.
+ */
+function managerRoleFor(db: DatabaseSync, name: string): { role_category: string; manager_type: string } {
+  const key = nameKey(name);
+  const hit = db.prepare(`
+    SELECT
+      SUM(CASE WHEN LOWER(TRIM(account_manager)) = ? THEN 1 ELSE 0 END) AS as_am,
+      SUM(CASE WHEN LOWER(TRIM(ccm_manager))     = ? THEN 1 ELSE 0 END) AS as_ccm
+    FROM accounts
+  `).get(key, key) as any;
+  const asAm = Number(hit?.as_am ?? 0) > 0;
+  const asCcm = Number(hit?.as_ccm ?? 0) > 0;
+  if (asAm && asCcm) return { role_category: 'manager', manager_type: 'both' };
+  if (asAm) return { role_category: 'manager', manager_type: 'account_manager' };
+  if (asCcm) return { role_category: 'manager', manager_type: 'ccm' };
+  // manager_type is NOT NULL and predates crew; 'crew' is the documented
+  // sentinel, surfaced to the API as null.
+  return { role_category: 'crew', manager_type: 'crew' };
+}
+
+export function importStaffEmails(
+  db: DatabaseSync,
+  rows: StaffEmailRow[],
+  opts: { dryRun?: boolean } = {}
+): StaffImportReport {
+  const report: StaffImportReport = {
+    totalRows: rows.length,
+    matchedUpdated: [], matchedAlreadyHadEmail: [], created: [],
+    ambiguous: [], invalidEmail: [], remainingWithoutEmail: [],
+  };
+
+  // Index the roster once, by normalized name. A name held by two rows is
+  // AMBIGUOUS: we refuse to guess which person owns the address.
+  const byName = new Map<string, any[]>();
+  for (const r of db.prepare('SELECT * FROM staff_managers').all() as any[]) {
+    const rec = Object.assign({}, r);
+    const k = nameKey(rec.name);
+    if (!byName.has(k)) byName.set(k, []);
+    byName.get(k)!.push(rec);
+  }
+
+  const updateEmail = db.prepare('UPDATE staff_managers SET email = ? WHERE id = ?');
+  const insertStaff = db.prepare(`
+    INSERT INTO staff_managers (name, manager_type, role_category, shift, day_night, email, active)
+    VALUES (?, ?, ?, NULL, NULL, ?, 1)
+  `);
+
+  for (const r of rows) {
+    if (!r.name) continue;
+    if (r.email && !isValidEmail(r.email)) {
+      report.invalidEmail.push({ row: r.row, name: r.name, value: r.email });
+      continue;
+    }
+
+    const matches = byName.get(nameKey(r.name)) ?? [];
+
+    if (matches.length > 1) {
+      report.ambiguous.push({ name: r.name, ids: matches.map((m) => m.id) });
+      continue;
+    }
+
+    if (matches.length === 1) {
+      const existing = cell(matches[0].email);
+      if (existing) {
+        // Never overwrite a populated address, even with a different one.
+        report.matchedAlreadyHadEmail.push({ name: r.name, existing, incoming: r.email });
+        continue;
+      }
+      if (!r.email) continue;
+      if (!opts.dryRun) updateEmail.run(r.email, matches[0].id);
+      matches[0].email = r.email; // keep the in-memory index truthful
+      report.matchedUpdated.push({ name: r.name, email: r.email });
+      continue;
+    }
+
+    // No roster record at all — create one for Cara to finish (shift/day_night
+    // stay NULL deliberately).
+    const role = managerRoleFor(db, r.name);
+    if (!opts.dryRun) {
+      insertStaff.run(r.name, role.manager_type, role.role_category, r.email || null);
+    }
+    // Register it so a duplicate later in the same file matches instead of
+    // inserting twice.
+    byName.set(nameKey(r.name), [{ id: -1, name: r.name, email: r.email }]);
+    report.created.push({ name: r.name, email: r.email, ...role });
+  }
+
+  report.remainingWithoutEmail = (db.prepare(`
+    SELECT id, name, COALESCE(role_category, 'manager') AS role_category
+      FROM staff_managers
+     WHERE (email IS NULL OR TRIM(email) = '') AND COALESCE(active, 1) = 1
+     ORDER BY name ASC
+  `).all() as any[]).map((r) => Object.assign({}, r) as any);
+
+  return report;
+}
+
+// ── IC email import ──────────────────────────────────────────────────────────
+
+export interface IcImportReport {
+  totalRows: number;
+  matchedUpdated: { vendor: string; dba: string; contact: string; email: string }[];
+  matchedAlreadyPopulated: { vendor: string; dba: string }[];
+  created: { vendor: string; dba: string; contact: string; email: string }[];
+  missingEmail: { row: number; dba: string; vendor: string }[];
+  missingVendorNo: { row: number; dba: string; email: string }[];
+  invalidEmail: { row: number; dba: string; value: string }[];
+  duplicateVendorNos: { vendor: string; count: number }[];
+}
+
+export function importIcEmails(
+  db: DatabaseSync,
+  rows: IcEmailRow[],
+  opts: { dryRun?: boolean } = {}
+): IcImportReport {
+  const report: IcImportReport = {
+    totalRows: rows.length,
+    matchedUpdated: [], matchedAlreadyPopulated: [], created: [],
+    missingEmail: [], missingVendorNo: [], invalidEmail: [], duplicateVendorNos: [],
+  };
+
+  // Duplicate vendor numbers WITHIN the source file — reported, first wins.
+  const seen = new Map<string, number>();
+  for (const r of rows) {
+    if (!r.vendor) continue;
+    seen.set(r.vendor, (seen.get(r.vendor) ?? 0) + 1);
+  }
+  for (const [vendor, count] of seen) {
+    if (count > 1) report.duplicateVendorNos.push({ vendor, count });
+  }
+
+  const icRows = (db.prepare(`
+    SELECT id, ic_company_name, bc_vendor_number, ic_primary_contact, ic_email
+      FROM accounts
+     WHERE (record_type = 'ic' OR record_type IS NULL)
+  `).all() as any[]).map((r) => Object.assign({}, r));
+
+  const byVendor = new Map<string, any>();
+  const byName = new Map<string, any>();
+  for (const r of icRows) {
+    const v = cell(r.bc_vendor_number);
+    if (v && !byVendor.has(v)) byVendor.set(v, r);
+    const n = nameKey(r.ic_company_name);
+    if (n && !byName.has(n)) byName.set(n, r);
+  }
+
+  // Fill ONLY where empty — a populated contact or email is never overwritten.
+  const update = db.prepare(`
+    UPDATE accounts SET
+      ic_primary_contact = CASE WHEN (ic_primary_contact IS NULL OR TRIM(ic_primary_contact) = '')
+                                THEN ? ELSE ic_primary_contact END,
+      ic_email           = CASE WHEN (ic_email IS NULL OR TRIM(ic_email) = '')
+                                THEN ? ELSE ic_email END
+    WHERE id = ?
+  `);
+  const insert = db.prepare(`
+    INSERT INTO accounts (ic_company_name, bc_vendor_number, ic_primary_contact, ic_email,
+                          record_type, status, archived)
+    VALUES (?, ?, ?, ?, 'ic', 'active', 0)
+  `);
+
+  for (const r of rows) {
+    if (!r.dba && !r.vendor) continue;
+
+    if (r.email && !isValidEmail(r.email)) {
+      report.invalidEmail.push({ row: r.row, dba: r.dba, value: r.email });
+    }
+    const email = r.email && isValidEmail(r.email) ? r.email : '';
+
+    if (!email) report.missingEmail.push({ row: r.row, dba: r.dba, vendor: r.vendor });
+    if (!r.vendor) report.missingVendorNo.push({ row: r.row, dba: r.dba, email });
+
+    // Vendor number is the match key. Rows without one fall back to an exact
+    // company-name match so re-running still finds them instead of duplicating.
+    const existing = r.vendor ? byVendor.get(r.vendor) : byName.get(nameKey(r.dba));
+
+    if (existing) {
+      const hadContact = !!cell(existing.ic_primary_contact);
+      const hadEmail = !!cell(existing.ic_email);
+      if ((hadContact || !r.contact) && (hadEmail || !email)) {
+        report.matchedAlreadyPopulated.push({ vendor: r.vendor, dba: r.dba });
+        continue;
+      }
+      if (!opts.dryRun) update.run(r.contact || null, email || null, existing.id);
+      if (!hadContact && r.contact) existing.ic_primary_contact = r.contact;
+      if (!hadEmail && email) existing.ic_email = email;
+      report.matchedUpdated.push({ vendor: r.vendor, dba: r.dba, contact: r.contact, email });
+      continue;
+    }
+
+    if (!opts.dryRun) {
+      insert.run(r.dba || null, r.vendor || null, r.contact || null, email || null);
+    }
+    const created = {
+      id: -1, ic_company_name: r.dba, bc_vendor_number: r.vendor,
+      ic_primary_contact: r.contact, ic_email: email,
+    };
+    if (r.vendor) byVendor.set(r.vendor, created);
+    if (r.dba) byName.set(nameKey(r.dba), created);
+    report.created.push({ vendor: r.vendor, dba: r.dba, contact: r.contact, email });
+  }
+
+  return report;
+}
+
+// ── Customer → serving IC resolution ─────────────────────────────────────────
+
+export interface ResolutionReport {
+  totalCustomers: number;
+  resolved: number;
+  unresolvedNoVendorNo: number;
+  unresolvedNoMatchingIc: number;
+  unresolvedIcHasNoEmail: number;
+  /** A sample of the unresolved, so the gap is actionable rather than a number. */
+  samples: { customer: string; bc_vendor_number: string; reason: string }[];
+}
+
+/**
+ * Every customer row carries the bc_vendor_number of the IC that serves it.
+ * A signature form for that site can only reach a human if that vendor number
+ * resolves to an IC record carrying a valid primary-contact email.
+ */
+export function resolveCustomerIcEmails(db: DatabaseSync, sampleLimit = 25): ResolutionReport {
+  const customers = (db.prepare(`
+    SELECT id, ic_company_name, bc_vendor_number
+      FROM accounts
+     WHERE record_type = 'customer' AND COALESCE(archived, 0) = 0
+  `).all() as any[]).map((r) => Object.assign({}, r));
+
+  const icByVendor = new Map<string, any>();
+  for (const r of db.prepare(`
+    SELECT bc_vendor_number, ic_email, ic_company_name FROM accounts
+     WHERE (record_type = 'ic' OR record_type IS NULL) AND COALESCE(archived, 0) = 0
+  `).all() as any[]) {
+    const rec = Object.assign({}, r);
+    const v = cell(rec.bc_vendor_number);
+    if (!v) continue;
+    // Prefer an IC that actually has an email if the vendor number repeats.
+    const prev = icByVendor.get(v);
+    if (!prev || (!isValidEmail(prev.ic_email) && isValidEmail(rec.ic_email))) {
+      icByVendor.set(v, rec);
+    }
+  }
+
+  const report: ResolutionReport = {
+    totalCustomers: customers.length,
+    resolved: 0, unresolvedNoVendorNo: 0,
+    unresolvedNoMatchingIc: 0, unresolvedIcHasNoEmail: 0, samples: [],
+  };
+
+  for (const c of customers) {
+    const v = cell(c.bc_vendor_number);
+    let reason = '';
+    if (!v) { report.unresolvedNoVendorNo++; reason = 'customer row has no BC vendor number'; }
+    else {
+      const ic = icByVendor.get(v);
+      if (!ic) { report.unresolvedNoMatchingIc++; reason = `no IC record for vendor ${v}`; }
+      else if (!isValidEmail(ic.ic_email)) {
+        report.unresolvedIcHasNoEmail++;
+        reason = `IC "${cell(ic.ic_company_name)}" has no valid email`;
+      } else { report.resolved++; continue; }
+    }
+    if (report.samples.length < sampleLimit) {
+      report.samples.push({ customer: cell(c.ic_company_name), bc_vendor_number: v, reason });
+    }
+  }
+
+  return report;
+}

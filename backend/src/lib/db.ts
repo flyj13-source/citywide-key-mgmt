@@ -98,6 +98,9 @@ const needed: [string, string][] = [
   ['ccm_manager', 'TEXT'],
   // Contact address for an IC vendor, so a contractor holder can be emailed.
   ['ic_email', 'TEXT'],
+  // The named human at the vendor. Key receipts go to the IC's PRIMARY
+  // CONTACT, not to crew, so this is the person a signature form addresses.
+  ['ic_primary_contact', 'TEXT'],
 ];
 
 const existing = cols();

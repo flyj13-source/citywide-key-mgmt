@@ -6,6 +6,10 @@ import db from '../lib/db';
 import { logAudit } from '../lib/audit';
 import { encrypt } from '../lib/crypto';
 import { gridTotal } from '../lib/roleKeys';
+import {
+  detectShape, parseStaffRows, parseIcRows, importStaffEmails, importIcEmails,
+  resolveCustomerIcEmails, type StaffEmailRow, type IcEmailRow,
+} from '../lib/emailImport';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -172,7 +176,7 @@ interface ParseResult {
 
 function parseRows(buffer: Buffer, mimetype: string): ParseResult {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-  const ws = wb.Sheets[wb.SheetNames[0]];
+  const ws = wb.Sheets[pickSheet(wb)];
   const raw: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
   if (raw.length < 2) return { rows: [], unmappedHeaders: [], mappedHeaders: [], fieldCollisions: [] };
 
@@ -295,9 +299,99 @@ function normalizeRow(raw: Record<string, any>): ParsedRow {
   };
 }
 
+// ── Sheet selection ─────────────────────────────────────────────────────────
+// The IC export ships a "hiddenSheet" alongside the real one, and the employee
+// workbook has several tabs. Never blindly take SheetNames[0].
+function pickSheet(wb: XLSX.WorkBook): string {
+  const named = wb.SheetNames.find((n) => {
+    const l = n.toLowerCase();
+    return l.includes('active independent contractor') || l.includes('current employee');
+  });
+  if (named) return named;
+  const visible = wb.SheetNames.filter((n) => n.toLowerCase() !== 'hiddensheet');
+  return visible[0] ?? wb.SheetNames[0];
+}
+
+/** Header row of the chosen sheet, plus the raw grid, for shape detection. */
+function readGrid(buffer: Buffer): { sheet: string; raw: any[][] } {
+  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+  const sheet = pickSheet(wb);
+  // raw:false keeps zero-padded vendor numbers as the text Excel stored.
+  const raw: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { header: 1, defval: '', raw: false });
+  return { sheet, raw };
+}
+
+// ── POST /api/accounts/import/emails/confirm — apply an email backfill ───────
+// Both email sheets are idempotent, so this endpoint is safe to re-run: it only
+// ever fills blanks and never overwrites a populated contact or address.
+router.post('/emails/confirm', requireAuth, (req: AuthRequest, res: Response) => {
+  const { kind, rows } = req.body as { kind: string; rows: any[] };
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: 'No rows to import' });
+  }
+
+  db.exec('BEGIN');
+  try {
+    if (kind === 'staff-emails') {
+      const report = importStaffEmails(db, rows as StaffEmailRow[]);
+      db.exec('COMMIT');
+      logAudit(req, 'staff_emails_imported', null, null, {
+        source: 'registry import', rows: report.totalRows,
+        updated: report.matchedUpdated.length, created: report.created.length,
+        ambiguous: report.ambiguous.map((a) => a.name),
+        still_missing: report.remainingWithoutEmail.length,
+      });
+      return res.json({ kind, report });
+    }
+    if (kind === 'ic-emails') {
+      const report = importIcEmails(db, rows as IcEmailRow[]);
+      const resolution = resolveCustomerIcEmails(db);
+      db.exec('COMMIT');
+      logAudit(req, 'ic_emails_imported', null, null, {
+        source: 'registry import', rows: report.totalRows,
+        updated: report.matchedUpdated.length, created: report.created.length,
+        missing_email: report.missingEmail.length,
+        missing_vendor_no: report.missingVendorNo.length,
+        customers_resolved: resolution.resolved, customers_total: resolution.totalCustomers,
+      });
+      return res.json({ kind, report, resolution });
+    }
+    db.exec('ROLLBACK');
+    return res.status(400).json({ error: `Unknown import kind "${kind}"` });
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+});
+
 // ── POST /api/accounts/import — parse + preview (no DB write) ───────────────
 router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Response) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  // The same uploader handles three sheet shapes. The two email backfills are
+  // recognised from their header row and previewed as a DRY RUN, so Cara can
+  // re-run them herself whenever the source exports are refreshed.
+  try {
+    const { sheet, raw } = readGrid(req.file.buffer);
+    const shape = detectShape(raw[0] ?? []);
+    if (shape === 'staff-emails') {
+      const parsed = parseStaffRows(raw);
+      return res.json({
+        kind: 'staff-emails', sheet, rows: parsed,
+        preview: importStaffEmails(db, parsed, { dryRun: true }),
+      });
+    }
+    if (shape === 'ic-emails') {
+      const parsed = parseIcRows(raw);
+      return res.json({
+        kind: 'ic-emails', sheet, rows: parsed,
+        preview: importIcEmails(db, parsed, { dryRun: true }),
+        resolutionBefore: resolveCustomerIcEmails(db),
+      });
+    }
+  } catch (e: any) {
+    return res.status(400).json({ error: 'Could not parse file: ' + e.message });
+  }
 
   let rawRows: Record<string, any>[];
   let unmappedHeaders: string[];
