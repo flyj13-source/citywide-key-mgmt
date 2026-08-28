@@ -12,14 +12,17 @@ import TransferModal from '../components/TransferModal';
 import { ActionRow, ActionGroup, ActionDivider, ActionButton } from '../components/ActionRow';
 import {
   IconCheckOut, IconCheckIn, IconTransfer, IconCustomer, IconIC, IconManagerAdd,
-  IconImport, IconReport, IconExport, IconReassign, IconDelete, IconCheck,
+  IconImport, IconReport, IconExport, IconReassign, IconDelete, IconCheck, IconSelect,
 } from '../components/Icons';
 import SignInPersonModal from '../components/SignInPersonModal';
 import { ManagerRosterTable, type RosterChip } from '../components/ManagerRoster';
 import ManagerPanel from '../components/ManagerPanel';
 import ManagerModal from '../components/ManagerModal';
+import SelectionToolbar, { selectionCapabilities } from '../components/SelectionToolbar';
+import BulkArchiveModal from '../components/BulkArchiveModal';
+import { useBulkSelect } from '../lib/useBulkSelect';
 import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
-import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getManagerRoster, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, getSignatureGaps,
+import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getManagerRoster, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, getSignatureGaps, bulkArchiveAccounts,
   type Assignment, type SignatureGaps, type ManagerRosterRow, type UnmatchedManager,
   type StaffManager } from '../lib/api';
 
@@ -433,24 +436,57 @@ function AccountFormModal({
 // Memoized so typing in the search box (which re-renders the page shell to
 // update the input) does NOT re-render the 50 visible rows every keystroke.
 const RegistryTable = memo(function RegistryTable({
-  tab, accounts, loading, colSpan, selectable, selectedId, onToggleSelect, onRowClick, onEdit,
+  tab, accounts, loading, colSpan, selectable, bulkMode, selectedId, selectedIds,
+  allOnPageSelected, someOnPageSelected, filterActive, onToggleAll,
+  onToggleSelect, onRowClick, onEdit,
 }: {
   tab: TabType;
   accounts: any[];
   loading: boolean;
   colSpan: number;
+  /** The checkbox COLUMN exists whenever selection is possible — its width is
+   *  reserved even in single mode so switching modes never jolts the layout. */
   selectable: boolean;
+  /** Picking mode: boxes visible, row clicks toggle instead of opening detail. */
+  bulkMode: boolean;
   selectedId: number | null;
-  onToggleSelect: (id: number) => void;
+  selectedIds: Set<number>;
+  allOnPageSelected: boolean;
+  someOnPageSelected: boolean;
+  /** A search or filter is narrowing the list — the select-all label says so. */
+  filterActive: boolean;
+  onToggleAll: () => void;
+  onToggleSelect: (id: number, mods?: { shift?: boolean; meta?: boolean }) => void;
   onRowClick: (id: number) => void;
   onEdit: (e: React.MouseEvent, id: number) => void;
 }) {
   return (
-    <div className="card overflow-x-auto max-w-full">
+    <div className={`card overflow-x-auto max-w-full ${bulkMode ? 'ring-1 ring-[#C0272D] bg-[#fdf7f7]' : ''}`}>
       <table className="w-full text-sm border-collapse">
         <thead>
           <tr className="bg-[#1a1a1a] text-white text-xs">
-            {selectable && <th className="w-11 px-2 py-3 sticky left-0 z-20 bg-[#1a1a1a]"></th>}
+            {selectable && (
+              <th className="w-11 px-2 py-3 sticky left-0 z-20 bg-[#1a1a1a]">
+                {/* Takes every VISIBLE row — which is the active tab, search and
+                    filter already applied. Hidden rows are not in `accounts`,
+                    so they cannot be swept up here. */}
+                {bulkMode && (
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-[#C0272D] cursor-pointer align-middle"
+                    checked={allOnPageSelected}
+                    ref={(el) => { if (el) el.indeterminate = someOnPageSelected; }}
+                    onChange={onToggleAll}
+                    title={filterActive
+                      ? `Select all ${accounts.length} filtered`
+                      : `Select all ${accounts.length} on this page`}
+                    aria-label={filterActive
+                      ? `Select all ${accounts.length} filtered`
+                      : `Select all ${accounts.length} on this page`}
+                  />
+                )}
+              </th>
+            )}
             {tab === 'customer' ? (
               <>
                 <th className={`text-left px-4 py-3 font-medium whitespace-nowrap sticky ${selectable ? 'left-11' : 'left-0'} z-20 bg-[#1a1a1a] min-w-[200px]`}>Client Name</th>
@@ -494,23 +530,32 @@ const RegistryTable = memo(function RegistryTable({
           ) : accounts.length === 0 ? (
             <tr><td colSpan={colSpan} className="px-4 py-8 text-center text-cw-muted">No records found</td></tr>
           ) : accounts.map((a, i) => {
-            const selected = selectedId === a.id;
+            const selected = bulkMode ? selectedIds.has(a.id) : selectedId === a.id;
             const rowBg = selected ? 'bg-[#fbeaea]' : (i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]');
             return (
               <tr
                 key={a.id}
                 className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${rowBg}`}
-                onClick={() => onRowClick(a.id)}
+                // In bulk mode the whole row toggles selection; in single mode
+                // it opens the detail. Shift extends a range either way.
+                onClick={(e) => bulkMode
+                  ? onToggleSelect(a.id, { shift: e.shiftKey, meta: e.metaKey || e.ctrlKey })
+                  : onRowClick(a.id)}
               >
                 {selectable && (
                   <td className={`w-11 px-2 py-3 text-center sticky left-0 z-10 ${rowBg}`} onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-[#C0272D] cursor-pointer align-middle"
-                      checked={selected}
-                      onChange={() => onToggleSelect(a.id)}
-                      aria-label={`Select ${a.ic_company_name}`}
-                    />
+                    {/* The column is always present so toggling modes never
+                        shifts the table; only the box itself appears. */}
+                    {bulkMode && (
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-[#C0272D] cursor-pointer align-middle"
+                        checked={selected}
+                        onClick={(e) => onToggleSelect(a.id, { shift: e.shiftKey, meta: e.metaKey || e.ctrlKey })}
+                        onChange={() => { /* click handler owns this — needed so React sees it as controlled */ }}
+                        aria-label={`Select ${a.ic_company_name}`}
+                      />
+                    )}
                   </td>
                 )}
                 {tab === 'customer' ? (
@@ -939,12 +984,17 @@ const EXPORT_TAB_LABEL: Record<string, string> = {
 };
 
 function RegistryExportModal({
-  tab, search, onClose,
+  tab, search, selectedIds, onClose,
 }: {
   tab: TabType;
   search: string;
+  /** Present when opened from the selection toolbar — export exactly these. */
+  selectedIds?: number[];
   onClose: () => void;
 }) {
+  const picking = !!selectedIds?.length;
+  // Opened from a selection, the scope choice is not a choice: the user asked
+  // for the rows they ticked, so the radios are replaced by a plain statement.
   const [scope, setScope] = useState<'current' | 'all'>('current');
   const [format, setFormat] = useState<'xlsx' | 'csv'>('xlsx');
   const [includeArchived, setIncludeArchived] = useState(false);
@@ -954,7 +1004,7 @@ function RegistryExportModal({
   const run = async () => {
     setBusy(true); setError('');
     try {
-      await exportRegistry({ scope, tab, format, search, includeArchived });
+      await exportRegistry({ scope, tab, format, search, includeArchived, ids: selectedIds });
       onClose();
     } catch (err: any) {
       setError(err?.message || 'Export failed');
@@ -968,16 +1018,22 @@ function RegistryExportModal({
       <div className="space-y-5">
         <div>
           <SectionLabel>Scope</SectionLabel>
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-              <input type="radio" name="exp-scope" className="accent-[#C0272D]" checked={scope === 'current'} onChange={() => setScope('current')} />
-              Current tab only <span className="text-gray-400">— {EXPORT_TAB_LABEL[tab] || tab}</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-              <input type="radio" name="exp-scope" className="accent-[#C0272D]" checked={scope === 'all'} onChange={() => setScope('all')} />
-              Entire registry <span className="text-gray-400">— all tabs, one sheet each</span>
-            </label>
-          </div>
+          {picking ? (
+            <div className="rounded border border-[#C0272D] bg-[#fbeaea] px-3 py-2 text-sm text-[#C0272D]">
+              Exporting the <strong>{selectedIds!.length} selected record{selectedIds!.length !== 1 ? 's' : ''}</strong> only.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input type="radio" name="exp-scope" className="accent-[#C0272D]" checked={scope === 'current'} onChange={() => setScope('current')} />
+                Current tab only <span className="text-gray-400">— {EXPORT_TAB_LABEL[tab] || tab}</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input type="radio" name="exp-scope" className="accent-[#C0272D]" checked={scope === 'all'} onChange={() => setScope('all')} />
+                Entire registry <span className="text-gray-400">— all tabs, one sheet each</span>
+              </label>
+            </div>
+          )}
         </div>
 
         <div>
@@ -1051,6 +1107,8 @@ export default function Registry() {
   const [modal, setModal] = useState<ModalState>(null);
   const [showImport, setShowImport] = useState(false);
   const [showExport, setShowExport] = useState(false);
+  // Set by "Export selected" — narrows the export to exactly the ticked rows.
+  const [exportIds, setExportIds] = useState<number[] | null>(null);
   const [roster, setRoster] = useState<ManagerRosterRow[]>([]);
   const [rosterUnmatched, setRosterUnmatched] = useState<UnmatchedManager[]>([]);
   const [rosterLoading, setRosterLoading] = useState(false);
@@ -1089,7 +1147,7 @@ export default function Registry() {
     { account: { id: number; name: string } | null; holder: string | null } | null
   >(null);
   const [notice, setNotice] = useState('');
-  const [reassign, setReassign] = useState<{ name: string | null; role: 'am' | 'ccm' } | null>(null);
+  const [reassign, setReassign] = useState<{ name: string | null; role: 'am' | 'ccm'; clientIds?: number[] } | null>(null);
   const [signInPersonFor, setSignInPersonFor] = useState<
     { assignment: Assignment; kind: 'checkout' | 'checkin' } | null
   >(null);
@@ -1115,30 +1173,38 @@ export default function Registry() {
 
   // Row data — for the Customers/IC/All tabs and for the roster drill-down.
   // A pure roster tab (am/ccm, no drill) loads the roster instead (below).
+  // The filter half of the list query, WITHOUT paging. Select-all-matching
+  // sends exactly this to /accounts/ids, so the promoted set can only ever be
+  // what the user is looking at.
+  const filterParams = useMemo(() => {
+    const params: Record<string, string> = { search: debouncedSearch };
+    if (drill) {
+      params.type = 'customer';
+      params[drill.role === 'am' ? 'account_manager' : 'ccm_manager'] = drill.name;
+    } else if (tab === 'archived') {
+      params.type = 'all';
+      params.archived = '1';
+    } else if (tab === 'office') {
+      // Office tab — customers where the Office holder physically holds keys.
+      params.type = 'customer';
+      params.office_keys = '1';
+    } else {
+      params.type = tab;
+    }
+    return params;
+  }, [debouncedSearch, tab, drill]);
+
   const loadRows = useCallback(async () => {
     setLoading(true);
     try {
-      const params: Record<string, string> = { search: debouncedSearch, page: String(page), limit: String(LIMIT) };
-      if (drill) {
-        params.type = 'customer';
-        params[drill.role === 'am' ? 'account_manager' : 'ccm_manager'] = drill.name;
-      } else if (tab === 'archived') {
-        params.type = 'all';
-        params.archived = '1';
-      } else if (tab === 'office') {
-        // Office tab — customers where the Office holder physically holds keys.
-        params.type = 'customer';
-        params.office_keys = '1';
-      } else {
-        params.type = tab;
-      }
+      const params: Record<string, string> = { ...filterParams, page: String(page), limit: String(LIMIT) };
       const data = await getAccounts(params);
       setAccounts(data.accounts);
       setTotal(data.total);
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, page, tab, drill]);
+  }, [filterParams, page]);
 
   // People roster — aggregated server-side (GROUP BY), one row per person.
   // Roster-driven: staff_managers records with their aggregates, plus any
@@ -1305,6 +1371,19 @@ export default function Registry() {
 
   const selectedAccount = accounts.find((a) => a.id === selectedId) || null;
 
+  // ── Bulk selection ────────────────────────────────────────────────────────
+  // Anything that changes WHAT the table is showing exits bulk mode, so a
+  // selection can never be carried into a different view.
+  const bulk = useBulkSelect({
+    rows: accounts,
+    total,
+    params: filterParams,
+    resetKey: `${tab}|${debouncedSearch}|${drill?.name ?? ''}|${page}`,
+  });
+
+  const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false);
+  const [bulkArchiveError, setBulkArchiveError] = useState('');
+
   const toggleSelect = useCallback((id: number) => {
     setSelectedId((cur) => (cur === id ? null : id));
     setSelectedSnapshot((cur) => {
@@ -1313,6 +1392,49 @@ export default function Registry() {
       return row ? { id: row.id, name: row.ic_company_name } : null;
     });
   }, [accounts]);
+
+  // ── Bulk actions ──────────────────────────────────────────────────────────
+  const doBulkArchive = async () => {
+    setBusy(true); setBulkArchiveError('');
+    try {
+      const res = await bulkArchiveAccounts([...bulk.selected]);
+      const parts = [`${res.archived} record${res.archived !== 1 ? 's' : ''} archived`];
+      if (res.blocked.length) {
+        // Never silent: a refusal is named, not swallowed.
+        parts.push(
+          `${res.blocked.length} skipped — keys still checked out: ${res.blocked.map((b) => b.name).join(', ')}`
+        );
+      }
+      if (res.alreadyArchived) parts.push(`${res.alreadyArchived} were already archived`);
+      setNotice(parts.join('. ') + '.');
+      setBulkArchiveOpen(false);
+      bulk.exitBulk();
+      loadRows();
+      refreshCounts();
+    } catch (e: any) {
+      setBulkArchiveError(e.message);
+    } finally { setBusy(false); }
+  };
+
+  const doBulkExport = () => {
+    // Exports exactly the selected rows, nothing else.
+    setExportIds([...bulk.selected]);
+    setShowExport(true);
+  };
+
+  const doBulkReassign = (sharedManager: string | null) => {
+    // Pre-fill with exactly the clients that were ticked.
+    setReassign({ name: sharedManager, role: 'am', clientIds: [...bulk.selected] });
+  };
+
+  const doBulkCheckOut = () => {
+    // Single-record by design (see selectionCapabilities): pre-fill from the
+    // one selected customer.
+    const only = bulk.selectedItems[0];
+    if (!only) return;
+    setSelectedSnapshot({ id: only.id, name: only.ic_company_name });
+    setCheckOutOpen(true);
+  };
 
   const doArchive = async () => {
     if (!archiveTarget) return;
@@ -1397,6 +1519,32 @@ export default function Registry() {
               The handover confirm is contextual — it exists only while a
               flagged row is selected, so it adds no permanent clutter. */}
           <ActionRow>
+            {/* MODE TOGGLE — flips the table between browsing and picking.
+                Outlined when off, filled when on, so the active mode is
+                unmistakable at a glance. Only meaningful on row tabs. */}
+            {!isPeopleTab && (
+              <>
+                <ActionGroup label="Selection mode">
+                  <button
+                    type="button"
+                    onClick={bulk.toggleBulk}
+                    title={bulk.bulkMode
+                      ? 'Leave selection mode — row clicks open detail again'
+                      : 'Pick multiple rows for export, reassignment or archiving'}
+                    className={`inline-flex items-center gap-1.5 h-[34px] px-3 rounded text-sm font-medium whitespace-nowrap transition-colors ${
+                      bulk.bulkMode
+                        ? 'bg-[#C0272D] text-white hover:bg-[#a82227]'
+                        : 'bg-white border border-[#1a1a1a] text-[#1a1a1a] hover:border-[#C0272D] hover:text-[#C0272D]'
+                    }`}
+                  >
+                    <IconSelect />
+                    <span>{bulk.bulkMode ? 'Done selecting' : 'Select'}</span>
+                  </button>
+                </ActionGroup>
+                <ActionDivider />
+              </>
+            )}
+
             {/* GROUP 1 — daily custody. The only filled buttons on the page. */}
             <ActionGroup label="Daily custody">
               <ActionButton
@@ -1686,17 +1834,55 @@ export default function Registry() {
             onPurge={(a) => { setPurgeConfirm(''); setPurgeTarget(a); }}
           />
         ) : (
-          <RegistryTable
-            tab={tableTab}
-            accounts={accounts}
-            loading={loading}
-            colSpan={colSpan}
-            selectable
-            selectedId={selectedId}
-            onToggleSelect={toggleSelect}
-            onRowClick={onRowClick}
-            onEdit={openEdit}
-          />
+          <>
+            {/* Selection toolbar — sits ABOVE the table and never replaces the
+                main action row; everything stays visible. */}
+            {bulk.bulkMode && bulk.count > 0 && (
+              <SelectionToolbar
+                count={bulk.count}
+                total={total}
+                pageCount={accounts.length}
+                allMatching={bulk.allMatching}
+                items={bulk.selectedItems}
+                canDelete={canDelete}
+                promoting={bulk.promoting}
+                promoteError={bulk.promoteError}
+                onPromote={bulk.promoteToAllMatching}
+                onClear={bulk.clear}
+                onExport={doBulkExport}
+                onReassign={doBulkReassign}
+                onCheckOut={doBulkCheckOut}
+                onArchive={() => { setBulkArchiveError(''); setBulkArchiveOpen(true); }}
+              />
+            )}
+            {/* In bulk mode with nothing picked yet, still say what mode this
+                is — the tinted table alone should never be the only clue. */}
+            {bulk.bulkMode && bulk.count === 0 && (
+              <div className="rounded-t border-t-2 border-[#C0272D] bg-[#1a1a1a] text-white px-3 py-2">
+                <span className="text-sm font-semibold">Select rows</span>
+                <span className="text-[11px] text-white/45 ml-3">
+                  Click rows to select · Shift-click for a range · Esc to exit
+                </span>
+              </div>
+            )}
+            <RegistryTable
+              tab={tableTab}
+              accounts={accounts}
+              loading={loading}
+              colSpan={colSpan}
+              selectable
+              bulkMode={bulk.bulkMode}
+              selectedId={selectedId}
+              selectedIds={bulk.selected}
+              allOnPageSelected={bulk.allOnPageSelected}
+              someOnPageSelected={bulk.someOnPageSelected}
+              filterActive={!!debouncedSearch || !!drill}
+              onToggleAll={bulk.toggleAllOnPage}
+              onToggleSelect={bulk.bulkMode ? bulk.toggleRow : toggleSelect}
+              onRowClick={onRowClick}
+              onEdit={openEdit}
+            />
+          </>
         )}
 
         {/* Pagination */}
@@ -1727,8 +1913,24 @@ export default function Registry() {
         <ImportModal onClose={() => setShowImport(false)} onDone={() => { loadRows(); refreshCounts(); }} />
       )}
 
+      {bulkArchiveOpen && (
+        <BulkArchiveModal
+          items={bulk.selectedItems}
+          allMatching={bulk.allMatching}
+          busy={busy}
+          error={bulkArchiveError}
+          onCancel={() => { setBulkArchiveOpen(false); setBulkArchiveError(''); }}
+          onConfirm={doBulkArchive}
+        />
+      )}
+
       {showExport && (
-        <RegistryExportModal tab={tab} search={debouncedSearch} onClose={() => setShowExport(false)} />
+        <RegistryExportModal
+          tab={tab}
+          search={debouncedSearch}
+          selectedIds={exportIds ?? undefined}
+          onClose={() => { setShowExport(false); setExportIds(null); }}
+        />
       )}
 
       {/* Key custody — both modals open within the registry context and pre-fill
@@ -1776,6 +1978,7 @@ export default function Registry() {
         <ReassignModal
           sourceName={reassign.name ?? undefined}
           role={reassign.name ? reassign.role : undefined}
+          presetClientIds={reassign.clientIds}
           onClose={() => setReassign(null)}
           onDone={() => { loadRoster(); refreshCounts(); }}
         />

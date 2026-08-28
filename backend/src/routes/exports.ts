@@ -32,7 +32,7 @@ const VALID_TABS = Object.keys(TAB_LABEL) as ExportTab[];
 // Has Door/Alarm Code Yes/No columns. Audit-logged with scope + row count.
 router.post('/registry', requireAuth, async (req: AuthRequest, res: Response) => {
   const {
-    scope = 'current', tab = 'all', format = 'xlsx', search = '', includeArchived = false,
+    scope = 'current', tab = 'all', format = 'xlsx', search = '', includeArchived = false, ids,
   } = (req.body || {}) as Partial<ExportOpts> & { format?: string };
 
   if (scope !== 'current' && scope !== 'all') {
@@ -46,11 +46,18 @@ router.post('/registry', requireAuth, async (req: AuthRequest, res: Response) =>
     return res.status(400).json({ error: "format must be 'xlsx' or 'csv'" });
   }
 
+  // "Export selected" passes the ticked ids. Bounded and integer-checked so a
+  // hand-built body can't turn this into an unbounded query.
+  const cleanIds = Array.isArray(ids)
+    ? [...new Set(ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 5000)
+    : undefined;
+
   const opts: ExportOpts = {
     scope,
     tab: tab as ExportTab,
     search: String(search || '').trim(),
     includeArchived: !!includeArchived,
+    ids: cleanIds,
   };
 
   const sheets = buildSheets(opts);
@@ -62,6 +69,7 @@ router.post('/registry', requireAuth, async (req: AuthRequest, res: Response) =>
   logAudit(req, 'export_registry', null, null, {
     scope, tab: opts.tab, format: fmt, includeArchived: opts.includeArchived,
     search: opts.search || undefined, row_count: rowCount, sheets: sheets.map((s) => s.name),
+    selected_ids: cleanIds?.length,
   });
 
   if (fmt === 'csv') {

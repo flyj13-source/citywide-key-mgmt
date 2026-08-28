@@ -24,6 +24,10 @@ export interface ExportOpts {
   tab: ExportTab;
   search?: string;
   includeArchived?: boolean;
+  /** "Export selected": restrict to exactly these account ids. When present it
+   *  narrows the tab's own query rather than replacing it, so the columns and
+   *  sheet layout stay identical to the on-screen tab. */
+  ids?: number[];
 }
 
 interface Column { header: string; key: string; width: number }
@@ -37,10 +41,16 @@ const has = (v: any): string => (v ? 'Yes' : 'No');
 // search + archived exactly like GET /api/accounts.
 function accountWhere(
   kind: 'customer' | 'ic' | 'office' | 'all' | 'archived',
-  opts: { search?: string; includeArchived?: boolean },
+  opts: { search?: string; includeArchived?: boolean; ids?: number[] },
 ): { sql: string; params: any[] } {
   let sql = '1=1';
   const params: any[] = [];
+
+  // An explicit id list narrows everything else — "export exactly what I ticked".
+  if (opts.ids && opts.ids.length) {
+    sql += ` AND id IN (${opts.ids.map(() => '?').join(',')})`;
+    params.push(...opts.ids);
+  }
 
   if (kind === 'archived') {
     sql += ' AND archived = 1';

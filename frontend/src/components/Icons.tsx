@@ -145,3 +145,11 @@ export const IconCheck = (p: IconProps) => (
     <path d="M5 12l5 5l10 -10" />
   </Svg>
 );
+
+/** ti-checkbox — enter/leave multi-row picking mode. */
+export const IconSelect = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9 11l3 3l8 -8" />
+    <path d="M20 12v6a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h9" />
+  </Svg>
+);

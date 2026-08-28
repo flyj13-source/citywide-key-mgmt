@@ -34,13 +34,16 @@ function KeyPills({ keys }: { keys: ReassignClient['keys'] }) {
 }
 
 export default function ReassignModal({
-  staffId, sourceName, role: initialRole, onClose, onDone,
+  staffId, sourceName, role: initialRole, presetClientIds, onClose, onDone,
 }: {
   /** Known when launched from a roster row (via name). Absent from the
    *  registry header, where the source manager is chosen inside the modal. */
   staffId?: number | null;
   sourceName?: string;
   role?: 'am' | 'ccm';
+  /** Launched from a bulk selection — tick exactly these clients instead of
+   *  the usual "all". Ids outside this manager's book are simply not present. */
+  presetClientIds?: number[];
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -109,12 +112,18 @@ export default function ReassignModal({
     getReassignable(resolvedId, role)
       .then((d) => {
         setData(d);
-        // ALL checked by default — the common case is a full handover.
-        setChecked(Object.fromEntries(d.clients.map((c) => [c.id, true])));
+        // A bulk selection pre-fills exactly what was ticked in the registry;
+        // otherwise ALL are checked, since the common case is a full handover.
+        const preset = presetClientIds && presetClientIds.length
+          ? new Set(presetClientIds)
+          : null;
+        setChecked(Object.fromEntries(
+          d.clients.map((c) => [c.id, preset ? preset.has(c.id) : true])
+        ));
       })
       .catch((e) => setLoadError(e?.message || 'Could not load this manager’s clients'))
       .finally(() => setLoading(false));
-  }, [resolvedId, role]);
+  }, [resolvedId, role, presetClientIds]);
 
   const selected = useMemo(
     () => (data?.clients ?? []).filter((c) => checked[c.id]),

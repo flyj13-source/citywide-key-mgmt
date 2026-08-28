@@ -7,9 +7,18 @@ import { gridTotal, num } from '../lib/roleKeys';
 
 const router = Router();
 
-router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
-  const { search = '', status = '', type = 'all', exclude_test = '', account_manager = '', ccm_manager = '', office_keys = '', archived = '0', page = '1', limit = '50' } = req.query as Record<string, string>;
-  const offset = (parseInt(page) - 1) * parseInt(limit);
+/**
+ * The registry's filter set, in ONE place. The list endpoint and the
+ * select-all-matching endpoint must agree exactly: if "Select all 577
+ * matching" resolved a different set than the rows on screen, a bulk archive
+ * would hit records the user never saw. Sharing this builder is what makes
+ * that impossible.
+ */
+export function buildAccountFilter(q: Record<string, string>): { where: string; params: any[] } {
+  const {
+    search = '', status = '', type = 'all', exclude_test = '',
+    account_manager = '', ccm_manager = '', office_keys = '', archived = '0',
+  } = q;
 
   let whereClauses = '1=1';
   const params: any[] = [];
@@ -52,14 +61,117 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
     whereClauses += ' AND COALESCE(office_keys_held, 0) > 0';
   }
 
-  const countRow = db.prepare(`SELECT COUNT(*) as c FROM accounts WHERE ${whereClauses}`).get(...params) as any;
+  return { where: whereClauses, params };
+}
+
+router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
+  const q = req.query as Record<string, string>;
+  const { page = '1', limit = '50' } = q;
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  const { where, params } = buildAccountFilter(q);
+
+  const countRow = db.prepare(`SELECT COUNT(*) as c FROM accounts WHERE ${where}`).get(...params) as any;
   const total = Object.assign({}, countRow).c as number;
 
   const accounts = db.prepare(
-    `SELECT * FROM accounts WHERE ${whereClauses} ORDER BY ic_company_name ASC LIMIT ? OFFSET ?`
+    `SELECT * FROM accounts WHERE ${where} ORDER BY ic_company_name ASC LIMIT ? OFFSET ?`
   ).all(...params, parseInt(limit), offset);
 
   res.json({ accounts: accounts.map((a) => Object.assign({}, a)), total, page: parseInt(page), limit: parseInt(limit) });
+});
+
+// ── GET /api/accounts/ids — every id matching the CURRENT filter ─────────────
+// Powers "Select all N matching". Returns ids plus only the fields the
+// selection toolbar needs to decide which bulk actions are legal — never the
+// full row, and never a code of any kind.
+//
+// Declared BEFORE /:id so the literal path is not matched as an id.
+router.get('/ids', requireAuth, (req: AuthRequest, res: Response) => {
+  const { where, params } = buildAccountFilter(req.query as Record<string, string>);
+  const rows = db.prepare(
+    `SELECT id, ic_company_name, record_type, account_manager, ccm_manager, archived,
+            COALESCE(pending_handover, 0) AS pending_handover
+       FROM accounts WHERE ${where} ORDER BY ic_company_name ASC`
+  ).all(...params) as any[];
+  const items = rows.map((r) => Object.assign({}, r));
+  res.json({ ids: items.map((r) => r.id), items, total: items.length });
+});
+
+// ── POST /api/accounts/bulk-archive — archive N records atomically ───────────
+// One transaction: either every archivable row is archived or none is. Rows
+// still holding checked-out keys are REFUSED individually and reported back by
+// name, rather than silently skipped or allowed to orphan live custody.
+// Writes one audit entry per record PLUS a summary entry for the batch.
+router.post('/bulk-archive', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireDelete(req, res)) return;
+  const { ids } = req.body as { ids: number[] };
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'No records selected' });
+  }
+  const MAX = 1000;
+  if (ids.length > MAX) {
+    return res.status(400).json({ error: `Too many records at once (max ${MAX})` });
+  }
+
+  const clean = [...new Set(ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  const ph = clean.map(() => '?').join(',');
+
+  const found = (db.prepare(
+    `SELECT id, ic_company_name, bc_vendor_number, bc_client_number, record_type, COALESCE(archived,0) AS archived
+       FROM accounts WHERE id IN (${ph})`
+  ).all(...clean) as any[]).map((r) => Object.assign({}, r));
+
+  // Which of them still hold checked-out keys? Archiving those would orphan
+  // live custody, so they are blocked and named.
+  const blockedIds = new Set(
+    (db.prepare(
+      `SELECT DISTINCT account_id AS id FROM key_assignments
+        WHERE status = 'checked_out' AND account_id IN (${ph})`
+    ).all(...clean) as any[]).map((r) => Object.assign({}, r).id as number)
+  );
+
+  const byId = new Map(found.map((f) => [f.id, f]));
+  const missing = clean.filter((id) => !byId.has(id));
+  const alreadyArchived = found.filter((f) => f.archived === 1);
+  const blocked = found.filter((f) => blockedIds.has(f.id));
+  const toArchive = found.filter((f) => f.archived !== 1 && !blockedIds.has(f.id));
+
+  const archive = db.prepare(
+    'UPDATE accounts SET archived = 1, archived_at = CURRENT_TIMESTAMP, archived_by = ? WHERE id = ?'
+  );
+
+  db.exec('BEGIN');
+  try {
+    for (const a of toArchive) {
+      archive.run(req.manager!.name, a.id);
+      // One entry per record — a bulk action must stay individually traceable.
+      logAudit(req, 'account_archived', a.ic_company_name, a.id, {
+        bc_vendor_number: a.bc_vendor_number, bc_client_number: a.bc_client_number,
+        record_type: a.record_type, bulk: true,
+      });
+    }
+    // …plus one summary entry for the batch itself.
+    logAudit(req, 'accounts_bulk_archived', null, null, {
+      requested: clean.length,
+      archived: toArchive.length,
+      archived_names: toArchive.map((a) => a.ic_company_name),
+      blocked_checked_out: blocked.map((b) => b.ic_company_name),
+      already_archived: alreadyArchived.length,
+      not_found: missing.length,
+    });
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+
+  res.json({
+    archived: toArchive.length,
+    archivedNames: toArchive.map((a) => a.ic_company_name),
+    blocked: blocked.map((b) => ({ id: b.id, name: b.ic_company_name })),
+    alreadyArchived: alreadyArchived.length,
+    notFound: missing.length,
+  });
 });
 
 router.post('/', requireAuth, (req: AuthRequest, res: Response) => {

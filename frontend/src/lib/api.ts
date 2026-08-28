@@ -596,6 +596,8 @@ export interface RegistryExportOpts {
   format: 'xlsx' | 'csv';
   search?: string;
   includeArchived?: boolean;
+  /** "Export selected" — exactly these account ids. */
+  ids?: number[];
 }
 export const exportRegistry = async (opts: RegistryExportOpts) => {
   const res = await reqRaw('/exports/registry', {
@@ -685,6 +687,34 @@ export const getAiQueue = () =>
   req<{ queue: AiQueueItem[]; pending: number }>('/claude/queue');
 
 // Import — routed through reqRaw so the 401 guard applies identically
+// ── Bulk selection ───────────────────────────────────────────────────────────
+/** The minimal shape the selection toolbar needs to decide which bulk actions
+ *  are legal. Never the full row — and never a code of any kind. */
+export interface AccountIdItem {
+  id: number;
+  ic_company_name: string;
+  record_type: string | null;
+  account_manager: string | null;
+  ccm_manager: string | null;
+  archived: number;
+  pending_handover: number;
+}
+
+/** Every id matching the CURRENT filter — powers "Select all N matching". */
+export const getAccountIds = (params: Record<string, string>) =>
+  req<{ ids: number[]; items: AccountIdItem[]; total: number }>(
+    `/accounts/ids?${new URLSearchParams(params)}`
+  );
+
+/** Archive N records in one transaction. Rows holding checked-out keys are
+ *  refused individually and named back. Requires the can_delete gate. */
+export const bulkArchiveAccounts = (ids: number[]) =>
+  req<{
+    archived: number; archivedNames: string[];
+    blocked: { id: number; name: string }[];
+    alreadyArchived: number; notFound: number;
+  }>('/accounts/bulk-archive', { method: 'POST', body: JSON.stringify({ ids }) });
+
 export const previewImport = async (file: File) => {
   const fd = new FormData();
   fd.append('file', file);
