@@ -731,6 +731,12 @@ export const previewImport = async (file: File) => {
 
 export type EmailImportKind = 'staff-emails' | 'ic-emails';
 
+export interface HeaderReport {
+  recognized: { header: string; field: string }[];
+  unrecognized: string[];
+  ignoredByDesign: string[];
+}
+
 export interface StaffEmailPreview {
   totalRows: number;
   matchedUpdated: { name: string; email: string }[];
@@ -739,6 +745,7 @@ export interface StaffEmailPreview {
   ambiguous: { name: string; ids: number[] }[];
   invalidEmail: { row: number; name: string; value: string }[];
   remainingWithoutEmail: { id: number; name: string; role_category: string }[];
+  fieldFills: Record<string, number>;
 }
 
 export interface IcEmailPreview {
@@ -750,6 +757,7 @@ export interface IcEmailPreview {
   missingVendorNo: { row: number; dba: string; email: string }[];
   invalidEmail: { row: number; dba: string; value: string }[];
   duplicateVendorNos: { vendor: string; count: number }[];
+  fieldFills: Record<string, number>;
 }
 
 export interface IcResolution {
@@ -764,8 +772,8 @@ export interface IcResolution {
 export type ImportPreview =
   | { kind?: undefined; valid: any[]; warnings: any[]; errors: any[]; total: number;
       unmappedHeaders?: string[]; fieldCollisions?: { field: string; headers: string[] }[] }
-  | { kind: 'staff-emails'; sheet: string; rows: any[]; preview: StaffEmailPreview }
-  | { kind: 'ic-emails'; sheet: string; rows: any[]; preview: IcEmailPreview; resolutionBefore: IcResolution };
+  | { kind: 'staff-emails'; sheet: string; rows: any[]; headers: HeaderReport; preview: StaffEmailPreview }
+  | { kind: 'ic-emails'; sheet: string; rows: any[]; headers: HeaderReport; preview: IcEmailPreview; resolutionBefore: IcResolution };
 
 export const confirmImport = (rows: any[], mode?: 'insert' | 'upsert') =>
   req<{ inserted: number; updated?: number; skipped: number; errors?: any[] }>('/accounts/import/confirm', {

@@ -7,7 +7,8 @@ import { logAudit } from '../lib/audit';
 import { encrypt } from '../lib/crypto';
 import { gridTotal } from '../lib/roleKeys';
 import {
-  detectShape, parseStaffRows, parseIcRows, importStaffEmails, importIcEmails,
+  detectShape, describeHeaders, parseStaffRows, parseIcRows,
+  importStaffEmails, importIcEmails,
   resolveCustomerIcEmails, type StaffEmailRow, type IcEmailRow,
 } from '../lib/emailImport';
 
@@ -378,6 +379,7 @@ router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Res
       const parsed = parseStaffRows(raw);
       return res.json({
         kind: 'staff-emails', sheet, rows: parsed,
+        headers: describeHeaders(raw[0] ?? [], 'staff-emails'),
         preview: importStaffEmails(db, parsed, { dryRun: true }),
       });
     }
@@ -385,6 +387,7 @@ router.post('/', requireAuth, upload.single('file'), (req: AuthRequest, res: Res
       const parsed = parseIcRows(raw);
       return res.json({
         kind: 'ic-emails', sheet, rows: parsed,
+        headers: describeHeaders(raw[0] ?? [], 'ic-emails'),
         preview: importIcEmails(db, parsed, { dryRun: true }),
         resolutionBefore: resolveCustomerIcEmails(db),
       });

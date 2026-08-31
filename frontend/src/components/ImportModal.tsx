@@ -3,6 +3,7 @@ import Modal from './Modal';
 import {
   previewImport, confirmImport, confirmEmailImport, downloadImportTemplate,
   type EmailImportKind, type StaffEmailPreview, type IcEmailPreview, type IcResolution,
+  type HeaderReport,
 } from '../lib/api';
 import EmailImportPreview, { EmailImportSummary } from './EmailImportPreview';
 
@@ -13,6 +14,7 @@ interface EmailImportState {
   kind: EmailImportKind;
   sheet: string;
   rows: any[];
+  headers: HeaderReport;
   preview: StaffEmailPreview | IcEmailPreview;
   resolutionBefore?: IcResolution;
 }
@@ -44,7 +46,7 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
       const res = await previewImport(file);
       if (res.kind === 'staff-emails' || res.kind === 'ic-emails') {
         setEmailImport({
-          kind: res.kind, sheet: res.sheet, rows: res.rows, preview: res.preview,
+          kind: res.kind, sheet: res.sheet, rows: res.rows, headers: res.headers, preview: res.preview,
           resolutionBefore: res.kind === 'ic-emails' ? res.resolutionBefore : undefined,
         });
         setResult(null);
@@ -143,6 +145,7 @@ export default function ImportModal({ onClose, onDone }: { onClose: () => void; 
         <EmailImportPreview
           kind={emailImport.kind}
           sheet={emailImport.sheet}
+          headers={emailImport.headers}
           preview={emailImport.preview}
           resolutionBefore={emailImport.resolutionBefore}
           loading={loading}

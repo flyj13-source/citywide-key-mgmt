@@ -4,7 +4,7 @@
 // that stay a gap afterwards, so those are shown in red rather than buried.
 
 import type {
-  EmailImportKind, StaffEmailPreview, IcEmailPreview, IcResolution,
+  EmailImportKind, StaffEmailPreview, IcEmailPreview, IcResolution, HeaderReport,
 } from '../lib/api';
 
 const RED = '#C0272D';
@@ -67,11 +67,78 @@ function Resolution({ r, title }: { r: IcResolution; title: string }) {
   );
 }
 
+/**
+ * Which sheet columns were understood, which were not, and what each one feeds.
+ * Shown BEFORE confirming so a renamed column in a refreshed export reads as an
+ * unrecognized header instead of a silent zero-fill import.
+ */
+function Headers({ h }: { h: HeaderReport }) {
+  return (
+    <div className="rounded border border-cw-border bg-white p-3 space-y-2">
+      <div className="text-xs font-semibold uppercase tracking-wide text-cw-muted">Columns read from this sheet</div>
+      <ul className="text-xs space-y-1">
+        {h.recognized.map((r) => (
+          <li key={r.field} className="flex items-baseline gap-2">
+            <span className="text-[#2d7a3a] font-bold">✓</span>
+            <span className="font-mono bg-[#f0f0ee] px-1.5 py-0.5 rounded">{r.header}</span>
+            <span className="text-cw-muted">→ {r.field}</span>
+          </li>
+        ))}
+      </ul>
+      {h.unrecognized.length > 0 && (
+        <div className="rounded border border-[#e8cf8a] bg-[#fff8e6] px-2.5 py-2">
+          <div className="text-xs font-semibold text-[#7a5a00]">
+            Not recognised — nothing from {h.unrecognized.length === 1 ? 'this column' : 'these columns'} is imported
+          </div>
+          <div className="text-[11px] text-[#7a5a00] mt-1 font-mono break-words">
+            {h.unrecognized.join(' · ')}
+          </div>
+        </div>
+      )}
+      {h.ignoredByDesign.length > 0 && (
+        <div className="text-[11px] text-cw-muted">
+          Skipped on purpose: {h.ignoredByDesign.join(' · ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Per destination field, how many rows this run would fill. Zero against a
+ *  non-empty sheet is stated in red rather than left to be inferred. */
+function FieldFills({ fills, rowCount }: { fills: Record<string, number>; rowCount: number }) {
+  const entries = Object.entries(fills || {});
+  if (!entries.length) return null;
+  const allZero = entries.every(([, n]) => n === 0);
+  return (
+    <div className={`rounded border p-3 ${allZero && rowCount > 0 ? 'border-[#C0272D] bg-[#fbeaea]' : 'border-cw-border bg-white'}`}>
+      <div className="text-xs font-semibold uppercase tracking-wide text-cw-muted mb-2">
+        What this would write
+      </div>
+      <ul className="text-xs space-y-1">
+        {entries.map(([field, n]) => (
+          <li key={field} className="flex items-baseline justify-between gap-3">
+            <span className="font-mono text-cw-text">{field}</span>
+            <span className={`font-bold ${n > 0 ? 'text-[#1a1a1a]' : 'text-[#C0272D]'}`}>{n}</span>
+          </li>
+        ))}
+      </ul>
+      {allZero && rowCount > 0 && (
+        <div className="text-[11px] text-[#C0272D] mt-2">
+          This sheet has {rowCount} rows but would write nothing. Either every value is already
+          on record, or the columns did not match — check the recognised columns above before confirming.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function EmailImportPreview({
-  kind, sheet, preview, resolutionBefore, loading, error, onCancel, onConfirm,
+  kind, sheet, headers, preview, resolutionBefore, loading, error, onCancel, onConfirm,
 }: {
   kind: EmailImportKind;
   sheet: string;
+  headers: HeaderReport;
   preview: StaffEmailPreview | IcEmailPreview;
   resolutionBefore?: IcResolution;
   loading: boolean;
@@ -104,6 +171,9 @@ export default function EmailImportPreview({
           <Stat label="no vendor no." value={preview.missingVendorNo.length} tone={preview.missingVendorNo.length ? 'gap' : 'muted'} />
         </div>
       )}
+
+      <Headers h={headers} />
+      <FieldFills fills={preview.fieldFills} rowCount={preview.totalRows} />
 
       {resolutionBefore && <Resolution r={resolutionBefore} title="Before this import" />}
 

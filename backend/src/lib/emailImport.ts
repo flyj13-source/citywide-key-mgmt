@@ -79,6 +79,54 @@ export function normalizeHeaderCell(v: any): string {
 
 export type SheetShape = 'staff-emails' | 'ic-emails' | null;
 
+export interface HeaderReport {
+  /** Sheet columns this importer understood, with the field each one feeds. */
+  recognized: { header: string; field: string }[];
+  /** Sheet columns it did NOT understand — surfaced so a mapping gap is
+   *  visible instead of silently landing as blank for every row. */
+  unrecognized: string[];
+  /** Columns skipped on purpose (the Dynamics "(Do Not Modify)" bookkeeping),
+   *  listed separately so they don't read as a problem. */
+  ignoredByDesign: string[];
+}
+
+/** Header cells that are Dynamics bookkeeping, never data. */
+const IGNORED_HEADER = /^\(do not modify\)/i;
+
+/**
+ * Which sheet columns fed which field, and which were left on the floor. The
+ * preview shows this BEFORE anything is written, so a renamed column in a
+ * refreshed export shows up as an unrecognized header rather than as a silent
+ * zero-fill import.
+ */
+export function describeHeaders(headerRow: any[], shape: Exclude<SheetShape, null>): HeaderReport {
+  const raw = headerRow.map((h) => cell(h));
+  const norm = headerRow.map(normalizeHeaderCell);
+  const map = shape === 'staff-emails'
+    ? { first: STAFF_HEADERS.first, last: STAFF_HEADERS.last, email: STAFF_HEADERS.email }
+    : {
+        dba: IC_HEADERS.dba, bc_vendor_number: IC_HEADERS.vendor,
+        ic_primary_contact: IC_HEADERS.contact, ic_email: IC_HEADERS.email,
+      };
+
+  const recognized: { header: string; field: string }[] = [];
+  const claimed = new Set<number>();
+  for (const [field, names] of Object.entries(map)) {
+    const i = headerIndex(norm, names as string[]);
+    if (i !== -1) { recognized.push({ header: raw[i], field }); claimed.add(i); }
+  }
+
+  const unrecognized: string[] = [];
+  const ignoredByDesign: string[] = [];
+  raw.forEach((h, i) => {
+    if (claimed.has(i) || !h) return;
+    if (IGNORED_HEADER.test(h)) ignoredByDesign.push(h);
+    else unrecognized.push(h);
+  });
+
+  return { recognized, unrecognized, ignoredByDesign };
+}
+
 /**
  * Which of the two email sheets is this, if either? Returns null for anything
  * else (including the customer registry sheet) so the caller falls through to
@@ -157,6 +205,10 @@ export interface StaffImportReport {
   invalidEmail: { row: number; name: string; value: string }[];
   /** staff_managers rows STILL without an email after the run — the residual gap. */
   remainingWithoutEmail: { id: number; name: string; role_category: string }[];
+  /** Per DESTINATION FIELD, how many rows this run would fill. Zero against a
+   *  non-empty sheet is the signal that something is wrong, so it is stated
+   *  rather than left to be inferred from the other counts. */
+  fieldFills: Record<string, number>;
 }
 
 /**
@@ -189,7 +241,7 @@ export function importStaffEmails(
   const report: StaffImportReport = {
     totalRows: rows.length,
     matchedUpdated: [], matchedAlreadyHadEmail: [], created: [],
-    ambiguous: [], invalidEmail: [], remainingWithoutEmail: [],
+    ambiguous: [], invalidEmail: [], remainingWithoutEmail: [], fieldFills: {},
   };
 
   // Index the roster once, by normalized name. A name held by two rows is
@@ -248,6 +300,12 @@ export function importStaffEmails(
     report.created.push({ name: r.name, email: r.email, ...role });
   }
 
+  report.fieldFills = {
+    'staff_managers.email': report.matchedUpdated.length
+      + report.created.filter((c) => !!c.email).length,
+    'staff_managers (new rows)': report.created.length,
+  };
+
   report.remainingWithoutEmail = (db.prepare(`
     SELECT id, name, COALESCE(role_category, 'manager') AS role_category
       FROM staff_managers
@@ -269,6 +327,8 @@ export interface IcImportReport {
   missingVendorNo: { row: number; dba: string; email: string }[];
   invalidEmail: { row: number; dba: string; value: string }[];
   duplicateVendorNos: { vendor: string; count: number }[];
+  /** Per DESTINATION FIELD, how many rows this run would fill. */
+  fieldFills: Record<string, number>;
 }
 
 export function importIcEmails(
@@ -280,6 +340,7 @@ export function importIcEmails(
     totalRows: rows.length,
     matchedUpdated: [], matchedAlreadyPopulated: [], created: [],
     missingEmail: [], missingVendorNo: [], invalidEmail: [], duplicateVendorNos: [],
+    fieldFills: {},
   };
 
   // Duplicate vendor numbers WITHIN the source file — reported, first wins.
@@ -362,6 +423,16 @@ export function importIcEmails(
     if (r.dba) byName.set(nameKey(r.dba), created);
     report.created.push({ vendor: r.vendor, dba: r.dba, contact: r.contact, email });
   }
+
+  report.fieldFills = {
+    'accounts.ic_email':
+      report.matchedUpdated.filter((m) => !!m.email).length
+      + report.created.filter((c) => !!c.email).length,
+    'accounts.ic_primary_contact':
+      report.matchedUpdated.filter((m) => !!m.contact).length
+      + report.created.filter((c) => !!c.contact).length,
+    'accounts (new IC rows)': report.created.length,
+  };
 
   return report;
 }

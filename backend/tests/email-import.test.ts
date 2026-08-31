@@ -352,3 +352,82 @@ describe('DRY RUN — previewing writes nothing', () => {
     expect(db.prepare('SELECT email FROM staff_managers').get()).toMatchObject({ email: null });
   });
 });
+
+describe('PREVIEW TRANSPARENCY — no silent failures', () => {
+  it('names every recognised column and the field it feeds', () => {
+    const h = lib.describeHeaders(
+      ['First Name', 'Last Name', 'Email Address'], 'staff-emails');
+    expect(h.recognized).toEqual([
+      { header: 'First Name', field: 'first' },
+      { header: 'Last Name', field: 'last' },
+      { header: 'Email Address', field: 'email' },
+    ]);
+    expect(h.unrecognized).toEqual([]);
+  });
+
+  it('reports a column it did NOT understand rather than ignoring it', () => {
+    const h = lib.describeHeaders(
+      ['First Name', 'Last Name', 'Email Address', 'Badge Number', 'Hire Date'], 'staff-emails');
+    expect(h.unrecognized).toEqual(['Badge Number', 'Hire Date']);
+  });
+
+  it('lists the (Do Not Modify) columns as skipped BY DESIGN, not as a problem', () => {
+    const h = lib.describeHeaders([
+      '(Do Not Modify) Account', '(Do Not Modify) Row Checksum', '(Do Not Modify) Modified On',
+      'DBA Name', 'BC Vendor No', 'Primary Contact', 'Email (Primary Contact) (Contact)',
+    ], 'ic-emails');
+    expect(h.ignoredByDesign).toHaveLength(3);
+    expect(h.unrecognized).toEqual([]);
+    expect(h.recognized.map((r) => r.field).sort())
+      .toEqual(['bc_vendor_number', 'dba', 'ic_email', 'ic_primary_contact']);
+  });
+
+  it('a RENAMED email column shows up as unrecognized instead of a silent blank import', () => {
+    // This is the failure mode the header report exists to catch: a refreshed
+    // export renames a column, every row imports blank, and nobody notices.
+    const rows = lib.parseIcRows([
+      ['DBA Name', 'BC Vendor No', 'Primary Contact', 'Contact Email Address'],
+      ['ACME', '02014100437', 'Pat Lee', 'pat@acme.test'],
+    ]);
+    const h = lib.describeHeaders(
+      ['DBA Name', 'BC Vendor No', 'Primary Contact', 'Contact Email Address'], 'ic-emails');
+    expect(h.unrecognized).toEqual(['Contact Email Address']);
+    // …and the fill counts say plainly that no email would land.
+    const r = lib.importIcEmails(db, rows, { dryRun: true });
+    expect(r.fieldFills['accounts.ic_email']).toBe(0);
+    expect(r.fieldFills['accounts.ic_primary_contact']).toBe(1);
+  });
+
+  it('reports per-field fill counts for the staff sheet', () => {
+    addStaff('Empty Ellen', null);
+    const r = lib.importStaffEmails(db, staffRows([
+      ['Empty', 'Ellen', 'ellen@cw.test'],
+      ['Brand', 'New', 'new@cw.test'],
+    ]), { dryRun: true });
+    expect(r.fieldFills).toEqual({
+      'staff_managers.email': 2,      // 1 filled + 1 created carrying an address
+      'staff_managers (new rows)': 1,
+    });
+  });
+
+  it('reports per-field fill counts for the IC sheet', () => {
+    addAccount({ ic_company_name: 'KNOWN', bc_vendor_number: '02014100437', record_type: 'ic' });
+    const r = lib.importIcEmails(db, icRows([
+      ['x', 'KNOWN', '02014100437', 'Pat', 'pat@ic.test'],
+      ['x', 'FRESH', '02014100999', 'Sam', 'sam@ic.test'],
+      ['x', 'NO MAIL', '02014100888', 'Kim', ''],
+    ]), { dryRun: true });
+    expect(r.fieldFills).toEqual({
+      'accounts.ic_email': 2,
+      'accounts.ic_primary_contact': 3,
+      'accounts (new IC rows)': 2,
+    });
+  });
+
+  it('a re-run reports ZERO fills — the signal that nothing was left to do', () => {
+    addStaff('Done Dana', 'dana@cw.test');
+    const r = lib.importStaffEmails(db, staffRows([['Done', 'Dana', 'dana@cw.test']]), { dryRun: true });
+    expect(r.fieldFills['staff_managers.email']).toBe(0);
+    expect(r.totalRows).toBe(1);
+  });
+});
