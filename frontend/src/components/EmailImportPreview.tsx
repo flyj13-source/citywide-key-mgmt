@@ -208,6 +208,8 @@ export default function EmailImportPreview({
                   items={preview.matchedAlreadyPopulated.map((m) => `${m.dba} [${m.vendor}]`)} />
             <List title="Duplicate vendor numbers in the file — the first row wins" tone="gap"
                   items={preview.duplicateVendorNos.map((d) => `${d.vendor} ×${d.count}`)} />
+            <List title="Leading zero restored — the file lost it, these were repaired to 11 digits"
+                  items={(preview.vendorPadded ?? []).map((v) => `row ${v.row} ${v.dba} → ${v.vendor}`)} />
           </>
         )}
       </div>

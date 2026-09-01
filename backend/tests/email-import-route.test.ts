@@ -159,3 +159,80 @@ describe('REGISTRY UPLOAD — auth and bad input', () => {
     expect(db.prepare('SELECT COUNT(*) AS n FROM staff_managers').get()).toMatchObject({ n: 0 });
   });
 });
+
+describe('CSV UPLOAD — the clean two-file replacement, through the app', () => {
+  const staffCsv = [
+    'Full Name,First Name,Last Name,Email',
+    'Daniel Bordenave,Daniel,Bordenave,daniel.bordenave@gocitywide.com',
+    'Brand New,Brand,New,brand.new@gocitywide.com',
+  ].join('\n');
+
+  const icCsv = [
+    'IC Company Name,BC Vendor Number,Primary Contact,Email',
+    'CONTRACTOR 001 LLC,02014100400,Pat Lee,pat@one.test',
+    'All season,,Malik Okonkwo,allseason@ic.test',
+    'KleenRite Services,,Sean Whitfield,kleenrite@ic.test',
+  ].join('\n');
+
+  const uploadCsv = (text: string, name: string) =>
+    auth(request(app).post('/api/accounts/import'))
+      .attach('file', Buffer.from(text, 'utf8'), { filename: name, contentType: 'text/csv' });
+
+  it('recognises the staff CSV and previews without writing', async () => {
+    db.prepare("INSERT INTO staff_managers (name, manager_type, role_category, active) VALUES ('Daniel Bordenave','account_manager','manager',1)").run();
+    const res = await uploadCsv(staffCsv, 'CW_Staff_Emails.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.kind).toBe('staff-emails');
+    expect(res.body.headers.unrecognized).toEqual([]);
+    expect(res.body.preview.matchedUpdated).toHaveLength(1);
+    expect(res.body.preview.created).toHaveLength(1);
+    expect(res.body.preview.fieldFills['staff_managers.email']).toBe(2);
+    expect(db.prepare('SELECT email FROM staff_managers').get()).toMatchObject({ email: null });
+  });
+
+  it('applies the staff CSV on confirm', async () => {
+    db.prepare("INSERT INTO staff_managers (name, manager_type, role_category, active) VALUES ('Daniel Bordenave','account_manager','manager',1)").run();
+    const prev = await uploadCsv(staffCsv, 'CW_Staff_Emails.csv');
+    const res = await auth(request(app).post('/api/accounts/import/emails/confirm'))
+      .send({ kind: 'staff-emails', rows: prev.body.rows });
+    expect(res.status).toBe(200);
+    expect(db.prepare("SELECT email FROM staff_managers WHERE name = 'Daniel Bordenave'").get())
+      .toMatchObject({ email: 'daniel.bordenave@gocitywide.com' });
+  });
+
+  it('CSV vendor numbers keep their leading zero end to end', async () => {
+    const prev = await uploadCsv(icCsv, 'IC_Emails.csv');
+    expect(prev.body.kind).toBe('ic-emails');
+    expect(prev.body.headers.unrecognized).toEqual([]);
+    // Nothing was padded — the CSV text arrived intact.
+    expect(prev.body.preview.vendorPadded).toEqual([]);
+
+    await auth(request(app).post('/api/accounts/import/emails/confirm'))
+      .send({ kind: 'ic-emails', rows: prev.body.rows });
+
+    const row = Object.assign({}, db.prepare(
+      "SELECT bc_vendor_number FROM accounts WHERE ic_company_name = 'CONTRACTOR 001 LLC'"
+    ).get() as any);
+    expect(row.bc_vendor_number).toBe('02014100400');
+    expect(String(row.bc_vendor_number)).toHaveLength(11);
+  });
+
+  it('flags the two blank-vendor ICs by name and still imports them', async () => {
+    const prev = await uploadCsv(icCsv, 'IC_Emails.csv');
+    expect(prev.body.preview.missingVendorNo.map((m: any) => m.dba))
+      .toEqual(['All season', 'KleenRite Services']);
+    await auth(request(app).post('/api/accounts/import/emails/confirm'))
+      .send({ kind: 'ic-emails', rows: prev.body.rows });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM accounts WHERE record_type='ic'").get())
+      .toMatchObject({ n: 3 });
+  });
+
+  it('reports the resolution figure that decides whether forms can be sent', async () => {
+    db.prepare("INSERT INTO accounts (ic_company_name, bc_vendor_number, record_type) VALUES ('A SITE','02014100400','customer')").run();
+    const prev = await uploadCsv(icCsv, 'IC_Emails.csv');
+    expect(prev.body.resolutionBefore).toMatchObject({ totalCustomers: 1, resolved: 0 });
+    const res = await auth(request(app).post('/api/accounts/import/emails/confirm'))
+      .send({ kind: 'ic-emails', rows: prev.body.rows });
+    expect(res.body.resolution).toMatchObject({ totalCustomers: 1, resolved: 1 });
+  });
+});

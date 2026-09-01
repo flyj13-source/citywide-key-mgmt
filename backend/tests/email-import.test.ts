@@ -431,3 +431,113 @@ describe('PREVIEW TRANSPARENCY — no silent failures', () => {
     expect(r.totalRows).toBe(1);
   });
 });
+
+describe('CSV SHAPES — the clean two-file replacement', () => {
+  const staffCsvHeaders = ['Full Name', 'First Name', 'Last Name', 'Email'];
+  const icCsvHeaders = ['IC Company Name', 'BC Vendor Number', 'Primary Contact', 'Email'];
+
+  it('recognises the staff CSV', () => {
+    expect(lib.detectShape(staffCsvHeaders)).toBe('staff-emails');
+  });
+
+  it('recognises the IC CSV', () => {
+    expect(lib.detectShape(icCsvHeaders)).toBe('ic-emails');
+  });
+
+  it('does not confuse the two — both end in an "Email" column', () => {
+    expect(lib.detectShape(icCsvHeaders)).not.toBe('staff-emails');
+    expect(lib.detectShape(staffCsvHeaders)).not.toBe('ic-emails');
+  });
+
+  it('matches on FULL NAME, not a rebuilt first+last', () => {
+    const rows = lib.parseStaffRows([
+      staffCsvHeaders,
+      ['Maria de la Cruz Gonzalez', 'Maria', 'Gonzalez', 'maria@cw.test'],
+    ]);
+    expect(rows[0].name).toBe('Maria de la Cruz Gonzalez');
+    addStaff('Maria de la Cruz Gonzalez', null);
+    const r = lib.importStaffEmails(db, rows);
+    expect(r.matchedUpdated).toHaveLength(1);
+    expect(r.created).toHaveLength(0);
+  });
+
+  it('still works from first+last when there is no Full Name column', () => {
+    const rows = lib.parseStaffRows([
+      ['First Name', 'Last Name', 'Email'],
+      ['Daniel', 'Bordenave', 'dan@cw.test'],
+    ]);
+    expect(rows[0].name).toBe('Daniel Bordenave');
+  });
+
+  it('reads the IC CSV company/vendor/contact/email columns', () => {
+    const rows = lib.parseIcRows([
+      icCsvHeaders,
+      ['ACME CLEANING', '02014100437', 'Pat Lee', 'pat@acme.test'],
+    ]);
+    expect(rows[0]).toMatchObject({
+      dba: 'ACME CLEANING', vendor: '02014100437',
+      contact: 'Pat Lee', email: 'pat@acme.test',
+    });
+  });
+
+  it('names every recognised CSV column in the header report', () => {
+    const h = lib.describeHeaders(icCsvHeaders, 'ic-emails');
+    expect(h.unrecognized).toEqual([]);
+    expect(h.recognized).toEqual([
+      { header: 'IC Company Name', field: 'dba' },
+      { header: 'BC Vendor Number', field: 'bc_vendor_number' },
+      { header: 'Primary Contact', field: 'ic_primary_contact' },
+      { header: 'Email', field: 'ic_email' },
+    ]);
+    const hs = lib.describeHeaders(staffCsvHeaders, 'staff-emails');
+    expect(hs.unrecognized).toEqual([]);
+    expect(hs.recognized.map((r) => r.field)).toEqual(['full_name', 'first', 'last', 'email']);
+  });
+
+  it('imports the two blank-vendor rows and flags them BY NAME', () => {
+    const r = lib.importIcEmails(db, lib.parseIcRows([
+      icCsvHeaders,
+      ['CONTRACTOR 001 LLC', '02014100400', 'Pat Lee', 'pat@one.test'],
+      ['All season', '', 'Malik Okonkwo', 'allseason@ic.test'],
+      ['KleenRite Services', '', 'Sean Whitfield', 'kleenrite@ic.test'],
+    ]));
+    expect(r.missingVendorNo.map((m) => m.dba)).toEqual(['All season', 'KleenRite Services']);
+    expect(r.created).toHaveLength(3);
+    const rows = (db.prepare(
+      "SELECT ic_company_name, bc_vendor_number, ic_email FROM accounts WHERE record_type='ic' ORDER BY id"
+    ).all() as any[]).map((x) => Object.assign({}, x));
+    expect(rows.find((x) => x.ic_company_name === 'All season'))
+      .toMatchObject({ bc_vendor_number: null, ic_email: 'allseason@ic.test' });
+  });
+});
+
+describe('LEADING ZEROS — the failure that breaks every match', () => {
+  const H = ['IC Company Name', 'BC Vendor Number', 'Primary Contact', 'Email'];
+
+  it('keeps an 11-char vendor number untouched and does NOT flag it', () => {
+    const rows = lib.parseIcRows([H, ['ACME', '02014100437', 'Pat', 'pat@a.test']]);
+    expect(rows[0].vendor).toBe('02014100437');
+    expect(rows[0].vendorPadded).toBe(false);
+  });
+
+  it('repairs a stripped leading zero AND reports the repair', () => {
+    const rows = lib.parseIcRows([H, ['ACME', 2014100437, 'Pat', 'pat@a.test']]);
+    expect(rows[0].vendor).toBe('02014100437');
+    expect(rows[0].vendorPadded).toBe(true);
+    const r = lib.importIcEmails(db, rows, { dryRun: true });
+    expect(r.vendorPadded).toEqual([{ row: 2, dba: 'ACME', vendor: '02014100437' }]);
+  });
+
+  it('a repaired number still matches the stored IC', () => {
+    addAccount({ ic_company_name: 'ACME', bc_vendor_number: '02014100437', record_type: 'ic' });
+    const r = lib.importIcEmails(db, lib.parseIcRows([H, ['ACME', 2014100437, 'Pat Lee', 'pat@a.test']]));
+    expect(r.created).toHaveLength(0);
+    expect(r.matchedUpdated).toHaveLength(1);
+  });
+
+  it('a blank vendor number is never padded into a fake one', () => {
+    const rows = lib.parseIcRows([H, ['All season', '', 'Malik', 'm@ic.test']]);
+    expect(rows[0].vendor).toBe('');
+    expect(rows[0].vendorPadded).toBe(false);
+  });
+});

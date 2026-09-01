@@ -18,17 +18,30 @@ export function cell(v: any): string {
   return String(v).trim();
 }
 
+/** BC vendor numbers are zero-padded 11-digit TEXT. */
+export const VENDOR_NO_LENGTH = 11;
+
 /**
- * BC vendor numbers are zero-padded 11-digit TEXT ('02014100437'). Excel
- * happily reads that as the number 2014100437 and drops the leading zero, so
- * anything numeric is re-padded back to 11. A value that is already text is
- * only trimmed — we never truncate or reformat a string we were given.
+ * '02014100437' must stay eleven characters. A spreadsheet that stores it as a
+ * NUMBER hands back 2014100437 with the leading zero gone, and a stripped zero
+ * fails every match — so an all-digit value shorter than eleven is re-padded.
+ *
+ * CSV read with raw:false already preserves the text, so the padding path
+ * normally does nothing. When it DOES fire it is a repair of lossy input, not a
+ * fact from the file, so `padded` is reported and surfaced in the preview
+ * rather than applied silently.
  */
-export function vendorNo(v: any): string {
+export function vendorNoDetail(v: any): { value: string; padded: boolean } {
   const s = cell(v);
-  if (!s) return '';
-  if (/^\d+$/.test(s) && s.length < 11) return s.padStart(11, '0');
-  return s;
+  if (!s) return { value: '', padded: false };
+  if (/^\d+$/.test(s) && s.length < VENDOR_NO_LENGTH) {
+    return { value: s.padStart(VENDOR_NO_LENGTH, '0'), padded: true };
+  }
+  return { value: s, padded: false };
+}
+
+export function vendorNo(v: any): string {
+  return vendorNoDetail(v).value;
 }
 
 /** Deliberately permissive — this rejects blanks and obvious junk, not TLDs. */
@@ -47,13 +60,17 @@ export function nameKey(v: any): string {
 // from the CLI scripts and from the registry's Import from Excel.
 
 const STAFF_HEADERS = {
+  // A Full Name column, when present, is the authoritative match key — the
+  // roster stores one name string, so splitting and re-joining first/last is a
+  // needless round trip that loses middle names and suffixes.
+  fullName: ['full name', 'fullname', 'name', 'employee name', 'staff name'],
   first: ['first name', 'firstname', 'first'],
   last: ['last name', 'lastname', 'last'],
   email: ['email address', 'email', 'e-mail', 'email addresss'],
 };
 
 const IC_HEADERS = {
-  dba: ['dba name', 'dba', 'company name', 'vendor name'],
+  dba: ['ic company name', 'dba name', 'dba', 'company name', 'vendor name', 'ic name'],
   vendor: ['bc vendor no', 'bc vendor no.', 'bc vendor number', 'bc vendor #', 'vendor no', 'vendor number'],
   contact: ['primary contact', 'primary contact name', 'contact'],
   email: [
@@ -103,7 +120,10 @@ export function describeHeaders(headerRow: any[], shape: Exclude<SheetShape, nul
   const raw = headerRow.map((h) => cell(h));
   const norm = headerRow.map(normalizeHeaderCell);
   const map = shape === 'staff-emails'
-    ? { first: STAFF_HEADERS.first, last: STAFF_HEADERS.last, email: STAFF_HEADERS.email }
+    ? {
+        full_name: STAFF_HEADERS.fullName,
+        first: STAFF_HEADERS.first, last: STAFF_HEADERS.last, email: STAFF_HEADERS.email,
+      }
     : {
         dba: IC_HEADERS.dba, bc_vendor_number: IC_HEADERS.vendor,
         ic_primary_contact: IC_HEADERS.contact, ic_email: IC_HEADERS.email,
@@ -135,11 +155,16 @@ export function describeHeaders(headerRow: any[], shape: Exclude<SheetShape, nul
 export function detectShape(headerRow: any[]): SheetShape {
   const h = headerRow.map(normalizeHeaderCell);
   // "(Do Not Modify)" columns from the Dynamics export are ignored outright.
-  const staffOk =
-    headerIndex(h, STAFF_HEADERS.first) !== -1 &&
-    headerIndex(h, STAFF_HEADERS.last) !== -1 &&
-    headerIndex(h, STAFF_HEADERS.email) !== -1;
-  if (staffOk) return 'staff-emails';
+  // A staff sheet needs an email column plus SOME way to name the person:
+  // either a Full Name column or a first/last pair.
+  const hasEmail = headerIndex(h, STAFF_HEADERS.email) !== -1;
+  const hasFull = headerIndex(h, STAFF_HEADERS.fullName) !== -1;
+  const hasFirstLast =
+    headerIndex(h, STAFF_HEADERS.first) !== -1 && headerIndex(h, STAFF_HEADERS.last) !== -1;
+  // Guard against the IC sheet, which also carries a name and an email: a
+  // vendor-number column means it is not the staff list.
+  const looksIc = headerIndex(h, IC_HEADERS.vendor) !== -1;
+  if (hasEmail && (hasFull || hasFirstLast) && !looksIc) return 'staff-emails';
 
   // The IC sheet is identified by a vendor-number column PLUS a contact column;
   // requiring both keeps it from swallowing the customer registry sheet, which
@@ -156,21 +181,30 @@ export function detectShape(headerRow: any[]): SheetShape {
 // ── Row parsing ──────────────────────────────────────────────────────────────
 
 export interface StaffEmailRow { row: number; first: string; last: string; name: string; email: string }
-export interface IcEmailRow { row: number; dba: string; vendor: string; contact: string; email: string }
+export interface IcEmailRow {
+  row: number; dba: string; vendor: string; contact: string; email: string;
+  /** True when a lost leading zero was repaired — surfaced, never silent. */
+  vendorPadded?: boolean;
+}
 
 export function parseStaffRows(raw: any[][]): StaffEmailRow[] {
   if (raw.length < 2) return [];
   const h = raw[0].map(normalizeHeaderCell);
+  const iN = headerIndex(h, STAFF_HEADERS.fullName);
   const iF = headerIndex(h, STAFF_HEADERS.first);
   const iL = headerIndex(h, STAFF_HEADERS.last);
   const iE = headerIndex(h, STAFF_HEADERS.email);
   const out: StaffEmailRow[] = [];
   raw.slice(1).forEach((r, i) => {
-    const first = cell(r[iF]);
-    const last = cell(r[iL]);
+    const first = cell(iF === -1 ? '' : r[iF]);
+    const last = cell(iL === -1 ? '' : r[iL]);
+    const full = cell(iN === -1 ? '' : r[iN]);
     const email = cell(iE === -1 ? '' : r[iE]);
-    if (!first && !last && !email) return; // blank spacer row
-    out.push({ row: i + 2, first, last, name: `${first} ${last}`.trim(), email });
+    if (!first && !last && !full && !email) return; // blank spacer row
+    // Full Name wins when the file supplies it — it is what the roster stores,
+    // and rebuilding it from first+last would drop middle names and suffixes.
+    const name = full || `${first} ${last}`.trim();
+    out.push({ row: i + 2, first, last, name, email });
   });
   return out;
 }
@@ -184,12 +218,12 @@ export function parseIcRows(raw: any[][]): IcEmailRow[] {
   const iE = headerIndex(h, IC_HEADERS.email);
   const out: IcEmailRow[] = [];
   raw.slice(1).forEach((r, i) => {
-    const dba = cell(r[iD]);
-    const vendor = vendorNo(iV === -1 ? '' : r[iV]);
+    const dba = cell(iD === -1 ? '' : r[iD]);
+    const v = vendorNoDetail(iV === -1 ? '' : r[iV]);
     const contact = cell(iC === -1 ? '' : r[iC]);
     const email = cell(iE === -1 ? '' : r[iE]);
-    if (!dba && !vendor && !contact && !email) return;
-    out.push({ row: i + 2, dba, vendor, contact, email });
+    if (!dba && !v.value && !contact && !email) return;
+    out.push({ row: i + 2, dba, vendor: v.value, contact, email, vendorPadded: v.padded });
   });
   return out;
 }
@@ -327,6 +361,9 @@ export interface IcImportReport {
   missingVendorNo: { row: number; dba: string; email: string }[];
   invalidEmail: { row: number; dba: string; value: string }[];
   duplicateVendorNos: { vendor: string; count: number }[];
+  /** Rows whose vendor number had a lost leading zero repaired. Reported so a
+   *  value the file did not literally contain is never applied invisibly. */
+  vendorPadded: { row: number; dba: string; vendor: string }[];
   /** Per DESTINATION FIELD, how many rows this run would fill. */
   fieldFills: Record<string, number>;
 }
@@ -340,8 +377,12 @@ export function importIcEmails(
     totalRows: rows.length,
     matchedUpdated: [], matchedAlreadyPopulated: [], created: [],
     missingEmail: [], missingVendorNo: [], invalidEmail: [], duplicateVendorNos: [],
-    fieldFills: {},
+    vendorPadded: [], fieldFills: {},
   };
+
+  for (const r of rows) {
+    if (r.vendorPadded) report.vendorPadded.push({ row: r.row, dba: r.dba, vendor: r.vendor });
+  }
 
   // Duplicate vendor numbers WITHIN the source file — reported, first wins.
   const seen = new Map<string, number>();

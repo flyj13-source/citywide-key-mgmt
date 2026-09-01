@@ -757,6 +757,7 @@ export interface IcEmailPreview {
   missingVendorNo: { row: number; dba: string; email: string }[];
   invalidEmail: { row: number; dba: string; value: string }[];
   duplicateVendorNos: { vendor: string; count: number }[];
+  vendorPadded: { row: number; dba: string; vendor: string }[];
   fieldFills: Record<string, number>;
 }
 
