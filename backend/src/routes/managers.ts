@@ -44,6 +44,7 @@ function roster(groupCol: 'account_manager' | 'ccm_manager', role: 'am' | 'ccm')
     FROM accounts
     WHERE record_type = 'customer'
       AND COALESCE(archived, 0) = 0
+      AND COALESCE(is_test, 0) = 0
       AND ${groupCol} IS NOT NULL AND TRIM(${groupCol}) <> ''
       AND (bc_client_number IS NULL OR bc_client_number NOT LIKE '999%')
     GROUP BY ${groupCol}

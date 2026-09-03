@@ -20,6 +20,8 @@
     "gauntlet:full": "ts-node scripts/gauntlet.ts full",
     "gauntlet:cleanup": "ts-node scripts/gauntlet.ts cleanup",
     "report:backfill": "ts-node scripts/report-backfill-dry-run.ts",
+    "test-data:reset": "ts-node scripts/test-data-reset.ts",
+    "test-data:seed": "ts-node scripts/test-data-reset.ts --seed-only",
     "import:staff-emails": "ts-node scripts/import-staff-emails.ts",
     "import:ic-emails": "ts-node scripts/import-ic-emails.ts",
     "report:ic-resolution": "ts-node scripts/ic-resolution-report.ts",

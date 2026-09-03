@@ -22,6 +22,7 @@ const VALID_DAY_NIGHT = ['day', 'night'];
 const CLIENT_FILTER = `
   record_type = 'customer'
   AND COALESCE(archived, 0) = 0
+  AND COALESCE(is_test, 0) = 0
   AND (bc_client_number IS NULL OR bc_client_number NOT LIKE '999%')
 `;
 
@@ -117,6 +118,7 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   const rows = db.prepare(
     `SELECT * FROM staff_managers
      WHERE ${activeClause}
+       AND COALESCE(is_test, 0) = 0
        AND (role_category IS NULL OR role_category IN ('manager', 'both'))
      ORDER BY name ASC`
   ).all();
@@ -142,6 +144,7 @@ router.get('/roster', requireAuth, (req: AuthRequest, res: Response) => {
   const people = (db.prepare(
     `SELECT * FROM staff_managers
       WHERE COALESCE(role_category, 'manager') IN ('manager', 'both')
+        AND COALESCE(is_test, 0) = 0
         AND (manager_type = ? OR manager_type = 'both')
       ORDER BY name ASC`
   ).all(wantedType) as any[]).map((r) => Object.assign({}, r));

@@ -658,10 +658,11 @@ export interface StaffDetail extends StaffMember {
   holdings: any[];
   accounts: any[];
 }
-export const getStaff = (opts?: { category?: 'all' | 'managers' | 'crew'; includeInactive?: boolean }) => {
+export const getStaff = (opts?: { category?: 'all' | 'managers' | 'crew'; includeInactive?: boolean; includeTest?: boolean }) => {
   const p = new URLSearchParams();
   if (opts?.category && opts.category !== 'all') p.set('category', opts.category);
   if (opts?.includeInactive) p.set('include_inactive', '1');
+  if (opts?.includeTest) p.set('include_test', '1');
   const q = p.toString();
   return req<StaffMember[]>(`/staff${q ? `?${q}` : ''}`);
 };
@@ -705,6 +706,8 @@ export interface RegistryExportOpts {
   includeArchived?: boolean;
   /** "Export selected" — exactly these account ids. */
   ids?: number[];
+  /** Test fixtures are left out unless this is ticked. */
+  includeTest?: boolean;
 }
 export const exportRegistry = async (opts: RegistryExportOpts) => {
   const res = await reqRaw('/exports/registry', {
@@ -818,7 +821,7 @@ export const getAccountIds = (params: Record<string, string>) =>
 export const bulkArchiveAccounts = (ids: number[]) =>
   req<{
     archived: number; archivedNames: string[];
-    blocked: { id: number; name: string }[];
+    blocked: { id: number; name: string; reason?: 'checked_out' | 'test_fixture' }[];
     alreadyArchived: number; notFound: number;
   }>('/accounts/bulk-archive', { method: 'POST', body: JSON.stringify({ ids }) });
 

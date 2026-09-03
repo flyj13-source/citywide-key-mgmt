@@ -24,6 +24,7 @@ const slug = (s: string) =>
 const CLIENT_FILTER = `
   record_type = 'customer'
   AND COALESCE(archived, 0) = 0
+  AND COALESCE(is_test, 0) = 0
   AND (bc_client_number IS NULL OR bc_client_number NOT LIKE '999%')
 `;
 
@@ -212,8 +213,11 @@ function serialize(row: any, detail = false) {
 
 // Reusable roster builder (also consumed by the registry export) so the CW
 // Employees sheet is the same aggregate the tab shows.
-export function staffRoster(opts: { includeInactive?: boolean; category?: 'all' | 'managers' | 'crew' } = {}) {
+export function staffRoster(
+  opts: { includeInactive?: boolean; category?: 'all' | 'managers' | 'crew'; includeTest?: boolean } = {}
+) {
   const where: string[] = [];
+  if (!opts.includeTest) where.push('COALESCE(is_test, 0) = 0');
   if (!opts.includeInactive) where.push('COALESCE(active, 1) = 1');
   if (opts.category === 'managers') where.push("(role_category IN ('manager', 'both') OR role_category IS NULL)");
   else if (opts.category === 'crew') where.push("role_category IN ('crew', 'both')");
@@ -228,9 +232,13 @@ export function staffRoster(opts: { includeInactive?: boolean; category?: 'all' 
 //   ?include_inactive=1          (default: active only)
 router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   const includeInactive = req.query.include_inactive === '1' || req.query.include_inactive === 'true';
+  const includeTest = req.query.include_test === '1' || req.query.include_test === 'true';
   const category = String(req.query.category || 'all');
 
   const where: string[] = [];
+  // Test fixtures are out of the roster unless asked for, so the dashboard's
+  // "staff key holders" count reflects real people only.
+  if (!includeTest) where.push('COALESCE(is_test, 0) = 0');
   if (!includeInactive) where.push('COALESCE(active, 1) = 1');
   if (category === 'managers') where.push("(role_category IN ('manager', 'both') OR role_category IS NULL)");
   else if (category === 'crew') where.push("role_category IN ('crew', 'both')");

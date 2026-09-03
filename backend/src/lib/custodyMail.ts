@@ -3,6 +3,7 @@ import path from 'path';
 import { createTransport } from './mailer';
 import { custodyNotifyRecipients, custodyNotifyDisplay } from './settings';
 import type { KeyLine } from './custody';
+import db from './db';
 
 // ── CW-branded custody notifications ─────────────────────────────────────────
 // Check-out and check-in both notify the holder AND Cara. The markup mirrors the
@@ -248,10 +249,36 @@ function signoffBlock(link: string, action: 'checkout' | 'checkin' | 'establishe
 // document attachment), and converts any transport error into a REPORTED
 // failure. Nothing here ever throws — a caller always gets a MailResult it can
 // write to audit_log and show in the UI.
+/**
+ * Does this address belong to a test fixture? Every fixture contact points at
+ * the operator's own inbox, so anything addressed there during a test run is
+ * prefixed and unmistakable.
+ */
+function isTestRecipient(to: string[]): boolean {
+  try {
+    const rows = db.prepare(
+      "SELECT 1 AS x FROM accounts WHERE COALESCE(is_test,0)=1 AND ic_email IS NOT NULL AND LOWER(TRIM(ic_email)) IN (" +
+      to.map(() => '?').join(',') + ')'
+    ).all(...to.map((t) => t.trim().toLowerCase())) as any[];
+    if (rows.length) return true;
+    const staff = db.prepare(
+      "SELECT 1 AS x FROM staff_managers WHERE COALESCE(is_test,0)=1 AND email IS NOT NULL AND LOWER(TRIM(email)) IN (" +
+      to.map(() => '?').join(',') + ')'
+    ).all(...to.map((t) => t.trim().toLowerCase())) as any[];
+    return staff.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function sendBranded(
   subject: string, html: string, text: string, to: string[], attachments: MailAttachment[] = [],
 ): Promise<MailResult> {
   const recipients = Array.from(new Set(to.filter(Boolean).map((t) => t.trim()).filter(Boolean)));
+  // A test-run email must be unmistakable in an inbox.
+  if (recipients.length && isTestRecipient(recipients) && !subject.startsWith('[TEST]')) {
+    subject = `[TEST] ${subject}`;
+  }
   if (!recipients.length) {
     return { ok: false, recipients: [], skipped: true, attempts: 0, error: 'No recipient address on file' };
   }

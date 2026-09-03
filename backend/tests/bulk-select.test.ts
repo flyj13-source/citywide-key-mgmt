@@ -169,7 +169,7 @@ describe('POST /accounts/bulk-archive', () => {
 
     const res = await auth(request(app).post('/api/accounts/bulk-archive')).send({ ids: [ok, held] });
     expect(res.body.archived).toBe(1);
-    expect(res.body.blocked).toEqual([{ id: held, name: 'KEYS OUT SITE' }]);
+    expect(res.body.blocked).toEqual([{ id: held, name: 'KEYS OUT SITE', reason: 'checked_out' }]);
     // The blocked one is genuinely still live, not quietly archived.
     expect(Object.assign({}, db.prepare('SELECT archived FROM accounts WHERE id = ?').get(held) as any))
       .toMatchObject({ archived: 0 });

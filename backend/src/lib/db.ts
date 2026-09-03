@@ -101,6 +101,12 @@ const needed: [string, string][] = [
   // The named human at the vendor. Key receipts go to the IC's PRIMARY
   // CONTACT, not to crew, so this is the person a signature form addresses.
   ['ic_primary_contact', 'TEXT'],
+  // ── Test fixtures ────────────────────────────────────────────────────────
+  // Marks a record as a FIXTURE for exercising forms and custody without
+  // touching real data. Every count, aggregate and export excludes these
+  // unless explicitly asked for; the registry shows them behind a filter and
+  // badges them, so they are never invisible, only out of the way.
+  ['is_test', 'INTEGER DEFAULT 0'],
 ];
 
 const existing = cols();
@@ -232,6 +238,11 @@ db.exec(`
 const smCols = (db.prepare('PRAGMA table_info(staff_managers)').all() as any[]).map(
   (c) => Object.assign({}, c).name
 );
+// The roster needs its own test flag. `managers` (login accounts) has carried
+// is_test since the test-user build, but staff_managers never did.
+if (!smCols.includes('is_test')) {
+  db.exec('ALTER TABLE staff_managers ADD COLUMN is_test INTEGER DEFAULT 0');
+}
 if (!smCols.includes('role_category')) {
   db.exec("ALTER TABLE staff_managers ADD COLUMN role_category TEXT");
   db.exec("UPDATE staff_managers SET role_category = 'manager' WHERE role_category IS NULL");

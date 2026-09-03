@@ -2,9 +2,30 @@ import bcrypt from 'bcryptjs';
 import db from './db';
 import { encrypt } from './crypto';
 import { backfillStaffManagers } from './backfillStaffManagers';
+import { seedTestFixtures } from './testFixtures';
 
 // Runs at every server startup. Idempotent — only writes when rows are missing.
 // This is the ONLY place seeding happens in production; seed.ts is local-dev-only.
+/**
+ * The three test fixtures. Seeded on EVERY boot because it is idempotent and
+ * because there is no other way to get them onto the deployed database — the
+ * app runs on a managed host with no shell, so an npm script cannot reach it.
+ * They are excluded from every count, aggregate and export.
+ */
+function seedFixtures(): void {
+  try {
+    const f = seedTestFixtures();
+    if (f.created.length) {
+      console.log(`✓ [seed] Test fixtures created: ${f.created.join(', ')} (client #${f.client}, ic #${f.ic}, staff #${f.manager})`);
+    } else {
+      console.log(`✓ [seed] Test fixtures already present (client #${f.client}, ic #${f.ic}, staff #${f.manager})`);
+    }
+  } catch (e) {
+    // A fixture failure must never stop the app from booting.
+    console.error('[seed] Test fixtures could not be seeded:', (e as Error).message);
+  }
+}
+
 export function autoSeedIfEmpty(): void {
   const seedPassword = process.env.SEED_PASSWORD || 'demo1234';
 
@@ -53,6 +74,7 @@ export function autoSeedIfEmpty(): void {
   if (count > 0) {
     console.log(`✓ [seed] Accounts table has ${count} rows — skipping demo data`);
     seedStaffManagerRoster();
+    seedFixtures();
     return;
   }
 
@@ -117,6 +139,7 @@ export function autoSeedIfEmpty(): void {
   console.log(`✓ [seed] Inserted ${ics.length} IC vendors + ${customers.length} demo customers`);
 
   seedStaffManagerRoster();
+  seedFixtures();
 }
 
 /**

@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { sendOverdueAlert } from '../lib/mailer';
 import { sendTeamsAlert } from '../lib/teams';
+import { NOT_TEST_ASSIGNMENT } from '../lib/testFixtures';
 
 const router = Router();
 
@@ -16,6 +17,7 @@ function getOverdue() {
       CAST((julianday('now') - julianday(due_at)) AS INTEGER) as days_overdue
     FROM key_assignments
     WHERE status = 'checked_out' AND due_at IS NOT NULL AND due_at < datetime('now')
+      AND ${NOT_TEST_ASSIGNMENT}
     ORDER BY due_at ASC
   `).all() as any[]).map((r) => Object.assign({}, r));
 }

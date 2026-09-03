@@ -15,6 +15,7 @@ import { hashSignature } from '../lib/pdf';
 import { generateCustodyReceipt } from '../lib/custodyPdf';
 import { createKeyForm, serializeForm, getKeyForm, type FormEventType } from '../lib/keyForm';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
+import { NOT_TEST_ASSIGNMENT } from '../lib/testFixtures';
 
 const router = Router();
 
@@ -123,6 +124,11 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   const offset = (Math.max(1, parseInt(page) || 1) - 1) * (parseInt(limit) || 50);
   let where = '1=1';
   const params: any[] = [];
+  // Fixture custody is invisible here unless asked for, so a test check-out
+  // never lands in the dashboard's "keys currently out".
+  if (req.query.include_test !== '1' && req.query.include_test !== 'true') {
+    where += ` AND ${NOT_TEST_ASSIGNMENT}`;
+  }
   if (status) { where += ' AND status = ?'; params.push(status); }
   if (search) {
     where += ' AND (assignee LIKE ? OR account_name LIKE ? OR keys_held LIKE ? OR assignee_email LIKE ?)';
@@ -1357,7 +1363,7 @@ router.get('/signature-gaps', requireAuth, (_req: AuthRequest, res: Response) =>
   const count = (clause: string): number => {
     const row = db.prepare(
       `SELECT COUNT(*) AS c FROM key_assignments
-        WHERE status = 'checked_out' AND ${clause}`
+        WHERE status = 'checked_out' AND ${NOT_TEST_ASSIGNMENT} AND ${clause}`
     ).get() as any;
     return Object.assign({}, row).c as number;
   };
@@ -1368,7 +1374,7 @@ router.get('/signature-gaps', requireAuth, (_req: AuthRequest, res: Response) =>
 
   // People who will hit this again next time — the proactive half.
   const staffNoEmail = Object.assign({}, db.prepare(
-    "SELECT COUNT(*) AS c FROM staff_managers WHERE COALESCE(active,1)=1 AND (email IS NULL OR TRIM(email)='')"
+    "SELECT COUNT(*) AS c FROM staff_managers WHERE COALESCE(active,1)=1 AND COALESCE(is_test,0)=0 AND (email IS NULL OR TRIM(email)='')"
   ).get() as any).c as number;
 
   res.json({

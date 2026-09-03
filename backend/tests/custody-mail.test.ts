@@ -40,6 +40,37 @@ beforeEach(() => {
   settings.setSetting(settings.CUSTODY_NOTIFY_KEY, 'cara@citywideboston.com', 'test');
 });
 
+// ═══════════════════════════ TEST-FIXTURE MARKING ═══════════════════════════
+// A fixture's contact address is the operator's own inbox. Anything sent there
+// during a test run has to be unmistakable at a glance in that inbox.
+describe('TEST FIXTURE EMAILS ARE PREFIXED', () => {
+  it('prefixes [TEST] when the recipient is a fixture contact', async () => {
+    const fx = await import('../src/lib/testFixtures');
+    fx.seedTestFixtures();
+
+    const r = await mail.sendCheckoutNotice({
+      holder: fx.TEST_MANAGER_NAME, holderEmail: fx.TEST_EMAIL, holderType: 'employee',
+      client: fx.TEST_CLIENT_NAME, bcNumber: fx.TEST_CLIENT_BC, keys: KEYS,
+      checkedOutAt: new Date().toISOString(), dueAt: '2026-09-01',
+      recordedBy: 'Cara Angeloni', onBehalf: true, signoffLink: 'https://keys.test/key-signoff/abc',
+    });
+    expect(r.ok).toBe(true);
+    expect(sent[0].subject.startsWith('[TEST] ')).toBe(true);
+    expect(sent[0].subject).toContain(fx.TEST_MANAGER_NAME);
+  });
+
+  it('leaves a real recipient\'s subject untouched', async () => {
+    const r = await mail.sendCheckoutNotice({
+      holder: 'J. Martinez', holderEmail: 'jm@example.test', holderType: 'employee',
+      client: 'ACME TOWER', bcNumber: '01014000123', keys: KEYS,
+      checkedOutAt: new Date().toISOString(), dueAt: '2026-09-01',
+      recordedBy: 'Cara Angeloni', onBehalf: true, signoffLink: 'https://keys.test/key-signoff/abc',
+    });
+    expect(r.ok).toBe(true);
+    expect(sent[0].subject.startsWith('[TEST]')).toBe(false);
+  });
+});
+
 // ══════════════════════════════ SUBJECT LINES ═══════════════════════════════
 describe('CUSTODY EMAIL SUBJECTS', () => {
   it('check-out reads "Keys checked out — [Holder] — [Client]"', async () => {

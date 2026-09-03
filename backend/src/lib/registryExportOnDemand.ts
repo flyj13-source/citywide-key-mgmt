@@ -24,6 +24,8 @@ export interface ExportOpts {
   tab: ExportTab;
   search?: string;
   includeArchived?: boolean;
+  /** Test fixtures are excluded unless this is explicitly ticked. */
+  includeTest?: boolean;
   /** "Export selected": restrict to exactly these account ids. When present it
    *  narrows the tab's own query rather than replacing it, so the columns and
    *  sheet layout stay identical to the on-screen tab. */
@@ -41,10 +43,13 @@ const has = (v: any): string => (v ? 'Yes' : 'No');
 // search + archived exactly like GET /api/accounts.
 function accountWhere(
   kind: 'customer' | 'ic' | 'office' | 'all' | 'archived',
-  opts: { search?: string; includeArchived?: boolean; ids?: number[] },
+  opts: { search?: string; includeArchived?: boolean; ids?: number[]; includeTest?: boolean },
 ): { sql: string; params: any[] } {
   let sql = '1=1';
   const params: any[] = [];
+
+  // Fixtures never land in an export unless asked for by name.
+  if (!opts.includeTest) sql += ' AND COALESCE(is_test, 0) = 0';
 
   // An explicit id list narrows everything else — "export exactly what I ticked".
   if (opts.ids && opts.ids.length) {

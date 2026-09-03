@@ -32,7 +32,8 @@ const VALID_TABS = Object.keys(TAB_LABEL) as ExportTab[];
 // Has Door/Alarm Code Yes/No columns. Audit-logged with scope + row count.
 router.post('/registry', requireAuth, async (req: AuthRequest, res: Response) => {
   const {
-    scope = 'current', tab = 'all', format = 'xlsx', search = '', includeArchived = false, ids,
+    scope = 'current', tab = 'all', format = 'xlsx', search = '', includeArchived = false,
+    includeTest = false, ids,
   } = (req.body || {}) as Partial<ExportOpts> & { format?: string };
 
   if (scope !== 'current' && scope !== 'all') {
@@ -57,6 +58,7 @@ router.post('/registry', requireAuth, async (req: AuthRequest, res: Response) =>
     tab: tab as ExportTab,
     search: String(search || '').trim(),
     includeArchived: !!includeArchived,
+    includeTest: !!includeTest,
     ids: cleanIds,
   };
 
@@ -69,7 +71,7 @@ router.post('/registry', requireAuth, async (req: AuthRequest, res: Response) =>
   logAudit(req, 'export_registry', null, null, {
     scope, tab: opts.tab, format: fmt, includeArchived: opts.includeArchived,
     search: opts.search || undefined, row_count: rowCount, sheets: sheets.map((s) => s.name),
-    selected_ids: cleanIds?.length,
+    selected_ids: cleanIds?.length, include_test: opts.includeTest || undefined,
   });
 
   if (fmt === 'csv') {

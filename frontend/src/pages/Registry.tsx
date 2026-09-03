@@ -5,6 +5,7 @@ import Modal from '../components/Modal';
 import ImportModal from '../components/ImportModal';
 import { getManager } from '../lib/auth';
 import YesNo from '../components/YesNo';
+import TestPill from '../components/TestPill';
 import ExportMenu from '../components/ExportMenu';
 import { CheckOutModal, CheckInModal } from '../components/CustodyModals';
 import ReassignModal from '../components/ReassignModal';
@@ -532,7 +533,16 @@ const RegistryTable = memo(function RegistryTable({
             <tr><td colSpan={colSpan} className="px-4 py-8 text-center text-cw-muted">No records found</td></tr>
           ) : accounts.map((a, i) => {
             const selected = bulkMode ? selectedIds.has(a.id) : selectedId === a.id;
-            const rowBg = selected ? 'bg-[#fbeaea]' : (i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]');
+            // A fixture gets a distinct tint so it reads as apparatus, not data,
+            // even when it sits in the middle of real rows. The wash is the
+            // same amber as the TEST pill — the greys tried first were within
+            // a shade of the zebra stripe and read as no tint at all.
+            const isTest = a.is_test === 1;
+            const rowBg = selected
+              ? 'bg-[#fbeaea]'
+              : isTest
+                ? (i % 2 === 0 ? 'bg-[#fefaed]' : 'bg-[#fbf4e0]')
+                : (i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]');
             return (
               <tr
                 key={a.id}
@@ -562,6 +572,7 @@ const RegistryTable = memo(function RegistryTable({
                 {tab === 'customer' ? (
                   <>
                     <td className={`px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap max-w-[240px] truncate sticky ${selectable ? 'left-11' : 'left-0'} z-10 ${rowBg}`}>
+                      {isTest && <TestPill />}
                       {a.ic_company_name}
                       {!!a.pending_handover && (
                         <div className="mt-0.5">
@@ -999,13 +1010,14 @@ function RegistryExportModal({
   const [scope, setScope] = useState<'current' | 'all'>('current');
   const [format, setFormat] = useState<'xlsx' | 'csv'>('xlsx');
   const [includeArchived, setIncludeArchived] = useState(false);
+  const [includeTest, setIncludeTest] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const run = async () => {
     setBusy(true); setError('');
     try {
-      await exportRegistry({ scope, tab, format, search, includeArchived, ids: selectedIds });
+      await exportRegistry({ scope, tab, format, search, includeArchived, includeTest, ids: selectedIds });
       onClose();
     } catch (err: any) {
       setError(err?.message || 'Export failed');
@@ -1054,6 +1066,13 @@ function RegistryExportModal({
         <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
           <input type="checkbox" className="accent-[#C0272D] h-4 w-4" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
           Include archived records
+        </label>
+
+        {/* Off by default — a fixture in a client-facing export would be worse
+            than a missing one. */}
+        <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+          <input type="checkbox" className="accent-[#C0272D] h-4 w-4" checked={includeTest} onChange={(e) => setIncludeTest(e.target.checked)} />
+          Include test records
         </label>
 
         <p className="text-[11px] text-gray-400">
@@ -1108,6 +1127,10 @@ export default function Registry() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalState>(null);
   const [showImport, setShowImport] = useState(false);
+  // Test fixtures are hidden by default. The chip is the ONLY way they appear
+  // in a list — off, they are not in the query at all, so they cannot be acted
+  // on or counted by accident.
+  const [showTest, setShowTest] = useState(false);
   const [showExport, setShowExport] = useState(false);
   // Set by "Export selected" — narrows the export to exactly the ticked rows.
   const [exportIds, setExportIds] = useState<number[] | null>(null);
@@ -1181,6 +1204,7 @@ export default function Registry() {
   // what the user is looking at.
   const filterParams = useMemo(() => {
     const params: Record<string, string> = { search: debouncedSearch };
+    if (showTest) params.include_test = '1';
     if (drill) {
       params.type = 'customer';
       params[drill.role === 'am' ? 'account_manager' : 'ccm_manager'] = drill.name;
@@ -1195,7 +1219,7 @@ export default function Registry() {
       params.type = tab;
     }
     return params;
-  }, [debouncedSearch, tab, drill]);
+  }, [debouncedSearch, tab, drill, showTest]);
 
   const loadRows = useCallback(async () => {
     setLoading(true);
@@ -1228,12 +1252,12 @@ export default function Registry() {
   const loadStaff = useCallback(async () => {
     setStaffLoading(true);
     try {
-      const data = await getStaff({ includeInactive: true });
+      const data = await getStaff({ includeInactive: true, includeTest: showTest });
       setStaff(data);
     } finally {
       setStaffLoading(false);
     }
-  }, []);
+  }, [showTest]);
 
   // Key custody rows — Checked Out (active) or Checked In (returned history).
   // Sorting and search are applied server-side so they span the whole set.
@@ -1248,13 +1272,14 @@ export default function Registry() {
         page: String(page),
         limit: String(LIMIT),
         ...(signatureFilter && tab === 'checkedout' ? { signature: 'missing' } : {}),
+        ...(showTest ? { include_test: '1' } : {}),
       });
       setCustody(data.assignments);
       setCustodyTotal(data.total);
     } finally {
       setCustodyLoading(false);
     }
-  }, [tab, debouncedSearch, custodySort, page, signatureFilter]);
+  }, [tab, debouncedSearch, custodySort, page, signatureFilter, showTest]);
 
   // Signature-gap counts drive the filter chip and the dashboard card.
   const loadGaps = useCallback(() => {
@@ -1382,7 +1407,7 @@ export default function Registry() {
     rows: accounts,
     total,
     params: filterParams,
-    resetKey: `${tab}|${debouncedSearch}|${drill?.name ?? ''}|${page}`,
+    resetKey: `${tab}|${debouncedSearch}|${drill?.name ?? ''}|${page}|${showTest}`,
   });
 
   const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false);
@@ -1403,10 +1428,17 @@ export default function Registry() {
     try {
       const res = await bulkArchiveAccounts([...bulk.selected]);
       const parts = [`${res.archived} record${res.archived !== 1 ? 's' : ''} archived`];
-      if (res.blocked.length) {
-        // Never silent: a refusal is named, not swallowed.
+      // Never silent: a refusal is named, and named with the right reason —
+      // a test fixture is protected apparatus, not a site with keys out.
+      const out = res.blocked.filter((b) => b.reason !== 'test_fixture');
+      const fixtures = res.blocked.filter((b) => b.reason === 'test_fixture');
+      if (out.length) {
+        parts.push(`${out.length} skipped — keys still checked out: ${out.map((b) => b.name).join(', ')}`);
+      }
+      if (fixtures.length) {
         parts.push(
-          `${res.blocked.length} skipped — keys still checked out: ${res.blocked.map((b) => b.name).join(', ')}`
+          `${fixtures.length} skipped — test fixture${fixtures.length !== 1 ? 's' : ''}, protected from archiving: ` +
+          fixtures.map((b) => b.name).join(', ')
         );
       }
       if (res.alreadyArchived) parts.push(`${res.alreadyArchived} were already archived`);
@@ -1710,12 +1742,33 @@ export default function Registry() {
 
         {/* Search — not shown on the pure people-roster tabs (they have their own) */}
         {!isPeopleTab && (
-          <input
-            className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
-            placeholder={isCustodyTab ? 'Search by holder, client, or key…' : 'Search by name, number, or manager…'}
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-          />
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
+              placeholder={isCustodyTab ? 'Search by holder, client, or key…' : 'Search by name, number, or manager…'}
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            />
+            {/* Off by default: with the chip off, fixtures are not in the query
+                at all, so they cannot be counted or acted on by accident. It
+                applies to every tab — accounts, custody rows and employees —
+                so the fixture loop is visible in one flip, and invisible in
+                one flip back. */}
+            {(
+              <label
+                className="flex items-center gap-2 text-sm text-cw-muted cursor-pointer whitespace-nowrap"
+                title="Test fixtures are excluded from every count, aggregate and export"
+              >
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-[#1a1a1a] cursor-pointer"
+                  checked={showTest}
+                  onChange={(e) => { setShowTest(e.target.checked); setPage(1); }}
+                />
+                Show test records
+              </label>
+            )}
+          </div>
         )}
 
         {/* CW Employees filter chips + search */}

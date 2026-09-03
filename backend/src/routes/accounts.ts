@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
 import { logAudit } from '../lib/audit';
+import { isTestAccount } from '../lib/testFixtures';
 import { encrypt } from '../lib/crypto';
 import { gridTotal, num } from '../lib/roleKeys';
 
@@ -18,10 +19,19 @@ export function buildAccountFilter(q: Record<string, string>): { where: string; 
   const {
     search = '', status = '', type = 'all', exclude_test = '',
     account_manager = '', ccm_manager = '', office_keys = '', archived = '0',
+    include_test = '',
   } = q;
 
   let whereClauses = '1=1';
   const params: any[] = [];
+
+  // ── Test fixtures are excluded BY DEFAULT ────────────────────────────────
+  // Deliberately opt-IN rather than opt-out: a caller that forgets to exclude
+  // would silently inflate a real count, which is the exact pollution these
+  // fixtures exist to avoid. Only an explicit include_test=1 shows them.
+  if (include_test !== '1' && include_test !== 'true') {
+    whereClauses += ' AND COALESCE(is_test, 0) = 0';
+  }
 
   // Soft delete: archived records are hidden from every normal view. The
   // Archived tab passes archived=1 to see them.
@@ -117,7 +127,8 @@ router.post('/bulk-archive', requireAuth, (req: AuthRequest, res: Response) => {
   const ph = clean.map(() => '?').join(',');
 
   const found = (db.prepare(
-    `SELECT id, ic_company_name, bc_vendor_number, bc_client_number, record_type, COALESCE(archived,0) AS archived
+    `SELECT id, ic_company_name, bc_vendor_number, bc_client_number, record_type,
+            COALESCE(archived,0) AS archived, COALESCE(is_test,0) AS is_test
        FROM accounts WHERE id IN (${ph})`
   ).all(...clean) as any[]).map((r) => Object.assign({}, r));
 
@@ -130,11 +141,13 @@ router.post('/bulk-archive', requireAuth, (req: AuthRequest, res: Response) => {
     ).all(...clean) as any[]).map((r) => Object.assign({}, r).id as number)
   );
 
+  // Fixtures are refused here too, named back like a blocked record.
+  const fixtures = found.filter((f) => f.is_test === 1);
   const byId = new Map(found.map((f) => [f.id, f]));
   const missing = clean.filter((id) => !byId.has(id));
   const alreadyArchived = found.filter((f) => f.archived === 1);
   const blocked = found.filter((f) => blockedIds.has(f.id));
-  const toArchive = found.filter((f) => f.archived !== 1 && !blockedIds.has(f.id));
+  const toArchive = found.filter((f) => f.archived !== 1 && !blockedIds.has(f.id) && f.is_test !== 1);
 
   const archive = db.prepare(
     'UPDATE accounts SET archived = 1, archived_at = CURRENT_TIMESTAMP, archived_by = ? WHERE id = ?'
@@ -168,7 +181,12 @@ router.post('/bulk-archive', requireAuth, (req: AuthRequest, res: Response) => {
   res.json({
     archived: toArchive.length,
     archivedNames: toArchive.map((a) => a.ic_company_name),
-    blocked: blocked.map((b) => ({ id: b.id, name: b.ic_company_name })),
+    // Each refusal carries WHY, so the caller can say "keys still checked out"
+    // and "test fixture" separately instead of blaming one for the other.
+    blocked: [
+      ...blocked.map((b) => ({ id: b.id, name: b.ic_company_name, reason: 'checked_out' })),
+      ...fixtures.map((f) => ({ id: f.id, name: f.ic_company_name, reason: 'test_fixture' })),
+    ],
     alreadyArchived: alreadyArchived.length,
     notFound: missing.length,
   });
@@ -295,6 +313,7 @@ router.get('/key-holder-stats', requireAuth, (_req: AuthRequest, res: Response) 
     FROM accounts
     WHERE record_type = 'customer'
       AND COALESCE(archived, 0) = 0
+      AND COALESCE(is_test, 0) = 0
       AND (bc_client_number IS NULL OR bc_client_number NOT LIKE '999%')
   `).get() as any;
   const r = Object.assign({}, row);
@@ -460,6 +479,16 @@ function requireDelete(req: AuthRequest, res: Response): boolean {
 // ── Soft delete (archive) — record leaves the registry, history preserved ────
 router.post('/:id/archive', requireAuth, (req: AuthRequest, res: Response) => {
   if (!requireDelete(req, res)) return;
+  // Fixtures are not data — they are the apparatus. Archiving one through the
+  // normal flow would quietly remove the thing every test run depends on, so
+  // it is refused here and only `npm run test-data:reset` can clear them.
+  if (isTestAccount(req.params.id)) {
+    return res.status(409).json({
+      error: 'This is a test fixture and cannot be archived. Use "npm run test-data:reset" to clear test data.',
+      code: 'TEST_FIXTURE_PROTECTED',
+    });
+  }
+
   const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) as any;
   if (!account) return res.status(404).json({ error: 'Not found' });
 
@@ -502,6 +531,16 @@ router.post('/:id/restore', requireAuth, (req: AuthRequest, res: Response) => {
 // audit rows remain (they reference the name string, not a FK). ──────────────
 router.delete('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   if (!requireDelete(req, res)) return;
+  // Fixtures are not data — they are the apparatus. Archiving one through the
+  // normal flow would quietly remove the thing every test run depends on, so
+  // it is refused here and only `npm run test-data:reset` can clear them.
+  if (isTestAccount(req.params.id)) {
+    return res.status(409).json({
+      error: 'This is a test fixture and cannot be deleted. Use "npm run test-data:reset" to clear test data.',
+      code: 'TEST_FIXTURE_PROTECTED',
+    });
+  }
+
   if (req.manager?.role !== 'admin') {
     return res.status(403).json({ error: 'Only an admin can permanently delete accounts' });
   }
