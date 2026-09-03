@@ -10,9 +10,11 @@ import {
   summarizeKeys, totalQty, KeyLine, bcNumberFor, bcNumberForAssignment,
   transferSignatureState,
 } from '../lib/custody';
-import { sendCheckoutNotice, sendCheckinNotice, sendEstablishNotice, sendSignedReceipt, caraAddress, MailResult } from '../lib/custodyMail';
+import { sendCheckoutNotice, sendCheckinNotice, sendSignedReceipt, caraAddress, MailResult } from '../lib/custodyMail';
 import { hashSignature } from '../lib/pdf';
 import { generateCustodyReceipt } from '../lib/custodyPdf';
+import { createKeyForm, serializeForm, getKeyForm, type FormEventType } from '../lib/keyForm';
+import { generateKeyFormPdf } from '../lib/keyFormPdf';
 
 const router = Router();
 
@@ -219,6 +221,55 @@ function custodySummary(actor: string, verb: 'checkout' | 'checkin', holder: str
     : `${holder} recorded their own ${verb}`;
 }
 
+/**
+ * Every custody event produces a Key Form — the complete statement of what the
+ * holder has AFTER the event. Generated here so no event path can forget one.
+ * A form failure is logged but never fails the custody transaction itself: the
+ * keys really moved, and losing that record to a PDF error would be worse.
+ */
+export async function generateEventForm(
+  req: AuthRequest,
+  input: {
+    eventType: FormEventType; holderName: string; holderType: 'employee' | 'ic';
+    holderEmail?: string | null; holderId?: number | null; eventNote?: string | null;
+    sourceKind?: string | null; sourceRef?: string | null; counterpartyName?: string | null;
+    lines?: any[];
+  },
+): Promise<any | null> {
+  try {
+    const row = createKeyForm({
+      eventType: input.eventType,
+      holderName: input.holderName,
+      holderType: input.holderType,
+      holderEmail: input.holderEmail ?? null,
+      holderId: input.holderId ?? null,
+      lines: input.lines,
+      eventNote: input.eventNote ?? null,
+      generatedBy: req.manager?.name ?? 'System',
+      sourceKind: input.sourceKind ?? null,
+      sourceRef: input.sourceRef ?? null,
+      counterpartyName: input.counterpartyName ?? null,
+    });
+    try {
+      const pdf = await generateKeyFormPdf(row);
+      db.prepare('UPDATE key_form_docs SET pdf_path = ? WHERE id = ?').run(pdf, row.id);
+    } catch (e) {
+      console.error('[keyform] PDF failed:', (e as Error).message);
+    }
+    const fresh = getKeyForm(row.id);
+    logAudit(req, 'key_form_generated', null, null, {
+      form_id: row.id, form_no: row.form_no, holder: input.holderName,
+      event_type: input.eventType, total_keys: row.total_keys,
+      clients: row.clients_covered, no_email: !!row.no_email,
+      source: input.sourceKind, source_ref: input.sourceRef,
+    });
+    return serializeForm(fresh);
+  } catch (e) {
+    console.error('[keyform] generation failed:', (e as Error).message);
+    return null;
+  }
+}
+
 function logMail(req: AuthRequest, result: MailResult, kind: 'checkout' | 'checkin' | 'established', accountName: string, accountId: number | null, holder: string) {
   logAudit(req, result.ok ? 'custody_email_sent' : 'custody_email_failed', accountName, accountId, {
     kind, holder, recipients: result.recipients, error: result.error, skipped: result.skipped || undefined,
@@ -357,195 +408,18 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
     });
   }
 
+  const keyForm = await generateEventForm(req, {
+    eventType: 'checkout', holderName: holder, holderType: holder_type,
+    holderEmail: holder_email || null, holderId: holder_id,
+    eventNote: `Checked out at ${account_name}: ${summarizeKeys(lines)}`,
+    sourceKind: 'assignment', sourceRef: String(id),
+  });
+
   const row = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(id);
   res.status(201).json({
     id,
     assignment: serializeAssignment(row),
-    signoff_link: signoffLink,
-    signature_status: signatureStatus,
-    email: {
-      ok: mail.ok, recipients: mail.recipients, error: mail.error,
-      attempts: mail.attempts, cara: caraAddress(),
-    },
-  });
-});
-
-// ── POST /api/assignments/establish ──────────────────────────────────────────
-// OPENING BALANCES. People held keys long before this system existed, so a
-// check-IN had no record to close against and simply failed. This records what
-// someone ALREADY holds and asks them to confirm it.
-//
-// It is deliberately NOT a check-out:
-//   • origin='established' marks the row as an opening balance, so reports can
-//     separate "we handed these over" from "they already had them".
-//   • status stays 'checked_out' — that value means "these keys are out with
-//     someone", which is exactly true here, and twenty-six queries across ten
-//     files gate availability, archiving and reporting on it. A second status
-//     meaning the same thing would have to be added to every one, and one miss
-//     would let a site be archived while keys are in someone's pocket.
-//   • The acknowledgement says "I currently hold", never "I am receiving" —
-//     signing a receipt would date the custody to today and misstate it.
-//
-// Accepts ONE holder and one OR MANY clients. Many clients produce one row per
-// client but a SINGLE acknowledgement covering all of them (Cara has hundreds
-// of these to do; asking a contractor to sign eleven forms is not a rollout).
-router.post('/establish', requireAuth, async (req: AuthRequest, res: Response) => {
-  const body = req.body || {};
-  const actor = req.manager?.name ?? 'System';
-
-  const holder = cleanText(body.holder ?? body.assignee);
-  if (!holder) return res.status(400).json({ error: 'A holder is required' });
-  const holder_email = cleanText(body.holder_email ?? body.assignee_email);
-  const holder_type = body.holder_type === 'ic' ? 'ic' : 'employee';
-  const holder_id = body.holder_id != null && body.holder_id !== '' ? Number(body.holder_id) : null;
-
-  // One shape for both cases: a single client is a one-entry list.
-  const rawSites = Array.isArray(body.clients) && body.clients.length
-    ? body.clients
-    : [{ account_id: body.account_id, keys: body.keys }];
-
-  const sites: { account: any; account_id: number; account_name: string; lines: KeyLine[] }[] = [];
-  for (const entry of rawSites) {
-    const account_id = entry?.account_id != null && entry.account_id !== '' ? Number(entry.account_id) : null;
-    if (!account_id) return res.status(400).json({ error: 'A client is required' });
-    const acctRaw = db.prepare('SELECT * FROM accounts WHERE id = ?').get(account_id) as any;
-    if (!acctRaw) return res.status(404).json({ error: `Client ${account_id} not found` });
-    const account = Object.assign({}, acctRaw);
-
-    const parsed = parseKeyLines(entry?.keys);
-    if (parsed.error) return res.status(400).json({ error: `${account.ic_company_name}: ${parsed.error}` });
-    if (!parsed.lines.length) {
-      return res.status(400).json({ error: `${account.ic_company_name}: select at least one key` });
-    }
-    // Availability still applies — an opening balance cannot claim more keys
-    // than the site is recorded as having, or the totals stop meaning anything.
-    const conflict = checkAvailability(account_id, parsed.lines);
-    if (conflict) return res.status(409).json({ error: `${account.ic_company_name}: ${conflict}` });
-
-    sites.push({ account, account_id, account_name: account.ic_company_name, lines: parsed.lines });
-  }
-
-  const held_since = cleanText(body.held_since) || new Date().toISOString().slice(0, 10);
-  const notes = cleanText(body.notes);
-
-  // Same missing-email gate as a check-out: no address means no acknowledgement
-  // can be sent, so the caller must say in writing why it is proceeding unsigned.
-  const no_email_reason = cleanText(body.no_email_reason);
-  if (!holder_email && !no_email_reason) {
-    return res.status(422).json({
-      error: `${holder} has no email on file — an acknowledgement cannot be sent.`,
-      code: 'HOLDER_EMAIL_MISSING',
-      holder,
-      remedies: ['add_email', 'continue_without_signature'],
-    });
-  }
-
-  const recorded_at = new Date().toISOString();
-  const minted = holder_email ? mintToken() : { token: null, expires: null };
-  const groupId = crypto.randomUUID();
-  const initialSigStatus: SignatureStatus = holder_email ? 'awaiting_signature' : 'signature_unavailable';
-
-  const insert = db.prepare(`
-    INSERT INTO key_assignments
-      (account_id, account_name, assignee, assignee_email, key_type, keys_held, keys_json,
-       holder_type, holder_id, recorded_by, checked_out_at, due_at, notes, status,
-       signoff_token, signoff_expires_at, signature_status, no_email_reason,
-       origin, held_since, establish_group_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'checked_out', ?, ?, ?, ?, 'established', ?, ?)
-  `);
-
-  const created: { id: number; account_id: number; account_name: string; lines: KeyLine[] }[] = [];
-
-  db.exec('BEGIN');
-  try {
-    for (const site of sites) {
-      const r = insert.run(
-        site.account_id, site.account_name, holder, holder_email,
-        site.lines[0]?.type ?? 'physical', summarizeKeys(site.lines), JSON.stringify(site.lines),
-        holder_type, holder_id, actor, recorded_at, notes,
-        minted.token, minted.expires, initialSigStatus, no_email_reason,
-        held_since, groupId,
-      );
-      created.push({
-        id: Number(r.lastInsertRowid),
-        account_id: site.account_id, account_name: site.account_name, lines: site.lines,
-      });
-    }
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-
-  // One audit entry per client — every record stays individually traceable…
-  for (const c of created) {
-    logAudit(req, 'custody_established', c.account_name, c.account_id, {
-      assignment_id: c.id, establish_group_id: groupId,
-      holder, holder_type, holder_email,
-      actor, keys: c.lines, total_keys: totalQty(c.lines),
-      held_since, origin: 'established',
-      signature_status: initialSigStatus,
-      no_email_reason: no_email_reason || undefined,
-      summary: `${actor} recorded an opening balance: ${holder} already holds keys at ${c.account_name}`,
-    });
-  }
-  // …plus a summary when one acknowledgement spans several.
-  if (created.length > 1) {
-    logAudit(req, 'custody_established_bulk', null, null, {
-      establish_group_id: groupId, holder, holder_type,
-      clients: created.length, client_names: created.map((c) => c.account_name),
-      total_keys: created.reduce((n, c) => n + totalQty(c.lines), 0),
-      held_since, actor,
-    });
-  }
-
-  const signoffLink = minted.token ? signoffLinkFor(minted.token) : null;
-  const first = created[0];
-  const mail = await sendEstablishNotice({
-    holder, holderEmail: holder_email, holderType: holder_type,
-    client: first.account_name,
-    bcNumber: bcNumberFor(sites[0].account),
-    keys: first.lines,
-    sites: created.length > 1
-      ? created.map((c, i) => ({
-        client: c.account_name, bcNumber: bcNumberFor(sites[i].account), keys: c.lines,
-      }))
-      : undefined,
-    recordedAt: recorded_at, heldSince: held_since, recordedBy: actor,
-    notes, signoffLink, noEmailReason: no_email_reason,
-  });
-  logMail(req, mail, 'established', first.account_name, first.account_id, holder);
-
-  let signatureStatus: SignatureStatus = initialSigStatus;
-  if (holder_email && !mail.ok) {
-    signatureStatus = 'signature_send_failed';
-    logAudit(req, 'signature_send_failed', first.account_name, first.account_id, {
-      establish_group_id: groupId, holder, recipients: mail.recipients,
-      attempts: mail.attempts, error: mail.error,
-    });
-  }
-  const stamp = db.prepare(
-    `UPDATE key_assignments
-        SET signature_status = ?, signature_send_attempts = ?, signature_send_error = ?,
-            signature_last_attempt_at = ?
-      WHERE id = ?`
-  );
-  for (const c of created) {
-    stamp.run(signatureStatus, mail.attempts, mail.ok ? null : (mail.error ?? null), new Date().toISOString(), c.id);
-  }
-
-  if (!holder_email) {
-    logAudit(req, 'signature_unavailable', first.account_name, first.account_id, {
-      establish_group_id: groupId, holder, holder_type, reason: no_email_reason,
-      note: 'Opening balance recorded without an acknowledgement — holder has no email on file',
-    });
-  }
-
-  res.status(201).json({
-    establish_group_id: groupId,
-    created: created.map((c) => ({ id: c.id, account_id: c.account_id, account_name: c.account_name })),
-    clients: created.length,
-    total_keys: created.reduce((n, c) => n + totalQty(c.lines), 0),
+    key_form: keyForm,
     signoff_link: signoffLink,
     signature_status: signatureStatus,
     email: {
@@ -565,9 +439,119 @@ router.post('/establish', requireAuth, async (req: AuthRequest, res: Response) =
 // record (what the Checked In tab shows) and the original row stays checked out
 // carrying only the keys still in the holder's possession, so availability keeps
 // telling the truth.
+/**
+ * A check-IN for keys this system never saw go out. Creates the record and
+ * closes it in one transaction, marked origin='reconciled' so a report can
+ * tell a reconciling entry from a transaction we actually issued.
+ *
+ * If an OPEN record already exists for this holder at this client, it is used
+ * instead of inventing a second one — otherwise a careless entry would leave
+ * the original still showing as out.
+ */
+async function reconcileCheckin(req: AuthRequest, res: Response) {
+  const body = req.body || {};
+  const actor = req.manager?.name ?? 'System';
+
+  const holder = cleanText(body.holder ?? body.assignee);
+  if (!holder) return res.status(400).json({ error: 'A holder is required' });
+  const account_id = body.account_id != null && body.account_id !== '' ? Number(body.account_id) : null;
+  if (!account_id) return res.status(400).json({ error: 'A client is required' });
+  const acctRaw = db.prepare('SELECT * FROM accounts WHERE id = ?').get(account_id) as any;
+  if (!acctRaw) return res.status(404).json({ error: 'Client not found' });
+  const account = Object.assign({}, acctRaw);
+
+  const parsed = parseKeyLines(body.keys);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  if (!parsed.lines.length) return res.status(400).json({ error: 'Select at least one key' });
+
+  const holder_email = cleanText(body.holder_email ?? body.assignee_email);
+  const holder_type = body.holder_type === 'ic' ? 'ic' : 'employee';
+  const holder_id = body.holder_id != null && body.holder_id !== '' ? Number(body.holder_id) : null;
+  const condition = cleanText(body.condition_on_return) || 'good';
+  const notes = cleanText(body.notes);
+  const returned_at = cleanText(body.returned_at) || new Date().toISOString();
+  const lines = parsed.lines;
+
+  const result = db.prepare(`
+    INSERT INTO key_assignments
+      (account_id, account_name, assignee, assignee_email, key_type, keys_held, keys_json,
+       holder_type, holder_id, recorded_by, checkin_recorded_by, checked_out_at, returned_at,
+       condition_on_return, notes, status, signature_status, origin)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'returned', 'not_required', 'reconciled')
+  `).run(
+    account_id, account.ic_company_name, holder, holder_email,
+    lines[0]?.type ?? 'physical', summarizeKeys(lines), JSON.stringify(lines),
+    holder_type, holder_id, actor, actor, returned_at, returned_at,
+    condition, notes,
+  );
+  const newId = Number(result.lastInsertRowid);
+
+  logAudit(req, 'key_checked_in', account.ic_company_name, account_id, {
+    assignment_id: newId, holder, holder_type, actor,
+    origin: 'reconciled',
+    keys: lines, total_keys: totalQty(lines), condition,
+    summary: `${actor} recorded a return from ${holder} with no prior check-out on file`,
+    note: 'Reconciling entry — the keys came back from someone this system never saw take them',
+  });
+
+  const form = await generateEventForm(req, {
+    eventType: 'checkin', holderName: holder, holderType: holder_type,
+    holderEmail: holder_email || null, holderId: holder_id,
+    eventNote: `Reconciling check-in at ${account.ic_company_name}: ${summarizeKeys(lines)}`,
+    sourceKind: 'assignment', sourceRef: String(newId),
+  });
+
+  const mail = await sendCheckinNotice({
+    holder, holderEmail: holder_email || null, holderType: holder_type,
+    client: account.ic_company_name, bcNumber: bcNumberFor(account),
+    keys: lines, returnedAt: returned_at, condition, recordedBy: actor, onBehalf: true,
+    signoffLink: null,
+  });
+  logMail(req, mail, 'checkin', account.ic_company_name, account_id, holder);
+
+  const row = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(newId);
+  return res.status(201).json({
+    success: true,
+    reconciled: true,
+    partial: false,
+    still_out: [],
+    assignment: serializeAssignment(row),
+    key_form: form,
+    signoff_link: null,
+    email: { ok: mail.ok, recipients: mail.recipients, error: mail.error, cara: caraAddress() },
+  });
+}
+
 router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => {
   const { id, condition_on_return, notes } = req.body || {};
-  const raw = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(id) as any;
+
+  // ── No assignment named? Resolve one, or take the entry anyway. ───────────
+  // People held keys long before this system existed, and a check-IN that
+  // refuses the return because nothing was ever checked OUT is a dead end that
+  // loses real information.
+  //
+  // Order matters: an OPEN record for this holder at this client is closed
+  // normally, because inventing a second row would leave the original showing
+  // as still out. Only when there is genuinely nothing on file does the entry
+  // become a reconciling one.
+  let resolvedId = id;
+  if (resolvedId == null || resolvedId === '') {
+    const holderName = cleanText(req.body?.holder ?? req.body?.assignee);
+    const acctId = req.body?.account_id != null && req.body.account_id !== ''
+      ? Number(req.body.account_id) : null;
+    if (holderName && acctId) {
+      const openRaw = db.prepare(`
+        SELECT id FROM key_assignments
+         WHERE status = 'checked_out' AND account_id = ?
+           AND LOWER(TRIM(assignee)) = LOWER(TRIM(?))
+         ORDER BY id LIMIT 1
+      `).get(acctId, holderName) as any;
+      if (openRaw) resolvedId = Object.assign({}, openRaw).id;
+    }
+    if (resolvedId == null || resolvedId === '') return reconcileCheckin(req, res);
+  }
+
+  const raw = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(resolvedId) as any;
   if (!raw) return res.status(404).json({ error: 'Assignment not found' });
   const assignment = Object.assign({}, raw);
   if (assignment.status === 'returned') {
@@ -608,12 +592,12 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
     return existing ? `${existing} | ${add}` : add;
   };
 
-  let returnedId = Number(id);
+  let returnedId = Number(resolvedId);
 
   if (remaining.length) {
     // Partial return — split the transaction.
     db.prepare('UPDATE key_assignments SET keys_json=?, keys_held=?, key_type=? WHERE id=?')
-      .run(JSON.stringify(remaining), summarizeKeys(remaining), remaining[0].type, id);
+      .run(JSON.stringify(remaining), summarizeKeys(remaining), remaining[0].type, resolvedId);
 
     const inserted = db.prepare(`
       INSERT INTO key_assignments
@@ -636,7 +620,7 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
       UPDATE key_assignments
          SET status='returned', returned_at=?, condition_on_return=?, checkin_recorded_by=?, notes=?
        WHERE id=?
-    `).run(returned_at, condition, actor, appendNote(assignment.notes ?? null, extraNotes), id);
+    `).run(returned_at, condition, actor, appendNote(assignment.notes ?? null, extraNotes), resolvedId);
   }
 
   // The return needs its own signature. Mint the token against the RETURNED
@@ -648,7 +632,7 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
   const signoffLink = signoffLinkFor(checkinToken);
 
   logAudit(req, 'key_checked_in', assignment.account_name, assignment.account_id, {
-    assignment_id: Number(id),
+    assignment_id: Number(resolvedId),
     returned_record_id: returnedId,
     holder, holder_type: assignment.holder_type ?? null,
     actor, on_behalf: onBehalf,
@@ -668,12 +652,22 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
   });
   logMail(req, mail, 'checkin', assignment.account_name, assignment.account_id, holder);
 
+  const keyForm = await generateEventForm(req, {
+    eventType: 'checkin', holderName: holder,
+    holderType: (assignment.holder_type as 'employee' | 'ic') ?? 'employee',
+    holderEmail: assignment.assignee_email ?? null, holderId: assignment.holder_id ?? null,
+    eventNote: `Returned at ${assignment.account_name}: ${summarizeKeys(returning)}`
+      + (remaining.length ? ` — ${summarizeKeys(remaining)} still out` : ''),
+    sourceKind: 'assignment', sourceRef: String(returnedId),
+  });
+
   const row = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(returnedId);
   res.json({
     success: true,
     partial: remaining.length > 0,
     still_out: remaining,
     assignment: serializeAssignment(row),
+    key_form: keyForm,
     signoff_link: signoffLink,
     email: { ok: mail.ok, recipients: mail.recipients, error: mail.error, cara: caraAddress() },
   });
@@ -934,6 +928,16 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   const account_name = account.ic_company_name;
   const bcNumber = bcNumberFor(account);
 
+  // ── Transfer mode ─────────────────────────────────────────────────────────
+  // A transfer can move the physical keys, the manager assignment, or both.
+  // They are genuinely different events: keys change hands without the account
+  // moving (covering a shift), and an account moves without keys changing
+  // hands (a reassignment where the metal follows later).
+  const mode: 'keys' | 'accounts' | 'both' =
+    body.mode === 'accounts' ? 'accounts' : body.mode === 'both' ? 'both' : 'keys';
+  const movesKeys = mode === 'keys' || mode === 'both';
+  const movesAccounts = mode === 'accounts' || mode === 'both';
+
   const from_holder = cleanText(body.from_holder);
   const to_holder = cleanText(body.to_holder);
   if (!from_holder) return res.status(400).json({ error: 'A holder to transfer FROM is required' });
@@ -948,17 +952,28 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   const due_at = cleanText(body.due_at);
   const notes = cleanText(body.notes);
 
-  const parsed = parseKeyLines(body.keys);
-  if (parsed.error) return res.status(400).json({ error: parsed.error });
-  const lines = parsed.lines;
+  // An accounts-only transfer moves no keys, so there is nothing to parse and
+  // nothing to validate against holdings.
+  let lines: KeyLine[] = [];
+  if (movesKeys) {
+    const parsed = parseKeyLines(body.keys);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    if (!parsed.lines.length) {
+      return res.status(400).json({ error: 'Select at least one key to transfer' });
+    }
+    lines = parsed.lines;
+  }
 
   // What the FROM holder actually has out at this client, right now.
   const { rows: sourceRows, keys: heldKeys } = openHoldingsFor(account_id, from_holder);
-  if (!sourceRows.length) {
-    return res.status(409).json({ error: `${from_holder} has no keys checked out at ${account_name}` });
+  if (movesKeys && !sourceRows.length) {
+    return res.status(409).json({
+      error: `${from_holder} has no keys on record at ${account_name}. If they already hold keys, record a check-in first — or choose "Accounts only" to move the assignment without the keys.`,
+      code: 'NO_KEYS_ON_RECORD',
+    });
   }
   const heldBy = new Map(heldKeys.map((k) => [k.type, k.qty]));
-  for (const line of lines) {
+  for (const line of (movesKeys ? lines : [])) {
     const have = heldBy.get(line.type) ?? 0;
     if (line.qty > have) {
       return res.status(409).json({
@@ -967,7 +982,7 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
     }
   }
 
-  const from_holder_type = (sourceRows[0].holder_type as 'employee' | 'ic') ?? null;
+  const from_holder_type = (sourceRows[0]?.holder_type as 'employee' | 'ic') ?? null;
   const from_holder_email = sourceRows.find((r) => r.assignee_email)?.assignee_email ?? null;
 
   // ── Missing-email gate (same contract as check-out) ───────────────────────
@@ -975,10 +990,15 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   // is a hole in the chain of custody, not a detail. Refuse silently creating
   // one: the caller must supply an address or state why it is going unsigned.
   const no_email_reason = cleanText(body.no_email_reason);
-  const unreachable = [
-    ...(!from_holder_email ? [from_holder] : []),
-    ...(!to_holder_email ? [to_holder] : []),
-  ];
+  const unreachable = movesKeys
+    ? [
+      ...(!from_holder_email ? [from_holder] : []),
+      ...(!to_holder_email ? [to_holder] : []),
+    ]
+    // An accounts-only move issues no signature request — there is no custody
+    // hand-over to acknowledge — so a missing address costs a notification,
+    // not a link in the chain of custody.
+    : [];
   if (unreachable.length && !no_email_reason) {
     return res.status(422).json({
       error: `${unreachable.join(' and ')} ${unreachable.length === 1 ? 'has' : 'have'} no email on file — a signature cannot be sent.`,
@@ -990,6 +1010,7 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   }
   const transferId = crypto.randomBytes(12).toString('hex');
   const now = new Date().toISOString();
+  let accountMoved: { role: 'am' | 'ccm'; from: string | null; to: string } | null = null;
   const plan = allocate(sourceRows, lines);
 
   const toToken = mintToken();
@@ -1004,7 +1025,7 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   // Everything below lands together or not at all.
   db.exec('BEGIN IMMEDIATE');
   try {
-    for (const { row, take, held } of plan) {
+    for (const { row, take, held } of (movesKeys ? plan : [])) {
       const remaining = held
         .map((h) => ({ ...h, qty: h.qty - (take.find((t) => t.type === h.type)?.qty ?? 0) }))
         .filter((h) => h.qty > 0);
@@ -1046,8 +1067,9 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
       }
     }
 
-    primaryFromId = fromIds[0];
+    primaryFromId = fromIds[0] ?? 0;
 
+    if (movesKeys) {
     const insertedTo = db.prepare(`
       INSERT INTO key_assignments
         (account_id, account_name, assignee, assignee_email, key_type, keys_held, keys_json,
@@ -1078,6 +1100,23 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
     }
     db.prepare('UPDATE key_assignments SET checkin_signoff_token=?, checkin_signoff_expires_at=? WHERE id=?')
       .run(fromToken.token, fromToken.expires, primaryFromId);
+    }
+
+    // ── Account assignment ──────────────────────────────────────────────────
+    // The manager column moves inside the SAME transaction as the keys, so a
+    // "keys and accounts" transfer can never half-land.
+    if (movesAccounts) {
+      const role: 'am' | 'ccm' = body.account_role === 'ccm' ? 'ccm' : 'am';
+      const col = role === 'ccm' ? 'ccm_manager' : 'account_manager';
+      const before = Object.assign({}, db.prepare(
+        `SELECT ${col} AS current FROM accounts WHERE id = ?`
+      ).get(account_id) as any).current ?? null;
+      db.prepare(`UPDATE accounts SET ${col} = ?, pending_handover = ?, pending_handover_from = ?,
+                         pending_handover_to = ?, pending_handover_role = ?, pending_handover_at = ?
+                   WHERE id = ?`)
+        .run(to_holder, movesKeys ? 0 : 1, before, to_holder, role, now, account_id);
+      accountMoved = { role, from: before, to: to_holder };
+    }
 
     db.exec('COMMIT');
   } catch (err: any) {
@@ -1085,11 +1124,13 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
     return res.status(500).json({ error: err?.message || 'Transfer failed — nothing was changed' });
   }
 
-  const fromLink = signoffLinkFor(fromToken.token);
-  const toLink = signoffLinkFor(toToken.token);
+  const fromLink = movesKeys ? signoffLinkFor(fromToken.token) : null;
+  const toLink = movesKeys ? signoffLinkFor(toToken.token) : null;
 
   logAudit(req, 'keys_transferred', account_name, account_id, {
     transfer_id: transferId,
+    mode,
+    account_moved: accountMoved ?? undefined,
     from: from_holder, from_holder_type, from_record_ids: fromIds, primary_from_record_id: primaryFromId,
     to: to_holder, to_holder_type, to_record_id: toId,
     client: account_name, bc_number: bcNumber,
@@ -1100,30 +1141,62 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
 
   // Both halves are notified, and both signature forms go out, before this
   // responds — so the UI can report the true outcome of each send.
-  const fromMail = await sendCheckinNotice({
+  const fromMail = !movesKeys
+    ? ({ ok: true, recipients: [], attempts: 0, skipped: true } as MailResult)
+    : await sendCheckinNotice({
     holder: from_holder, holderEmail: from_holder_email, holderType: from_holder_type,
     client: account_name, bcNumber, keys: lines, returnedAt: now, condition: 'good',
     recordedBy: actor, onBehalf: actor.trim().toLowerCase() !== from_holder.trim().toLowerCase(),
     signoffLink: fromLink, transferTo: to_holder,
   });
-  logMail(req, fromMail, 'checkin', account_name, account_id, from_holder);
+  if (movesKeys) logMail(req, fromMail, 'checkin', account_name, account_id, from_holder);
 
-  const toMail = await sendCheckoutNotice({
+  const toMail = !movesKeys
+    ? ({ ok: true, recipients: [], attempts: 0, skipped: true } as MailResult)
+    : await sendCheckoutNotice({
     holder: to_holder, holderEmail: to_holder_email, holderType: to_holder_type,
     client: account_name, bcNumber, keys: lines, checkedOutAt: now, dueAt: due_at,
     recordedBy: actor, onBehalf: actor.trim().toLowerCase() !== to_holder.trim().toLowerCase(),
     signoffLink: toLink, transferFrom: from_holder,
   });
-  logMail(req, toMail, 'checkout', account_name, account_id, to_holder);
+  if (movesKeys) logMail(req, toMail, 'checkout', account_name, account_id, to_holder);
 
-  const fromRow = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(primaryFromId);
-  const toRow = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(toId);
+  // ── Paired Key Forms ──────────────────────────────────────────────────────
+  // Both parties get a form stating what they hold AFTER the transfer, each
+  // naming the other. One form for the outgoing side and one for the incoming
+  // side — a transfer that produced only one would leave half the chain of
+  // custody undocumented.
+  const movedNote = [
+    movesKeys ? `${summarizeKeys(lines)} at ${account_name}` : null,
+    movesAccounts ? `account assignment (${accountMoved?.role.toUpperCase()}) for ${account_name}` : null,
+  ].filter(Boolean).join(' + ');
+
+  const fromForm = await generateEventForm(req, {
+    eventType: 'transfer', holderName: from_holder,
+    holderType: from_holder_type ?? 'employee', holderEmail: from_holder_email,
+    eventNote: `Transferred OUT to ${to_holder}: ${movedNote}`,
+    sourceKind: 'transfer', sourceRef: transferId, counterpartyName: to_holder,
+  });
+  const toForm = await generateEventForm(req, {
+    eventType: 'transfer', holderName: to_holder,
+    holderType: to_holder_type, holderEmail: to_holder_email, holderId: to_holder_id,
+    eventNote: `Received IN from ${from_holder}: ${movedNote}`,
+    sourceKind: 'transfer', sourceRef: transferId, counterpartyName: from_holder,
+  });
+
+  const fromRow = primaryFromId
+    ? db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(primaryFromId) : null;
+  const toRow = toId
+    ? db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(toId) : null;
 
   res.status(201).json({
     success: true,
     transfer_id: transferId,
-    from: { record_id: primaryFromId, all_record_ids: fromIds, holder: from_holder, signoff_link: fromLink, assignment: serializeAssignment(fromRow) },
-    to: { record_id: toId, holder: to_holder, signoff_link: toLink, assignment: serializeAssignment(toRow) },
+    mode,
+    account_moved: accountMoved,
+    key_forms: { from: fromForm, to: toForm },
+    from: { record_id: primaryFromId, all_record_ids: fromIds, holder: from_holder, signoff_link: fromLink, assignment: fromRow ? serializeAssignment(fromRow) : null },
+    to: { record_id: toId, holder: to_holder, signoff_link: toLink, assignment: toRow ? serializeAssignment(toRow) : null },
     keys: lines,
     total_keys: totalQty(lines),
     signatures: transferSignatureState(transferId),

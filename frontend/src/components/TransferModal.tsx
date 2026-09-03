@@ -102,6 +102,15 @@ export default function TransferModal({
   const [toQuery, setToQuery] = useState('');
   const [toHolder, setToHolder] = useState<HolderOption | null>(null);
   const [toEmail, setToEmail] = useState('');
+  // ── Mode ────────────────────────────────────────────────────────────────
+  // Keys and accounts are genuinely separate things to move: keys change hands
+  // to cover a shift without the account moving, and an account is reassigned
+  // with the metal following later.
+  const [mode, setMode] = useState<'keys' | 'accounts' | 'both'>('keys');
+  const [accountRole, setAccountRole] = useState<'am' | 'ccm'>('am');
+  const movesKeys = mode === 'keys' || mode === 'both';
+  const movesAccounts = mode === 'accounts' || mode === 'both';
+
   const [dueAt, setDueAt] = useState('');
   const [notes, setNotes] = useState('');
 
@@ -155,7 +164,10 @@ export default function TransferModal({
     .map(([type, p]) => ({ type: type as KeyTypeKey, qty: p.qty }));
   const totalKeys = lines.reduce((n, l) => n + l.qty, 0);
   const partial = held.length > 0 && totalKeys < held.reduce((n, k) => n + k.qty, 0);
-  const canSubmit = !!account && !!fromHolder && !!toHolder && lines.length > 0 && !saving;
+  // An accounts-only move needs no keys — requiring them would block the very
+  // case where the metal has not moved yet.
+  const canSubmit = !!account && !!fromHolder && !!toHolder && !saving
+    && (!movesKeys || lines.length > 0);
 
   const setPick = (type: string, patch: Partial<Pick>) =>
     setPicks({ ...picks, [type]: { ...(picks[type] ?? { checked: false, qty: 1 }), ...patch } });
@@ -171,7 +183,9 @@ export default function TransferModal({
         to_holder_type: toHolder.type,
         to_holder_id: toHolder.id,
         to_holder_email: toEmail.trim() || null,
-        keys: lines,
+        mode,
+        account_role: accountRole,
+        keys: movesKeys ? lines : [],
         due_at: dueAt || null,
         notes: notes.trim() || null,
       }));
@@ -226,12 +240,50 @@ export default function TransferModal({
   }
 
   return (
-    <Modal title="Transfer Keys" onClose={onClose} width="max-w-lg">
+    <Modal title="Transfer" onClose={onClose} width="max-w-lg">
       <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
         <p className="text-xs text-cw-muted">
-          Records keys passing directly from one person to another. Custody moves in one step — the keys are never
-          shown as held by two people, or by nobody.
+          Moves custody directly from one person to another in one step — never leaving keys shown as held by
+          two people, or by nobody.
         </p>
+
+        <div>
+          <SectionLabel>What is moving</SectionLabel>
+          <div className="space-y-1.5">
+            {([
+              ['keys', 'Keys only', 'Physical keys move; the manager assignment is unchanged.'],
+              ['accounts', 'Accounts only', 'Manager reassignment; the keys stay where they are.'],
+              ['both', 'Keys and accounts', 'Both move together.'],
+            ] as const).map(([val, label, hint]) => (
+              <label key={val} className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="transfer-mode"
+                  className="accent-[#C0272D] mt-1"
+                  checked={mode === val}
+                  onChange={() => setMode(val)}
+                />
+                <span>
+                  <span className="font-medium text-[#1a1a1a]">{label}</span>
+                  <span className="block text-[11px] text-cw-muted">{hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          {movesAccounts && (
+            <div className="mt-3">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Which assignment moves</label>
+              <select
+                className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
+                value={accountRole}
+                onChange={(e) => setAccountRole(e.target.value as 'am' | 'ccm')}
+              >
+                <option value="am">Account Manager</option>
+                <option value="ccm">Contract Compliance Manager</option>
+              </select>
+            </div>
+          )}
+        </div>
 
         <div>
           <SectionLabel>Client</SectionLabel>
@@ -263,7 +315,7 @@ export default function TransferModal({
           )}
         </div>
 
-        {fromHolder && (
+        {fromHolder && movesKeys && (
           <div>
             <SectionLabel>Keys being handed over</SectionLabel>
             {held.length === 0 ? (

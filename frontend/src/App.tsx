@@ -16,6 +16,7 @@ import Contractors from './pages/Contractors';
 import Settings from './pages/Settings';
 import ContractorPortal from './pages/ContractorPortal';
 import KeySignoff from './pages/KeySignoff';
+import KeyFormSignoff from './pages/KeyFormSignoff';
 import ICChange from './pages/ICChange';
 import CustomerLookup from './pages/CustomerLookup';
 import Forms from './pages/Forms';
@@ -34,6 +35,8 @@ export default function App() {
         <Route path="/contractor/:token" element={<ContractorPortal />} />
         {/* Public, login-free key sign-off (48h token from the check-out email) */}
         <Route path="/key-signoff/:token" element={<KeySignoff />} />
+        {/* Public, login-free Key Form acknowledgement (48h token). */}
+        <Route path="/key-form/:token" element={<KeyFormSignoff />} />
         <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
         <Route path="/registry" element={<RequireAuth><Registry /></RequireAuth>} />
         {/* Declared BEFORE /registry/:accountId so the literal path wins over

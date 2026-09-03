@@ -302,34 +302,83 @@ export const checkout = (data: {
     signature_status: SignatureStatus; email: MailOutcome;
   }>('/assignments/checkout', { method: 'POST', body: JSON.stringify(data) });
 
-/**
- * Opening balance: record keys a holder ALREADY has. One holder, one or many
- * clients — many clients produce one assignment each but a single
- * acknowledgement covering all of them.
- */
-export const establishCustody = (data: {
-  holder: string;
-  holder_email?: string | null;
+// ── Key Forms ────────────────────────────────────────────────────────────────
+export type FormEventType = 'checkin' | 'checkout' | 'transfer' | 'reassignment' | 'audit';
+export type FormStatus = 'draft' | 'sent' | 'signed' | 'unsigned';
+
+export interface KeyFormLine {
+  account_id: number | null;
+  client: string;
+  bc_client_number: string | null;
+  metal: number; card: number; fob: number; dispenser: number; office: number;
+  subtotal: number;
+}
+
+export interface KeyFormDoc {
+  id: number;
+  form_no: string;
+  event_type: FormEventType;
+  event_label: string;
+  holder_name: string;
   holder_type: 'employee' | 'ic';
-  holder_id?: number | null;
-  /** Single-client form. */
-  account_id?: number;
-  keys?: { type: KeyTypeKey; qty: number }[];
-  /** Bulk form — takes precedence when present. */
-  clients?: { account_id: number; keys: { type: KeyTypeKey; qty: number }[] }[];
-  held_since?: string | null;
-  notes?: string | null;
-  no_email_reason?: string | null;
-}) =>
-  req<{
-    establish_group_id: string;
-    created: { id: number; account_id: number; account_name: string }[];
-    clients: number;
-    total_keys: number;
-    signoff_link: string | null;
-    signature_status: SignatureStatus;
-    email: MailOutcome;
-  }>('/assignments/establish', { method: 'POST', body: JSON.stringify(data) });
+  holder_role: string | null;
+  holder_shift: string | null;
+  holder_email: string | null;
+  clients_covered: number;
+  total_keys: number;
+  status: FormStatus;
+  generated_at: string;
+  generated_by: string | null;
+  sent_to: string[];
+  last_sent_at: string | null;
+  send_count: number;
+  send_error: string | null;
+  signed_at: string | null;
+  signature_typed_name: string | null;
+  has_pdf: boolean;
+  no_email: boolean;
+  counterparty_name: string | null;
+  clients: KeyFormLine[];
+  event_note: string | null;
+}
+
+export const getKeyFormDocs = (params: Record<string, string>) =>
+  req<{ forms: KeyFormDoc[]; total: number; page: number; limit: number }>(
+    `/key-forms?${new URLSearchParams(params)}`
+  );
+
+/** One form per holder, each carrying that person's CURRENT state. */
+export const generateKeyFormDocs = (holders: { name: string; type: 'employee' | 'ic'; email?: string | null }[]) =>
+  req<{ forms: KeyFormDoc[]; count: number }>('/key-forms/generate', {
+    method: 'POST', body: JSON.stringify({ holders }),
+  });
+
+/** Send or resend. `to` routes a copy anywhere during an audit. */
+export const sendKeyFormDoc = (id: number, to?: string | null) =>
+  req<{ ok: boolean; recipients: string[]; error: string | null; form: KeyFormDoc }>(
+    `/key-forms/${id}/send`, { method: 'POST', body: JSON.stringify({ to: to || null }) },
+  );
+
+export const bulkSendKeyFormDocs = (ids: number[], to?: string | null) =>
+  req<{ sent: number; failed: number; results: { id: number; ok: boolean; error?: string | null }[] }>(
+    '/key-forms/bulk-send', { method: 'POST', body: JSON.stringify({ ids, to: to || null }) },
+  );
+
+export const downloadKeyFormDocPdf = async (id: number, formNo: string) => {
+  const res = await reqRaw(`/key-forms/${id}/pdf`);
+  if (!res.ok) throw new Error('Could not download the PDF');
+  await saveResponseAsFile(res, `${formNo}.pdf`);
+};
+
+/** Public — the tokenized signature page. */
+export const getKeyFormDocByToken = (token: string) =>
+  fetch(`${API_ORIGIN}/api/key-forms/token/${token}`).then((r) => r.json());
+
+export const signKeyFormDoc = (token: string, signature_data: string, typed_name: string) =>
+  fetch(`${API_ORIGIN}/api/key-forms/token/${token}/sign`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ signature_data, typed_name }),
+  }).then((r) => r.json());
 
 /** Save an address onto the person's staff/IC record so the gap closes for good. */
 export const saveHolderEmail = (data: {
@@ -358,16 +407,31 @@ export interface SignatureGaps {
   staff_without_email: number;
 }
 export const getSignatureGaps = () => req<SignatureGaps>('/assignments/signature-gaps');
+/**
+ * Check-in takes two shapes against one endpoint:
+ *  • `id` names an OPEN record — the normal return.
+ *  • no `id` sends the whole entry, and the server reconciles it: with nothing
+ *    on file it creates and closes the record in one step, so a return is never
+ *    refused just because the check-OUT was never captured.
+ */
 export const checkin = (data: {
-  id: number;
+  id?: number;
   keys?: { type: KeyTypeKey; qty: number }[];
   condition_on_return?: string;
   notes?: string | null;
   on_behalf?: boolean;
+  /** Manual-entry fields — required when `id` is absent. */
+  holder?: string;
+  holder_email?: string | null;
+  holder_type?: 'employee' | 'ic';
+  holder_id?: number | null;
+  account_id?: number;
+  returned_at?: string | null;
 }) =>
   req<{
     success: true; partial: boolean; still_out: KeyLine[]; assignment: Assignment;
-    signoff_link: string; email: MailOutcome;
+    signoff_link: string | null; email: MailOutcome;
+    reconciled?: boolean; key_form?: KeyFormDoc | null;
   }>('/assignments/checkin', { method: 'POST', body: JSON.stringify(data) });
 
 export type SignoffKind = 'checkout' | 'checkin';
@@ -415,8 +479,14 @@ export interface TransferResult {
   signatures: TransferSignatures;
   email: { from: MailOutcome; to: MailOutcome; cara?: string };
 }
+/** A transfer moves the physical keys, the account assignment, or both. */
+export type TransferMode = 'keys' | 'accounts' | 'both';
+
 export const transferKeys = (data: {
   account_id: number;
+  mode?: TransferMode;
+  /** Which manager column moves, for the account half. */
+  account_role?: 'am' | 'ccm';
   from_holder: string;
   to_holder: string;
   to_holder_type: 'employee' | 'ic';
@@ -425,7 +495,11 @@ export const transferKeys = (data: {
   keys: { type: KeyTypeKey; qty: number }[];
   due_at?: string | null;
   notes?: string | null;
-}) => req<TransferResult>('/assignments/transfer', { method: 'POST', body: JSON.stringify(data) });
+}) => req<TransferResult & {
+  mode: TransferMode;
+  account_moved: { role: 'am' | 'ccm'; from: string | null; to: string } | null;
+  key_forms: { from: KeyFormDoc | null; to: KeyFormDoc | null };
+}>('/assignments/transfer', { method: 'POST', body: JSON.stringify(data) });
 
 // ── Custody Report ──────────────────────────────────────────────────────────
 export interface CustodyReportFilters {

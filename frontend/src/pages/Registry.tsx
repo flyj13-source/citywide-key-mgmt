@@ -13,22 +13,21 @@ import { ActionRow, ActionGroup, ActionDivider, ActionButton } from '../componen
 import {
   IconCheckOut, IconCheckIn, IconTransfer, IconCustomer, IconIC, IconManagerAdd,
   IconImport, IconReport, IconExport, IconReassign, IconDelete, IconCheck, IconSelect,
-  IconEstablish,
 } from '../components/Icons';
 import SignInPersonModal from '../components/SignInPersonModal';
 import { ManagerRosterTable, type RosterChip } from '../components/ManagerRoster';
 import ManagerPanel from '../components/ManagerPanel';
 import ManagerModal from '../components/ManagerModal';
 import SelectionToolbar, { selectionCapabilities } from '../components/SelectionToolbar';
+import KeyFormsTab from '../components/KeyFormsTab';
 import BulkArchiveModal from '../components/BulkArchiveModal';
 import { useBulkSelect } from '../lib/useBulkSelect';
-import EstablishCustodyModal from '../components/EstablishCustodyModal';
 import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
 import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getManagerRoster, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, getSignatureGaps, bulkArchiveAccounts,
   type Assignment, type SignatureGaps, type ManagerRosterRow, type UnmatchedManager,
   type StaffManager } from '../lib/api';
 
-type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'checkedout' | 'checkedin' | 'all' | 'archived';
+type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'checkedout' | 'checkedin' | 'keyforms' | 'all' | 'archived';
 
 const emptyForm = {
   ic_company_name: '',
@@ -1093,6 +1092,7 @@ export default function Registry() {
     'contract-compliance': 'ccm', ccm: 'ccm',
     archived: 'archived', cwemployees: 'cwemployees',
     checkedout: 'checkedout', checkedin: 'checkedin',
+    keyforms: 'keyforms', 'key-forms': 'keyforms', forms: 'keyforms',
   };
   const initialTab = searchParams.get('tab');
   const [tab, setTab] = useState<TabType>(TAB_ALIASES[initialTab || ''] ?? 'customer');
@@ -1142,11 +1142,6 @@ export default function Registry() {
   const [custodyTotal, setCustodyTotal] = useState(0);
   const [custodySort, setCustodySort] = useState<SortState>({ key: 'checked_out_at', dir: 'desc' });
   const [checkOutOpen, setCheckOutOpen] = useState(false);
-  // Opening balances. `clients` is set from a bulk selection; otherwise the
-  // selected row (or nothing) seeds the single-client form.
-  const [establishFor, setEstablishFor] = useState<
-    { account: { id: number; name: string } | null; clients?: { id: number; name: string }[] } | null
-  >(null);
   const [checkInFor, setCheckInFor] = useState<
     { assignmentId: number | null; account: { id: number; name: string } | null } | null
   >(null);
@@ -1168,7 +1163,8 @@ export default function Registry() {
   const isArchivedTab = tab === 'archived' && !drill;
   const isCustodyTab = (tab === 'checkedout' || tab === 'checkedin') && !drill;
   // Tabs that render their OWN roster (no account list / account search box).
-  const isPeopleTab = isRosterTab || isStaffTab;
+  const isFormsTab = tab === 'keyforms' && !drill;
+  const isPeopleTab = isRosterTab || isStaffTab || isFormsTab;
 
   // Debounce the applied search: typing updates the input instantly, but the
   // list is only refetched 300ms after the user pauses (was 4 API calls PER
@@ -1326,11 +1322,12 @@ export default function Registry() {
     { key: 'cwemployees', label: `CW Employees (${counts.staff})` },
     { key: 'checkedout', label: `Checked Out (${counts.checkedOut})` },
     { key: 'checkedin', label: `Checked In (${counts.checkedIn})` },
+    { key: 'keyforms', label: 'Key Forms' },
     { key: 'all', label: `All (${counts.all})` },
     { key: 'archived', label: `Archived (${counts.archived})` },
   ], [counts]);
 
-  const DEEP_LINK_TABS: TabType[] = ['archived', 'cwemployees', 'checkedout', 'checkedin', 'am', 'ccm'];
+  const DEEP_LINK_TABS: TabType[] = ['archived', 'cwemployees', 'checkedout', 'checkedin', 'keyforms', 'am', 'ccm'];
 
   const selectTab = (key: TabType) => {
     setTab(key);
@@ -1427,14 +1424,6 @@ export default function Registry() {
     // Exports exactly the selected rows, nothing else.
     setExportIds([...bulk.selected]);
     setShowExport(true);
-  };
-
-  // One holder, every selected client, ONE acknowledgement — the rollout tool.
-  const doBulkEstablish = () => {
-    setEstablishFor({
-      account: null,
-      clients: bulk.selectedItems.map((i) => ({ id: i.id, name: i.ic_company_name })),
-    });
   };
 
   const doBulkReassign = (sharedManager: string | null) => {
@@ -1579,18 +1568,9 @@ export default function Registry() {
               <ActionButton
                 weight="primary"
                 icon={<IconTransfer />}
-                label="Transfer Keys"
+                label="Transfer"
                 onClick={() => setTransferFor({ account: selectedSnapshot, holder: null })}
-                title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Hand keys straight from one person to another'}
-              />
-              <ActionButton
-                weight="primary"
-                icon={<IconEstablish />}
-                label="Establish Custody"
-                onClick={() => setEstablishFor({ account: selectedSnapshot })}
-                title={selectedSnapshot
-                  ? `Record keys already held at ${selectedSnapshot.name}`
-                  : 'Record keys someone already holds — an opening balance, not a check-out'}
+                title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Move keys, an account assignment, or both'}
               />
             </ActionGroup>
 
@@ -1827,6 +1807,8 @@ export default function Registry() {
               onNotice={setNotice}
             />
           )
+        ) : isFormsTab ? (
+          <KeyFormsTab notify={setNotice} />
         ) : isStaffTab ? (
           <CWEmployeesTable
             rows={filteredStaff}
@@ -1876,7 +1858,6 @@ export default function Registry() {
                 onExport={doBulkExport}
                 onReassign={doBulkReassign}
                 onCheckOut={doBulkCheckOut}
-                onEstablish={doBulkEstablish}
                 onArchive={() => { setBulkArchiveError(''); setBulkArchiveOpen(true); }}
               />
             )}
@@ -2018,25 +1999,10 @@ export default function Registry() {
         />
       )}
 
-      {establishFor && (
-        <EstablishCustodyModal
-          presetAccount={establishFor.account}
-          presetClients={establishFor.clients}
-          onClose={() => setEstablishFor(null)}
-          onDone={onCustodyChanged}
-        />
-      )}
-
       {checkInFor && (
         <CheckInModal
           presetAccount={checkInFor.account}
           presetAssignmentId={checkInFor.assignmentId}
-          onEstablish={() => {
-            // Straight from the dead end into the fix, carrying the client.
-            const acct = checkInFor.account;
-            setCheckInFor(null);
-            setEstablishFor({ account: acct });
-          }}
           onClose={() => setCheckInFor(null)}
           onDone={onCustodyChanged}
         />

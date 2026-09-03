@@ -23,6 +23,7 @@ import staffManagersRouter from './routes/staffManagers';
 import formsRouter from './routes/forms';
 import exportsRouter from './routes/exports';
 import signoffRouter from './routes/signoff';
+import keyFormsRouter from './routes/keyForms';
 import settingsRouter from './routes/settings';
 import diagRouter from './routes/diag';
 
@@ -95,6 +96,7 @@ app.use('/api/contractors', contractorsRouter);
 app.use('/api/contractor', contractorsRouter);
 // Public key check-out sign-off portal (no JWT — the 48h token is the credential)
 app.use('/api/signoff', signoffRouter);
+app.use('/api/key-forms', keyFormsRouter);
 // Deployed-state diagnostics (JWT + admin only)
 app.use('/api/_diag', diagRouter);
 

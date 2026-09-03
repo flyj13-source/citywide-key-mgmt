@@ -259,6 +259,56 @@ db.exec(`
   )
 `);
 
+// ── Key Form documents ───────────────────────────────────────────────────────
+// A Key Form is the auditable artifact: the complete list of every key one
+// person holds, by client and type, at a moment in time. One is generated on
+// every custody event (check-in, check-out, transfer, reassignment) and on
+// demand for an audit.
+//
+// This is a SEPARATE table from key_forms above, which stores in-person
+// signature captures and requires a signature to exist. A Key Form document
+// starts life unsigned — Draft or Sent — so it cannot live there.
+//
+// It NEVER stores door or alarm codes. The snapshot holds client names, BC
+// numbers, key types and counts, and nothing else.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS key_form_docs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    form_no TEXT,
+    event_type TEXT NOT NULL,
+    holder_name TEXT NOT NULL,
+    holder_type TEXT,
+    holder_role TEXT,
+    holder_shift TEXT,
+    holder_id INTEGER,
+    holder_email TEXT,
+    holder_phone TEXT,
+    scope_json TEXT NOT NULL,
+    clients_covered INTEGER DEFAULT 0,
+    total_keys INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'draft',
+    token TEXT,
+    token_expires_at DATETIME,
+    signed_at DATETIME,
+    signature_data TEXT,
+    signature_hash TEXT,
+    signature_typed_name TEXT,
+    pdf_path TEXT,
+    sent_to TEXT,
+    last_sent_at DATETIME,
+    send_count INTEGER DEFAULT 0,
+    send_error TEXT,
+    generated_by TEXT,
+    source_kind TEXT,
+    source_ref TEXT,
+    counterparty_name TEXT,
+    no_email INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_key_form_docs_token ON key_form_docs(token)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_key_form_docs_holder ON key_form_docs(holder_name)');
+
 // ── Key custody columns on key_assignments ──────────────────────────────────
 // Multi-key transactions (keys_json), holder identity/type, the ACTOR who
 // recorded each side of the transaction (distinct from the holder, for
@@ -328,9 +378,15 @@ assignmentNeeded.push(
   // second "keys are out" status would have to be added to every one of them,
   // and a single miss would let a site be archived or over-checked-out while
   // keys are genuinely in someone's pocket.
+  //   'reconciled'   — a check-IN with no prior record: the keys came back
+  //                    from someone the system never saw take them, so the
+  //                    row is created and closed in the same breath
   ['origin', "TEXT DEFAULT 'checked_out'"],
   ['held_since', 'TEXT'],                 // approximate date the holder has had them
-  ['establish_group_id', 'TEXT'],         // one acknowledgement spanning many clients
+  // Retained after Establish Custody was replaced by the reconciling check-in:
+  // rows already written in production still carry these, and their signed
+  // acknowledgements must keep opening. New rows never set them.
+  ['establish_group_id', 'TEXT'],
 );
 for (const [col, def] of assignmentNeeded) {
   if (!assignmentCols.includes(col)) db.exec(`ALTER TABLE key_assignments ADD COLUMN ${col} ${def}`);

@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import db from '../lib/db';
 import { logAudit } from '../lib/audit';
+import { generateEventForm } from './assignments';
 import {
   Role, ROLE_LABEL, clientsFor, staffById, canHoldRole,
   performTransfer, performUndo, confirmHandover, staffEmail,
@@ -230,6 +231,22 @@ router.post('/reassign', requireAuth, async (req: AuthRequest, res: Response) =>
     Object.assign({}, db.prepare('SELECT MAX(id) AS c FROM audit_log').get() as any).c
   );
 
+  // Both managers get a Key Form stating what they hold after the move.
+  const reassignForms = {
+    from: await generateEventForm(req, {
+      eventType: 'reassignment', holderName: source.name, holderType: 'employee',
+      holderEmail: source.email ?? staffEmail(source.name),
+      eventNote: `${result.totalClients} client(s) reassigned OUT to ${target.name} (${ROLE_LABEL[role]})`,
+      sourceKind: 'reassignment', sourceRef: String(summaryId), counterpartyName: target.name,
+    }),
+    to: await generateEventForm(req, {
+      eventType: 'reassignment', holderName: target.name, holderType: 'employee',
+      holderEmail: target.email ?? staffEmail(target.name),
+      eventNote: `${result.totalClients} client(s) reassigned IN from ${source.name} (${ROLE_LABEL[role]})`,
+      sourceKind: 'reassignment', sourceRef: String(summaryId), counterpartyName: source.name,
+    }),
+  };
+
   // (4) optional physical-handover notice — never blocks the transfer.
   let email: any = null;
   if (sendHandover) {
@@ -248,6 +265,7 @@ router.post('/reassign', requireAuth, async (req: AuthRequest, res: Response) =>
   }
 
   res.json({
+    key_forms: reassignForms,
     success: true,
     audit_id: summaryId,
     from: source.name,

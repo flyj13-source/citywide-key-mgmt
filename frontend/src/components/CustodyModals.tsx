@@ -620,13 +620,10 @@ export function CheckOutModal({
 // ── Check In modal ───────────────────────────────────────────────────────────
 
 export function CheckInModal({
-  presetAccount, presetAssignmentId, onEstablish, onClose, onDone,
+  presetAccount, presetAssignmentId, onClose, onDone,
 }: {
   presetAccount: { id: number; name: string } | null;
   presetAssignmentId?: number | null;
-  /** Offered when nothing is on record — the keys almost certainly predate
-   *  the system, and Establish Custody is the way forward. */
-  onEstablish?: () => void;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -644,7 +641,20 @@ export function CheckInModal({
   // costs the holder both their confirmation AND their return sign-off. The
   // notification recipient is told either way.
   const [notifyAnyway, setNotifyAnyway] = useState(false);
-  const [done, setDone] = useState<{ mail: MailOutcome; partial: boolean; holder: string; link: string } | null>(null);
+  const [done, setDone] = useState<{
+    mail: MailOutcome; partial: boolean; holder: string; link: string | null;
+    reconciled?: boolean; form?: { form_no: string; total_keys: number } | null;
+  } | null>(null);
+
+  // ── Manual entry ──────────────────────────────────────────────────────────
+  // Used when nothing is on record for this client. Same field set as a
+  // check-out, so the return is captured in full rather than refused.
+  const [manualMode, setManualMode] = useState<'self' | 'other'>('other');
+  const [manualHolder, setManualHolder] = useState<HolderOption | null>(null);
+  const [manualEmail, setManualEmail] = useState('');
+  const [manualPicks, setManualPicks] = useState<Record<string, Pick>>({});
+  const [manualAvail, setManualAvail] = useState<KeyAvailability[]>([]);
+  const [returnedAt, setReturnedAt] = useState(new Date().toISOString().slice(0, 10));
 
   // All open custody records; filtered to the chosen client below so a preset
   // row narrows the list without hiding the rest of the registry.
@@ -683,24 +693,72 @@ export function CheckInModal({
   }, [selectedId, open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const lines = selectedLines(picks);
+
+  // ── Manual entry derivations ──────────────────────────────────────────────
+  const manualHolderName = manualMode === 'self' ? (me?.name ?? '') : (manualHolder?.name ?? '');
+  const manualHolderType: 'employee' | 'ic' = manualMode === 'self' ? 'employee' : (manualHolder?.type ?? 'employee');
+  const manualLines = selectedLines(manualPicks);
+  // Manual entry only appears once the list has loaded and come back empty —
+  // otherwise it would flash on screen while the candidates are still arriving.
+  const manualEntry = !loading && candidates.length === 0;
+
+  useEffect(() => {
+    if (!manualEntry || !account) { setManualAvail([]); return; }
+    getKeyAvailability(account.id)
+      .then((d) => setManualAvail(d.types))
+      .catch(() => setManualAvail([]));
+    setManualPicks({});
+  }, [manualEntry, account]);
+
+  useEffect(() => {
+    setManualEmail(manualMode === 'self' ? (me?.email ?? '') : (manualHolder?.email ?? ''));
+  }, [manualMode, manualHolder, me?.email]);
   const totalReturning = lines.reduce((n, l) => n + l.qty, 0);
   const totalOut = selected?.keys.reduce((n, k) => n + k.qty, 0) ?? 0;
   const isPartial = !!selected && selected.keys.length > 0 && totalReturning < totalOut;
-  const canSubmit = !!selected && (selected.keys.length === 0 || lines.length > 0) && !saving
-    && (!!selected.holder_email || notifyAnyway);
+  const canSubmit = saving ? false : (
+    selected
+      ? (selected.keys.length === 0 || lines.length > 0)
+        && (!!selected.holder_email || notifyAnyway)
+      // Manual entry needs a holder, a client and at least one key. No email
+      // gate: a return is a fact worth recording even if nobody can be told.
+      : manualEntry && !!manualHolderName && !!account && manualLines.length > 0
+  );
+  const submitCount = selected ? totalReturning : manualLines.reduce((n, l) => n + l.qty, 0);
 
   const submit = async () => {
-    if (!selected) return;
     setSaving(true); setError('');
     try {
-      const r = await checkin({
-        id: selected.id,
-        keys: selected.keys.length ? lines : undefined,
-        condition_on_return: condition,
-        notes: notes.trim() || null,
-        on_behalf: (me?.name ?? '').trim().toLowerCase() !== selected.holder.trim().toLowerCase(),
+      // Two shapes, one endpoint. Against an open record we name it; with
+      // nothing on file we send the whole entry and the server reconciles it,
+      // creating and closing the record in one step. A check-in must never be
+      // a dead end just because the check-OUT was never captured.
+      const r = selected
+        ? await checkin({
+          id: selected.id,
+          keys: selected.keys.length ? lines : undefined,
+          condition_on_return: condition,
+          notes: notes.trim() || null,
+          on_behalf: (me?.name ?? '').trim().toLowerCase() !== selected.holder.trim().toLowerCase(),
+        })
+        : await checkin({
+          holder: manualHolderName,
+          holder_email: manualEmail.trim() || null,
+          holder_type: manualHolderType,
+          holder_id: manualHolder?.id ?? null,
+          account_id: account?.id,
+          keys: manualLines,
+          condition_on_return: condition,
+          returned_at: returnedAt || null,
+          notes: notes.trim() || null,
+        });
+      setDone({
+        mail: r.email, partial: r.partial,
+        holder: selected ? selected.holder : manualHolderName,
+        link: r.signoff_link,
+        reconciled: !!(r as any).reconciled,
+        form: (r as any).key_form ?? null,
       });
-      setDone({ mail: r.email, partial: r.partial, holder: selected.holder, link: r.signoff_link });
       onDone();
     } catch (e: any) {
       setError(e?.message || 'Check-in failed');
@@ -718,14 +776,31 @@ export function CheckInModal({
               ? <>Partial return recorded for <span className="font-semibold">{done.holder}</span>. The remaining keys stay checked out.</>
               : <>All keys returned by <span className="font-semibold">{done.holder}</span>. The record moved to Checked In.</>}
           </div>
+          {done.reconciled && (
+            <div className="rounded border border-cw-border bg-[#f4f4f2] px-3 py-2 text-sm text-cw-text">
+              No check-out existed for these keys, so the record was created and closed together.
+              It is marked as a reconciling entry in the audit trail.
+            </div>
+          )}
+          {done.form && (
+            <div className="rounded border border-cw-border bg-white px-3 py-2 text-sm text-cw-text">
+              Key Form <span className="font-mono font-semibold">{done.form.form_no}</span> generated —{' '}
+              {done.form.total_keys} key{done.form.total_keys === 1 ? '' : 's'} now on record for {done.holder}.
+              It is listed under the <strong>Key Forms</strong> tab.
+            </div>
+          )}
           <MailBanner mail={done.mail} kind="checkin" />
-          <div className="text-xs text-cw-muted">
-            Return signature link (48-hour expiry) — also included in the email:
-            <div className="mt-1 font-mono break-all bg-gray-50 border border-cw-border rounded px-2 py-1.5">{done.link}</div>
-          </div>
-          <p className="text-xs text-cw-muted">
-            The record shows <span className="font-semibold text-[#7a5a00]">Awaiting signature</span> until {done.holder} signs.
-          </p>
+          {done.link ? (
+            <>
+              <div className="text-xs text-cw-muted">
+                Return signature link (48-hour expiry) — also included in the email:
+                <div className="mt-1 font-mono break-all bg-gray-50 border border-cw-border rounded px-2 py-1.5">{done.link}</div>
+              </div>
+              <p className="text-xs text-cw-muted">
+                The record shows <span className="font-semibold text-[#7a5a00]">Awaiting signature</span> until {done.holder} signs.
+              </p>
+            </>
+          ) : null}
         </div>
         <div className="flex gap-2 pt-4 border-t border-gray-200 mt-4">
           <button onClick={onClose} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] transition-colors">Done</button>
@@ -756,29 +831,71 @@ export function CheckInModal({
               </option>
             ))}
           </select>
-          {/* A dead end is not an error message. If nothing is on record, the
-              reason is almost always that the keys predate the system — so say
-              that, and offer the way out. */}
-          {!loading && candidates.length === 0 && (
-            <div className="mt-2 rounded border border-[#e8cf8a] bg-[#fff8e6] px-3 py-2.5">
-              <p className="text-sm text-[#7a5a00]">
-                {account
-                  ? <>No keys are on record at <strong>{account.name}</strong>.</>
-                  : <>No keys are on record as checked out.</>}
-                {' '}If they already hold keys, use <strong>Establish Custody</strong> first.
-              </p>
-              {onEstablish && (
-                <button
-                  type="button"
-                  onClick={onEstablish}
-                  className="mt-2 inline-flex items-center gap-1.5 h-[30px] px-3 rounded text-xs font-medium bg-[#C0272D] text-white hover:bg-[#a82227] transition-colors"
-                >
-                  Establish Custody{account ? ` for ${account.name}` : ''}
-                </button>
-              )}
+          {/* Nothing on record is not an error — it is the common case for keys
+              that predate the system. Say so, and open the full entry form
+              below rather than refusing the return. */}
+          {manualEntry && (
+            <div className="mt-2 rounded border border-[#e8cf8a] bg-[#fff8e6] px-3 py-2.5 text-sm text-[#7a5a00]">
+              {account
+                ? <>No keys are on record at <strong>{account.name}</strong>.</>
+                : <>No keys are on record as checked out.</>}
+              {' '}Enter the return below — it will be recorded even though no check-out exists.
             </div>
           )}
         </div>
+
+        {/* ── Manual entry: the same field set as a check-out ───────────────
+            Holder, client, keys, condition, date, notes. This is what makes a
+            check-in work with or without a prior record. */}
+        {manualEntry && (
+          <>
+            <div>
+              <SectionLabel>Who is returning the keys</SectionLabel>
+              <HolderPicker
+                mode={manualMode} setMode={setManualMode}
+                holder={manualHolder} setHolder={setManualHolder}
+                placeholder="— Select the person returning the keys —"
+              />
+              <div className="mt-3">
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Holder email <span className="text-gray-400 font-normal">— receives the confirmation</span>
+                </label>
+                <input
+                  type="email"
+                  className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
+                  value={manualEmail}
+                  onChange={(e) => setManualEmail(e.target.value)}
+                  placeholder="name@example.com"
+                />
+              </div>
+            </div>
+
+            <div>
+              <SectionLabel>Keys being returned</SectionLabel>
+              {!account ? (
+                <p className="text-sm text-cw-muted">Choose a client above to list its key types.</p>
+              ) : (
+                <KeyPickerList
+                  rows={manualAvail.map((k) => ({ type: k.type, label: k.label, available: k.site_total }))}
+                  picks={manualPicks}
+                  setPicks={setManualPicks}
+                  availableLabel="on record at this client"
+                  emptyNote="No key inventory recorded for this client."
+                />
+              )}
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Date returned</label>
+              <input
+                type="date"
+                className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
+                value={returnedAt}
+                onChange={(e) => setReturnedAt(e.target.value)}
+              />
+            </div>
+          </>
+        )}
 
         {selected && (
           <>
@@ -844,7 +961,7 @@ export function CheckInModal({
 
       <div className="flex items-center gap-2 pt-4 border-t border-gray-200 mt-4">
         <button onClick={submit} disabled={!canSubmit} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-          {saving ? 'Checking in…' : `Check In${totalReturning ? ` ${totalReturning} Key${totalReturning === 1 ? '' : 's'}` : ''}`}
+          {saving ? 'Checking in…' : `Check In${submitCount ? ` ${submitCount} Key${submitCount === 1 ? '' : 's'}` : ''}`}
         </button>
         <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
         <span className="text-[11px] text-gray-400 ml-auto">Emails the holder and Cara · sends a signature form.</span>

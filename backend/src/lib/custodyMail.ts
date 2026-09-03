@@ -354,102 +354,6 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
   return sendBranded(subject, html, text, [d.holderEmail || '', ...notifyAddresses()]);
 }
 
-/**
- * Opening balance: the holder already has these keys. Everything here says
- * "currently holds", never "received" — the custody predates this record, and
- * wording it as a hand-over would misstate when it began.
- */
-export interface EstablishMail extends CustodyParty {
-  keys: KeyLine[];
-  /** Every client this one acknowledgement covers (bulk rollout). */
-  sites?: { client: string; bcNumber?: string | null; keys: KeyLine[] }[];
-  recordedAt: string;
-  heldSince: string | null;
-  recordedBy: string;
-  notes?: string | null;
-  signoffLink: string | null;
-  noEmailReason?: string | null;
-}
-
-export async function sendEstablishNotice(d: EstablishMail): Promise<MailResult> {
-  const multi = !!(d.sites && d.sites.length > 1);
-  const clientLabel = multi ? `${d.sites!.length} client sites` : d.client;
-
-  const noEmailBanner = !d.holderEmail
-    ? `<div style="margin:0 0 20px;padding:16px;border:2px solid ${CW_RED};border-radius:4px;background:#fbeaea">
-         <div style="font-weight:700;color:${CW_RED};font-size:15px;margin-bottom:4px">
-           No signature sent — ${esc(d.holder)} has no email on file.
-         </div>
-         <p style="margin:0;font-size:13px;color:${CW_CHARCOAL}">
-           The custody record exists, but nobody has acknowledged it. Add an email and resend, or
-           capture a signature in person from the Key Registry.
-         </p>
-         ${d.noEmailReason ? `<p style="margin:8px 0 0;font-size:12px;color:${CW_MUTED}">Reason given: ${esc(d.noEmailReason)}</p>` : ''}
-       </div>`
-    : '';
-
-  const subject = subjectFor('Key custody recorded', d.holder, clientLabel);
-
-  // An opening balance is not a transaction — say so plainly, so nobody reads
-  // this as "keys went out today".
-  const openingNote = `<p style="margin:0 0 16px;font-size:13px;color:${CW_CHARCOAL};background:${CW_BG};border-left:4px solid ${CW_RED};padding:10px 14px;border-radius:3px">
-       This is an <strong>opening balance</strong> — a record of keys ${esc(d.holder)} already holds.
-       No keys changed hands today.
-     </p>`;
-
-  const siteTables = multi
-    ? d.sites!.map((sN) => `<div style="margin-bottom:16px">
-         <div style="font-weight:700;color:${CW_RED};font-size:13px;margin-bottom:6px">
-           ${esc(sN.client)}${sN.bcNumber ? ` (BC #${esc(sN.bcNumber)})` : ''}
-         </div>
-         ${keyTable(sN.keys, 'Key type held')}
-       </div>`).join('')
-    : keyTable(d.keys, 'Key type held');
-
-  const html = brandedShell(
-    'Key custody recorded',
-    `${d.holder} currently holds keys for ${clientLabel}.`,
-    `${noEmailBanner}${openingNote}
-     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
-       ${detailRows([
-         ['Holder', `${d.holder} (${holderTypeLabel(d.holderType)})`],
-         [multi ? 'Clients' : 'Client',
-           multi ? clientLabel : (d.bcNumber ? `${d.client} (BC #${d.bcNumber})` : d.client)],
-         ['Keys held since', d.heldSince ? `${fmtDay(d.heldSince)} (approximate)` : 'Not stated'],
-         ['Recorded', fmtDate(d.recordedAt)],
-         ['Recorded by', d.recordedBy],
-         ...(d.notes ? [['Notes', d.notes] as [string, string]] : []),
-       ])}
-     </table>
-     ${siteTables}
-     ${d.signoffLink ? signoffBlock(d.signoffLink, 'established') : ''}`,
-    !!logoBytes(),
-  );
-
-  const text = [
-    subject,
-    ...(!d.holderEmail
-      ? [`** NO SIGNATURE SENT — ${d.holder} has no email on file. Manual follow-up required. **`,
-         ...(d.noEmailReason ? [`   Reason given: ${d.noEmailReason}`] : []), '']
-      : []),
-    'This is an OPENING BALANCE — keys already held. No keys changed hands today.',
-    '',
-    `Holder: ${d.holder} (${holderTypeLabel(d.holderType)})`,
-    `${multi ? 'Clients' : 'Client'}: ${multi ? clientLabel : d.client}${!multi && d.bcNumber ? ` (BC #${d.bcNumber})` : ''}`,
-    `Keys held since: ${d.heldSince ? `${fmtDay(d.heldSince)} (approximate)` : 'Not stated'}`,
-    `Recorded by: ${d.recordedBy}`,
-    ...(d.notes ? [`Notes: ${d.notes}`] : []),
-    '',
-    ...(multi
-      ? d.sites!.flatMap((sN) => [`${sN.client}:`, ...sN.keys.map((k) => `  ${k.qty} × ${k.label}`)])
-      : ['Keys currently held:', ...d.keys.map((k) => `  ${k.qty} × ${k.label}`)]),
-    ...(d.signoffLink
-      ? ['', `Confirm you hold these keys (expires in 48 hours): ${d.signoffLink}`] : []),
-  ].join('\n');
-
-  return sendBranded(subject, html, text, [d.holderEmail || '', ...notifyAddresses()]);
-}
-
 export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
   const subject = subjectFor('Keys returned', d.holder, d.client);
 
@@ -500,6 +404,84 @@ export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
  * failure stated in the body rather than an email that quietly has no
  * attachment.
  */
+// ── Key Form delivery ────────────────────────────────────────────────────────
+/**
+ * A Key Form is a statement of everything a person holds. The email carries the
+ * PDF and, when the form is still unsigned, a link to acknowledge it.
+ */
+export interface KeyFormMail {
+  formNo: string;
+  eventLabel: string;
+  holder: string;
+  holderRole: string | null;
+  clients: number;
+  totalKeys: number;
+  lines: { client: string; bc_client_number?: string | null; subtotal: number }[];
+  signLink: string | null;
+  signed: boolean;
+  pdf: MailAttachment | null;
+  /** Explicit recipients — the holder, Cara, and any custom audit address. */
+  recipients: string[];
+}
+
+export async function sendKeyForm(d: KeyFormMail): Promise<MailResult> {
+  const subject = `Key Form ${d.formNo} — ${d.holder} — ${d.totalKeys} key${d.totalKeys === 1 ? '' : 's'}`;
+
+  const clientRows = d.lines.length
+    ? d.lines.map((l) => `<tr>
+         <td style="padding:8px 14px;border-top:1px solid ${CW_BORDER};color:${CW_CHARCOAL}">
+           ${esc(l.client)}${l.bc_client_number ? `<span style="color:${CW_MUTED};font-size:12px"> · BC #${esc(l.bc_client_number)}</span>` : ''}
+         </td>
+         <td align="right" style="padding:8px 14px;border-top:1px solid ${CW_BORDER};font-weight:700;color:${CW_CHARCOAL}">${l.subtotal}</td>
+       </tr>`).join('')
+    : `<tr><td colspan="2" style="padding:12px 14px;color:${CW_MUTED}">No keys currently held.</td></tr>`;
+
+  const html = brandedShell(
+    `Key Form ${d.formNo}`,
+    `${d.holder} currently holds ${d.totalKeys} key${d.totalKeys === 1 ? '' : 's'} across ${d.clients} client${d.clients === 1 ? '' : 's'}.`,
+    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
+       ${detailRows([
+         ['Form', d.formNo],
+         ['Holder', d.holderRole ? `${d.holder} (${d.holderRole})` : d.holder],
+         ['Generated by', d.eventLabel],
+         ['Status', d.signed ? 'Signed' : 'Awaiting signature'],
+       ])}
+     </table>
+     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid ${CW_BORDER};border-radius:4px;border-collapse:separate;overflow:hidden">
+       <tr style="background:${CW_CHARCOAL};color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:1px">
+         <th align="left" style="padding:10px 14px;font-weight:600">Client</th>
+         <th align="right" style="padding:10px 14px;font-weight:600">Keys</th>
+       </tr>
+       ${clientRows}
+       <tr style="background:${CW_BG}">
+         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};font-weight:700;color:${CW_CHARCOAL}">Total keys held</td>
+         <td align="right" style="padding:10px 14px;border-top:2px solid ${CW_RED};font-weight:700;color:${CW_RED}">${d.totalKeys}</td>
+       </tr>
+     </table>
+     ${d.signLink && !d.signed ? signoffBlock(d.signLink, 'established') : ''}
+     ${d.pdf
+       ? `<p style="margin:20px 0 0;font-size:12px;color:${CW_MUTED}">The Key Form PDF is attached. It contains no door or alarm codes.</p>`
+       : ''}`,
+    !!logoBytes(),
+  );
+
+  const text = [
+    subject,
+    `Holder: ${d.holder}${d.holderRole ? ` (${d.holderRole})` : ''}`,
+    `Generated by: ${d.eventLabel}`,
+    `Status: ${d.signed ? 'Signed' : 'Awaiting signature'}`,
+    '',
+    'Keys held:',
+    ...(d.lines.length
+      ? d.lines.map((l) => `  ${l.client}${l.bc_client_number ? ` (BC #${l.bc_client_number})` : ''}: ${l.subtotal}`)
+      : ['  None']),
+    `  TOTAL: ${d.totalKeys}`,
+    ...(d.signLink && !d.signed ? ['', `Acknowledge this form (expires in 48 hours): ${d.signLink}`] : []),
+  ].join('\n');
+
+  return sendBranded(subject, html, text, d.recipients, d.pdf ? [d.pdf] : undefined);
+}
+
 export async function sendSignedReceipt(d: SignedReceiptMail): Promise<MailResult> {
   const subject = subjectFor(
     d.action === 'established' ? 'Signed key custody acknowledgement' : 'Signed key receipt',
