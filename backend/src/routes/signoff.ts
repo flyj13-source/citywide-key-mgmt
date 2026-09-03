@@ -38,9 +38,15 @@ function loadByToken(token: string): Found | { error: string; status: number } {
   // so the column that matched is what decides the direction — never the row's
   // status, which has already flipped to 'returned' by the time the check-in
   // form is opened.
-  const asCheckout = db.prepare('SELECT * FROM key_assignments WHERE signoff_token = ?').get(token) as any;
+  // An opening balance reuses the signoff_token column — it is a custody
+  // OPENING like a check-out — but its acknowledgement must say "I currently
+  // hold", never "I am receiving", so `origin` decides the direction.
+  const asCheckout = db.prepare('SELECT * FROM key_assignments WHERE signoff_token = ? ORDER BY id LIMIT 1').get(token) as any;
   const found: Found | null = asCheckout
-    ? { row: Object.assign({}, asCheckout), action: 'checkout' }
+    ? {
+        row: Object.assign({}, asCheckout),
+        action: Object.assign({}, asCheckout).origin === 'established' ? 'established' : 'checkout',
+      }
     : (() => {
       const asCheckin = db.prepare('SELECT * FROM key_assignments WHERE checkin_signoff_token = ?').get(token) as any;
       return asCheckin ? { row: Object.assign({}, asCheckin), action: 'checkin' as const } : null;
@@ -48,13 +54,28 @@ function loadByToken(token: string): Found | { error: string; status: number } {
 
   if (!found) return { error: 'Invalid or expired link', status: 404 };
 
-  const expiry = found.action === 'checkout'
-    ? found.row.signoff_expires_at
-    : found.row.checkin_signoff_expires_at;
+  // An opening balance lives in the CHECK-OUT token columns — it is a custody
+  // opening — so only a check-IN reads the checkin_* expiry.
+  const expiry = found.action === 'checkin'
+    ? found.row.checkin_signoff_expires_at
+    : found.row.signoff_expires_at;
   if (!expiry || new Date(`${expiry}`.replace(' ', 'T')) < new Date()) {
     return { error: 'This link has expired. Please contact City Wide Boston for a new one.', status: 410 };
   }
   return found;
+}
+
+/**
+ * Every assignment covered by one acknowledgement. A bulk opening balance
+ * writes one row per client but issues a SINGLE token, so signing must resolve
+ * and close all of them together — a signature covering three sites that only
+ * closed one would leave two silently unsigned.
+ */
+function groupRows(row: any): any[] {
+  if (!row.establish_group_id) return [row];
+  return (db.prepare(
+    'SELECT * FROM key_assignments WHERE establish_group_id = ? ORDER BY id'
+  ).all(row.establish_group_id) as any[]).map((r) => Object.assign({}, r));
 }
 
 function publicView({ row, action }: Found) {
@@ -80,6 +101,17 @@ function publicView({ row, action }: Found) {
     // Transfer context — the signer should see who the keys came from / went to.
     is_transfer: !!row.transfer_id,
     transfer_counterparty: counterparty,
+    // Opening balance: the date the holder has had the keys, and — for a bulk
+    // acknowledgement — every client it covers.
+    held_since: row.held_since ?? null,
+    sites: row.establish_group_id
+      ? groupRows(row).map((r) => ({
+        assignment_id: r.id,
+        client: r.account_name,
+        bc_number: bcNumberForAssignment(r),
+        keys: readKeyLines(r),
+      }))
+      : null,
   };
 }
 
@@ -154,6 +186,14 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
       typedName: typed_name,
       signedAt,
       transferCounterparty: counterparty,
+      heldSince: row.held_since ?? null,
+      sites: row.establish_group_id
+        ? groupRows(row).map((r) => ({
+          client: r.account_name,
+          bcNumber: bcNumberForAssignment(r),
+          keys: readKeyLines(r),
+        }))
+        : undefined,
     });
   } catch (err: any) {
     // The signature itself is the legal record — never lose it because the PDF
@@ -161,7 +201,7 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
     pdfError = err?.message || 'PDF generation failed';
   }
 
-  db.prepare(
+  const closeSignature = db.prepare(
     action === 'checkin'
       ? `UPDATE key_assignments
             SET checkin_signed_at=?, checkin_signature_data=?, checkin_signature_hash=?,
@@ -172,7 +212,15 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
                 signature_typed_name=?, pdf_path=?, signoff_token=NULL,
                 signature_status='signed'
           WHERE id=?`
-  ).run(signedAt, signature_data, hash, typed_name, pdfPath, row.id);
+  );
+
+  // One acknowledgement can cover several clients (a bulk opening balance), so
+  // the signature closes every row in the group. Closing only the matched row
+  // would leave the rest looking unsigned forever.
+  const covered = action === 'checkin' ? [row] : groupRows(row);
+  for (const r of covered) {
+    closeSignature.run(signedAt, signature_data, hash, typed_name, pdfPath, r.id);
+  }
 
   // Email the signed PDF to THREE parties: the signer (their own proof), the
   // custody notification recipient from Settings, and — on a person-to-person
@@ -198,23 +246,30 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
 
   const transfer = row.transfer_id ? transferSignatureState(row.transfer_id) : null;
 
-  db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
-    action === 'checkin' ? 'checkin_signed' : 'checkout_signed',
-    row.account_name, row.account_id ?? null, row.assignee,
-    JSON.stringify({
-      assignment_id: row.id,
-      kind: action,
-      holder: row.assignee,
-      holder_type: row.holder_type ?? 'employee',
-      keys, total_keys: totalQty(keys),
-      hash: hash.slice(0, 16),
-      typed_name,
-      pdf: pdfPath ? path.basename(pdfPath) : null,
-      pdf_error: pdfError || undefined,
-      transfer_id: row.transfer_id ?? undefined,
-      transfer_signatures: transfer ? `${transfer.signed} of ${transfer.total}` : undefined,
-    }),
-  );
+  const auditAction = action === 'checkin' ? 'checkin_signed'
+    : action === 'established' ? 'custody_established_signed'
+    : 'checkout_signed';
+  for (const r of covered) {
+    db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
+      auditAction,
+      r.account_name, r.account_id ?? null, r.assignee,
+      JSON.stringify({
+        assignment_id: r.id,
+        kind: action,
+        establish_group_id: r.establish_group_id ?? undefined,
+        covers_clients: covered.length > 1 ? covered.length : undefined,
+        holder: r.assignee,
+        keys: readKeyLines(r), total_keys: totalQty(readKeyLines(r)),
+        holder_type: r.holder_type ?? 'employee',
+        hash: hash.slice(0, 16),
+        typed_name,
+        pdf: pdfPath ? path.basename(pdfPath) : null,
+        pdf_error: pdfError || undefined,
+        transfer_id: r.transfer_id ?? undefined,
+        transfer_signatures: transfer ? `${transfer.signed} of ${transfer.total}` : undefined,
+      }),
+    );
+  }
 
   db.prepare('INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)').run(
     mail.ok ? 'custody_email_sent' : 'custody_email_failed',

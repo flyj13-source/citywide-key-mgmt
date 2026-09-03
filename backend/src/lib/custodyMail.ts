@@ -180,7 +180,7 @@ export interface CheckinMail extends CustodyParty {
 }
 
 export interface SignedReceiptMail extends CustodyParty {
-  action: 'checkout' | 'checkin';
+  action: 'checkout' | 'checkin' | 'established';
   keys: KeyLine[];
   signedAt: string;
   pdf: MailAttachment | null;
@@ -226,10 +226,14 @@ function keyTable(keys: KeyLine[], header: string): string {
  * The red "sign here" call-to-action. Wording differs by direction so the
  * signer is never asked to acknowledge RECEIVING keys they are handing back.
  */
-function signoffBlock(link: string, action: 'checkout' | 'checkin'): string {
+function signoffBlock(link: string, action: 'checkout' | 'checkin' | 'established'): string {
+  // An opening balance confirms keys the holder ALREADY has. Asking them to
+  // acknowledge "receiving" would date the custody to today and misstate it.
   const line = action === 'checkout'
     ? 'Please acknowledge that you are RECEIVING these keys.'
-    : 'Please acknowledge that you are RETURNING these keys.';
+    : action === 'checkin'
+      ? 'Please acknowledge that you are RETURNING these keys.'
+      : 'Please confirm that you CURRENTLY HOLD these keys.';
   return `<div style="margin-top:24px;padding:18px;border:1px solid ${CW_BORDER};border-left:4px solid ${CW_RED};border-radius:4px;background:${CW_BG}">
          <div style="font-weight:700;color:${CW_CHARCOAL};font-size:14px;margin-bottom:6px">Signature required</div>
          <p style="margin:0 0 14px;font-size:13px;color:${CW_MUTED}">
@@ -350,6 +354,102 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
   return sendBranded(subject, html, text, [d.holderEmail || '', ...notifyAddresses()]);
 }
 
+/**
+ * Opening balance: the holder already has these keys. Everything here says
+ * "currently holds", never "received" — the custody predates this record, and
+ * wording it as a hand-over would misstate when it began.
+ */
+export interface EstablishMail extends CustodyParty {
+  keys: KeyLine[];
+  /** Every client this one acknowledgement covers (bulk rollout). */
+  sites?: { client: string; bcNumber?: string | null; keys: KeyLine[] }[];
+  recordedAt: string;
+  heldSince: string | null;
+  recordedBy: string;
+  notes?: string | null;
+  signoffLink: string | null;
+  noEmailReason?: string | null;
+}
+
+export async function sendEstablishNotice(d: EstablishMail): Promise<MailResult> {
+  const multi = !!(d.sites && d.sites.length > 1);
+  const clientLabel = multi ? `${d.sites!.length} client sites` : d.client;
+
+  const noEmailBanner = !d.holderEmail
+    ? `<div style="margin:0 0 20px;padding:16px;border:2px solid ${CW_RED};border-radius:4px;background:#fbeaea">
+         <div style="font-weight:700;color:${CW_RED};font-size:15px;margin-bottom:4px">
+           No signature sent — ${esc(d.holder)} has no email on file.
+         </div>
+         <p style="margin:0;font-size:13px;color:${CW_CHARCOAL}">
+           The custody record exists, but nobody has acknowledged it. Add an email and resend, or
+           capture a signature in person from the Key Registry.
+         </p>
+         ${d.noEmailReason ? `<p style="margin:8px 0 0;font-size:12px;color:${CW_MUTED}">Reason given: ${esc(d.noEmailReason)}</p>` : ''}
+       </div>`
+    : '';
+
+  const subject = subjectFor('Key custody recorded', d.holder, clientLabel);
+
+  // An opening balance is not a transaction — say so plainly, so nobody reads
+  // this as "keys went out today".
+  const openingNote = `<p style="margin:0 0 16px;font-size:13px;color:${CW_CHARCOAL};background:${CW_BG};border-left:4px solid ${CW_RED};padding:10px 14px;border-radius:3px">
+       This is an <strong>opening balance</strong> — a record of keys ${esc(d.holder)} already holds.
+       No keys changed hands today.
+     </p>`;
+
+  const siteTables = multi
+    ? d.sites!.map((sN) => `<div style="margin-bottom:16px">
+         <div style="font-weight:700;color:${CW_RED};font-size:13px;margin-bottom:6px">
+           ${esc(sN.client)}${sN.bcNumber ? ` (BC #${esc(sN.bcNumber)})` : ''}
+         </div>
+         ${keyTable(sN.keys, 'Key type held')}
+       </div>`).join('')
+    : keyTable(d.keys, 'Key type held');
+
+  const html = brandedShell(
+    'Key custody recorded',
+    `${d.holder} currently holds keys for ${clientLabel}.`,
+    `${noEmailBanner}${openingNote}
+     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
+       ${detailRows([
+         ['Holder', `${d.holder} (${holderTypeLabel(d.holderType)})`],
+         [multi ? 'Clients' : 'Client',
+           multi ? clientLabel : (d.bcNumber ? `${d.client} (BC #${d.bcNumber})` : d.client)],
+         ['Keys held since', d.heldSince ? `${fmtDay(d.heldSince)} (approximate)` : 'Not stated'],
+         ['Recorded', fmtDate(d.recordedAt)],
+         ['Recorded by', d.recordedBy],
+         ...(d.notes ? [['Notes', d.notes] as [string, string]] : []),
+       ])}
+     </table>
+     ${siteTables}
+     ${d.signoffLink ? signoffBlock(d.signoffLink, 'established') : ''}`,
+    !!logoBytes(),
+  );
+
+  const text = [
+    subject,
+    ...(!d.holderEmail
+      ? [`** NO SIGNATURE SENT — ${d.holder} has no email on file. Manual follow-up required. **`,
+         ...(d.noEmailReason ? [`   Reason given: ${d.noEmailReason}`] : []), '']
+      : []),
+    'This is an OPENING BALANCE — keys already held. No keys changed hands today.',
+    '',
+    `Holder: ${d.holder} (${holderTypeLabel(d.holderType)})`,
+    `${multi ? 'Clients' : 'Client'}: ${multi ? clientLabel : d.client}${!multi && d.bcNumber ? ` (BC #${d.bcNumber})` : ''}`,
+    `Keys held since: ${d.heldSince ? `${fmtDay(d.heldSince)} (approximate)` : 'Not stated'}`,
+    `Recorded by: ${d.recordedBy}`,
+    ...(d.notes ? [`Notes: ${d.notes}`] : []),
+    '',
+    ...(multi
+      ? d.sites!.flatMap((sN) => [`${sN.client}:`, ...sN.keys.map((k) => `  ${k.qty} × ${k.label}`)])
+      : ['Keys currently held:', ...d.keys.map((k) => `  ${k.qty} × ${k.label}`)]),
+    ...(d.signoffLink
+      ? ['', `Confirm you hold these keys (expires in 48 hours): ${d.signoffLink}`] : []),
+  ].join('\n');
+
+  return sendBranded(subject, html, text, [d.holderEmail || '', ...notifyAddresses()]);
+}
+
 export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
   const subject = subjectFor('Keys returned', d.holder, d.client);
 
@@ -401,10 +501,15 @@ export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
  * attachment.
  */
 export async function sendSignedReceipt(d: SignedReceiptMail): Promise<MailResult> {
-  const subject = subjectFor('Signed key receipt', d.holder, d.client);
+  const subject = subjectFor(
+    d.action === 'established' ? 'Signed key custody acknowledgement' : 'Signed key receipt',
+    d.holder, d.client,
+  );
   const actionLine = d.action === 'checkout'
     ? `${d.holder} has signed for RECEIVING these keys.`
-    : `${d.holder} has signed for RETURNING these keys.`;
+    : d.action === 'checkin'
+      ? `${d.holder} has signed for RETURNING these keys.`
+      : `${d.holder} has confirmed CURRENTLY HOLDING these keys.`;
 
   const attachNote = d.pdf
     ? `<p style="margin:20px 0 0;font-size:12px;color:${CW_MUTED}">The signed PDF receipt is attached to this email.</p>`
@@ -419,7 +524,8 @@ export async function sendSignedReceipt(d: SignedReceiptMail): Promise<MailResul
     `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
        ${detailRows([
          ...partyRows(d),
-         ['Action', d.action === 'checkout' ? 'Received keys' : 'Returned keys'],
+         ['Action', d.action === 'checkout' ? 'Received keys'
+           : d.action === 'checkin' ? 'Returned keys' : 'Confirmed keys already held'],
          ['Signed', fmtDate(d.signedAt)],
          ...(d.witnessedBy
            ? [['Witnessed by', `${d.witnessedBy} (signed in person)`] as [string, string]] : []),
@@ -427,7 +533,8 @@ export async function sendSignedReceipt(d: SignedReceiptMail): Promise<MailResul
            ? [[d.action === 'checkout' ? 'Handed over by' : 'Handed over to', d.counterpartyName] as [string, string]] : []),
        ])}
      </table>
-     ${keyTable(d.keys, d.action === 'checkout' ? 'Key type received' : 'Key type returned')}
+     ${keyTable(d.keys, d.action === 'checkout' ? 'Key type received'
+       : d.action === 'checkin' ? 'Key type returned' : 'Key type held')}
      ${attachNote}`,
     !!logoBytes(),
   );

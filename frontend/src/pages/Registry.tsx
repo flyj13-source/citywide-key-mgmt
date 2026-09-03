@@ -13,6 +13,7 @@ import { ActionRow, ActionGroup, ActionDivider, ActionButton } from '../componen
 import {
   IconCheckOut, IconCheckIn, IconTransfer, IconCustomer, IconIC, IconManagerAdd,
   IconImport, IconReport, IconExport, IconReassign, IconDelete, IconCheck, IconSelect,
+  IconEstablish,
 } from '../components/Icons';
 import SignInPersonModal from '../components/SignInPersonModal';
 import { ManagerRosterTable, type RosterChip } from '../components/ManagerRoster';
@@ -21,6 +22,7 @@ import ManagerModal from '../components/ManagerModal';
 import SelectionToolbar, { selectionCapabilities } from '../components/SelectionToolbar';
 import BulkArchiveModal from '../components/BulkArchiveModal';
 import { useBulkSelect } from '../lib/useBulkSelect';
+import EstablishCustodyModal from '../components/EstablishCustodyModal';
 import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
 import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getManagerRoster, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, getSignatureGaps, bulkArchiveAccounts,
   type Assignment, type SignatureGaps, type ManagerRosterRow, type UnmatchedManager,
@@ -1140,6 +1142,11 @@ export default function Registry() {
   const [custodyTotal, setCustodyTotal] = useState(0);
   const [custodySort, setCustodySort] = useState<SortState>({ key: 'checked_out_at', dir: 'desc' });
   const [checkOutOpen, setCheckOutOpen] = useState(false);
+  // Opening balances. `clients` is set from a bulk selection; otherwise the
+  // selected row (or nothing) seeds the single-client form.
+  const [establishFor, setEstablishFor] = useState<
+    { account: { id: number; name: string } | null; clients?: { id: number; name: string }[] } | null
+  >(null);
   const [checkInFor, setCheckInFor] = useState<
     { assignmentId: number | null; account: { id: number; name: string } | null } | null
   >(null);
@@ -1422,6 +1429,14 @@ export default function Registry() {
     setShowExport(true);
   };
 
+  // One holder, every selected client, ONE acknowledgement — the rollout tool.
+  const doBulkEstablish = () => {
+    setEstablishFor({
+      account: null,
+      clients: bulk.selectedItems.map((i) => ({ id: i.id, name: i.ic_company_name })),
+    });
+  };
+
   const doBulkReassign = (sharedManager: string | null) => {
     // Pre-fill with exactly the clients that were ticked.
     setReassign({ name: sharedManager, role: 'am', clientIds: [...bulk.selected] });
@@ -1567,6 +1582,15 @@ export default function Registry() {
                 label="Transfer Keys"
                 onClick={() => setTransferFor({ account: selectedSnapshot, holder: null })}
                 title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Hand keys straight from one person to another'}
+              />
+              <ActionButton
+                weight="primary"
+                icon={<IconEstablish />}
+                label="Establish Custody"
+                onClick={() => setEstablishFor({ account: selectedSnapshot })}
+                title={selectedSnapshot
+                  ? `Record keys already held at ${selectedSnapshot.name}`
+                  : 'Record keys someone already holds — an opening balance, not a check-out'}
               />
             </ActionGroup>
 
@@ -1852,6 +1876,7 @@ export default function Registry() {
                 onExport={doBulkExport}
                 onReassign={doBulkReassign}
                 onCheckOut={doBulkCheckOut}
+                onEstablish={doBulkEstablish}
                 onArchive={() => { setBulkArchiveError(''); setBulkArchiveOpen(true); }}
               />
             )}
@@ -1993,10 +2018,25 @@ export default function Registry() {
         />
       )}
 
+      {establishFor && (
+        <EstablishCustodyModal
+          presetAccount={establishFor.account}
+          presetClients={establishFor.clients}
+          onClose={() => setEstablishFor(null)}
+          onDone={onCustodyChanged}
+        />
+      )}
+
       {checkInFor && (
         <CheckInModal
           presetAccount={checkInFor.account}
           presetAssignmentId={checkInFor.assignmentId}
+          onEstablish={() => {
+            // Straight from the dead end into the fix, carrying the client.
+            const acct = checkInFor.account;
+            setCheckInFor(null);
+            setEstablishFor({ account: acct });
+          }}
           onClose={() => setCheckInFor(null)}
           onDone={onCustodyChanged}
         />

@@ -30,7 +30,7 @@ interface Copy {
   keysHeader: string;
 }
 
-const COPY: Record<'checkout' | 'checkin', Copy> = {
+const COPY: Record<'checkout' | 'checkin' | 'established', Copy> = {
   checkout: {
     pageTitle: 'Key Receipt Acknowledgement',
     lead: 'please review the keys below and sign to confirm you received them.',
@@ -66,6 +66,26 @@ const COPY: Record<'checkout' | 'checkin', Copy> = {
     doneBody: (holder, client) =>
       `Thank you, ${holder}. Your signed return receipt for ${client} has been stored securely with City Wide Boston.`,
     keysHeader: 'Key type returned',
+  },
+  // An opening balance. The signer ALREADY has these keys — often for years —
+  // so every line confirms a state that exists rather than a hand-over today.
+  established: {
+    pageTitle: 'Key Custody Acknowledgement',
+    lead: 'please confirm the keys below are the ones you currently hold.',
+    detailsTitle: 'Custody details',
+    checkboxLabel: 'I confirm I currently hold these keys',
+    terms: [
+      'I will safeguard all keys and access credentials',
+      'I will not duplicate or share keys with unauthorized personnel',
+      'I will return all keys immediately upon request or at the end of my assignment',
+      'I will report any lost or stolen keys to City Wide Boston within 24 hours',
+    ],
+    submitLabel: 'Submit signature & confirm custody',
+    submitBusy: 'Generating signed acknowledgement…',
+    doneTitle: 'Custody confirmed',
+    doneBody: (holder, client) =>
+      `Thank you, ${holder}. Your signed acknowledgement for ${client} has been stored securely with City Wide Boston.`,
+    keysHeader: 'Key type held',
   },
 };
 
@@ -127,7 +147,12 @@ export default function KeySignoff() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  const action: 'checkout' | 'checkin' = data?.action === 'checkin' ? 'checkin' : 'checkout';
+  const action: 'checkout' | 'checkin' | 'established' =
+    data?.action === 'checkin' ? 'checkin'
+    : data?.action === 'established' ? 'established'
+    : 'checkout';
+  // A bulk opening balance covers several clients under ONE acknowledgement.
+  const sites = data?.sites ?? null;
   const copy = COPY[action];
 
   // The typed name is the second factor: a drawn mark on its own identifies
@@ -197,7 +222,9 @@ export default function KeySignoff() {
           Hello <strong>{data?.holder}</strong>, {copy.lead}
         </p>
         <p className="mt-3 text-sm font-semibold text-[#C0272D]">
-          {action === 'checkin' ? 'You are returning these keys.' : 'You are receiving these keys.'}
+          {action === 'checkin' ? 'You are returning these keys.'
+            : action === 'established' ? 'You already hold these keys — this confirms the record.'
+            : 'You are receiving these keys.'}
         </p>
         {data?.is_transfer && data.transfer_counterparty && (
           <p className="mt-2 text-xs text-cw-text bg-[#f4f4f2] border-l-4 border-[#C0272D] rounded px-3 py-2">
@@ -213,14 +240,26 @@ export default function KeySignoff() {
           <h2 className="text-white font-semibold text-sm">{copy.detailsTitle}</h2>
         </div>
         <dl className="px-5 py-4 text-sm grid grid-cols-[130px_1fr] gap-y-2">
-          <dt className="text-cw-muted">Client</dt>
+          <dt className="text-cw-muted">{sites && sites.length > 1 ? 'Clients' : 'Client'}</dt>
           <dd className="font-medium">
-            {data?.client}
-            {data?.bc_number && <span className="text-cw-muted font-normal"> · BC #{data.bc_number}</span>}
+            {sites && sites.length > 1
+              ? `${sites.length} client sites — listed below`
+              : <>{data?.client}
+                  {data?.bc_number && <span className="text-cw-muted font-normal"> · BC #{data.bc_number}</span>}</>}
           </dd>
           <dt className="text-cw-muted">Holder</dt>
           <dd className="font-medium">{data?.holder} <span className="text-cw-muted font-normal">({data?.holder_type === 'ic' ? 'Independent Contractor' : 'City Wide Employee'})</span></dd>
-          <dt className="text-cw-muted">Checked out</dt><dd className="font-medium">{fmt(data?.checked_out_at ?? null)}</dd>
+          <dt className="text-cw-muted">{action === 'established' ? 'Recorded' : 'Checked out'}</dt>
+          <dd className="font-medium">{fmt(data?.checked_out_at ?? null)}</dd>
+          {action === 'established' && (
+            <>
+              <dt className="text-cw-muted">Keys held since</dt>
+              <dd className="font-medium">
+                {data?.held_since ? fmtDay(data.held_since) : 'Not stated'}
+                <span className="text-cw-muted font-normal"> · approximate</span>
+              </dd>
+            </>
+          )}
           {action === 'checkin' ? (
             <>
               <dt className="text-cw-muted">Returned</dt><dd className="font-medium">{fmt(data?.returned_at ?? null)}</dd>
@@ -231,9 +270,9 @@ export default function KeySignoff() {
                   : '—'}
               </dd>
             </>
-          ) : (
+          ) : action === 'checkout' ? (
             <><dt className="text-cw-muted">Due back</dt><dd className="font-medium">{fmtDay(data?.due_at ?? null)}</dd></>
-          )}
+          ) : null}
           {data?.recorded_by && (<><dt className="text-cw-muted">Recorded by</dt><dd className="font-medium">{data.recorded_by}</dd></>)}
         </dl>
         <table className="w-full text-sm border-t border-cw-border">
@@ -244,15 +283,37 @@ export default function KeySignoff() {
             </tr>
           </thead>
           <tbody>
-            {data?.keys.map((k) => (
-              <tr key={k.type} className="border-t border-gray-100">
-                <td className="px-5 py-2.5">{k.label}</td>
-                <td className="px-5 py-2.5 text-right font-semibold">{k.qty}</td>
-              </tr>
-            ))}
+            {/* One acknowledgement can cover several clients. Group the keys by
+                site so the signer sees exactly what they are confirming where —
+                a flat list would ask them to vouch for totals they cannot check. */}
+            {sites && sites.length > 1
+              ? sites.flatMap((site) => [
+                <tr key={`site-${site.assignment_id}`} className="border-t border-gray-100 bg-[#faf9f8]">
+                  <td colSpan={2} className="px-5 py-2 text-xs font-bold text-[#C0272D] uppercase tracking-wide">
+                    {site.client}
+                    {site.bc_number && <span className="text-cw-muted font-normal normal-case tracking-normal"> · BC #{site.bc_number}</span>}
+                  </td>
+                </tr>,
+                ...site.keys.map((k) => (
+                  <tr key={`${site.assignment_id}-${k.type}`} className="border-t border-gray-100">
+                    <td className="px-5 py-2.5 pl-9">{k.label}</td>
+                    <td className="px-5 py-2.5 text-right font-semibold">{k.qty}</td>
+                  </tr>
+                )),
+              ])
+              : data?.keys.map((k) => (
+                <tr key={k.type} className="border-t border-gray-100">
+                  <td className="px-5 py-2.5">{k.label}</td>
+                  <td className="px-5 py-2.5 text-right font-semibold">{k.qty}</td>
+                </tr>
+              ))}
             <tr className="border-t-2 border-cw-red bg-[#f4f4f2]">
               <td className="px-5 py-2.5 font-bold">Total</td>
-              <td className="px-5 py-2.5 text-right font-bold text-cw-red">{data?.total_keys}</td>
+              <td className="px-5 py-2.5 text-right font-bold text-cw-red">
+                {sites && sites.length > 1
+                  ? sites.reduce((n, x) => n + x.keys.reduce((m, k) => m + k.qty, 0), 0)
+                  : data?.total_keys}
+              </td>
             </tr>
           </tbody>
         </table>

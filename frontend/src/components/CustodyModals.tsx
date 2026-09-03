@@ -190,7 +190,7 @@ export function MissingEmailWarning({
 
 // A client picker that pre-fills from the selected registry row and otherwise
 // searches the whole registry server-side (the list is 578+ rows).
-function ClientPicker({
+export function ClientPicker({
   value, onSelect,
 }: {
   value: { id: number; name: string } | null;
@@ -243,9 +243,9 @@ function ClientPicker({
 // Every key type available AT the client, each with a checkbox and a quantity.
 // Quantity is clamped to what is actually left, and a type with nothing left is
 // disabled rather than silently accepting an impossible number.
-interface Pick { checked: boolean; qty: number }
+export interface Pick { checked: boolean; qty: number }
 
-function KeyPickerList({
+export function KeyPickerList({
   rows, picks, setPicks, availableLabel = 'available', emptyNote,
 }: {
   rows: { type: KeyTypeKey; label: string; available: number; hint?: string }[];
@@ -305,20 +305,22 @@ function KeyPickerList({
   );
 }
 
-function selectedLines(picks: Record<string, Pick>): { type: KeyTypeKey; qty: number }[] {
+export function selectedLines(picks: Record<string, Pick>): { type: KeyTypeKey; qty: number }[] {
   return Object.entries(picks)
     .filter(([, p]) => p.checked && p.qty > 0)
     .map(([type, p]) => ({ type: type as KeyTypeKey, qty: p.qty }));
 }
 
 // ── "Recording for" picker (self-service vs on-behalf) ───────────────────────
-function HolderPicker({
-  mode, setMode, holder, setHolder,
+export function HolderPicker({
+  mode, setMode, holder, setHolder, placeholder = '— Select the person receiving the keys —',
 }: {
   mode: 'self' | 'other';
   setMode: (m: 'self' | 'other') => void;
   holder: HolderOption | null;
   setHolder: (h: HolderOption | null) => void;
+  /** Overridden for opening balances, where nobody is RECEIVING anything. */
+  placeholder?: string;
 }) {
   const me = getManager();
   const [options, setOptions] = useState<{ employees: HolderOption[]; ics: HolderOption[] }>({ employees: [], ics: [] });
@@ -370,7 +372,7 @@ function HolderPicker({
             }}
             size={1}
           >
-            <option value="">{loading ? 'Loading roster…' : '— Select the person receiving the keys —'}</option>
+            <option value="">{loading ? 'Loading roster…' : placeholder}</option>
             {filtered.employees.length > 0 && (
               <optgroup label="City Wide Employees">
                 {filtered.employees.map((o) => (
@@ -618,10 +620,13 @@ export function CheckOutModal({
 // ── Check In modal ───────────────────────────────────────────────────────────
 
 export function CheckInModal({
-  presetAccount, presetAssignmentId, onClose, onDone,
+  presetAccount, presetAssignmentId, onEstablish, onClose, onDone,
 }: {
   presetAccount: { id: number; name: string } | null;
   presetAssignmentId?: number | null;
+  /** Offered when nothing is on record — the keys almost certainly predate
+   *  the system, and Establish Custody is the way forward. */
+  onEstablish?: () => void;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -751,10 +756,27 @@ export function CheckInModal({
               </option>
             ))}
           </select>
+          {/* A dead end is not an error message. If nothing is on record, the
+              reason is almost always that the keys predate the system — so say
+              that, and offer the way out. */}
           {!loading && candidates.length === 0 && (
-            <p className="text-sm text-cw-muted mt-2">
-              {account ? `No keys are currently checked out for ${account.name}.` : 'Nothing is currently checked out.'}
-            </p>
+            <div className="mt-2 rounded border border-[#e8cf8a] bg-[#fff8e6] px-3 py-2.5">
+              <p className="text-sm text-[#7a5a00]">
+                {account
+                  ? <>No keys are on record at <strong>{account.name}</strong>.</>
+                  : <>No keys are on record as checked out.</>}
+                {' '}If they already hold keys, use <strong>Establish Custody</strong> first.
+              </p>
+              {onEstablish && (
+                <button
+                  type="button"
+                  onClick={onEstablish}
+                  className="mt-2 inline-flex items-center gap-1.5 h-[30px] px-3 rounded text-xs font-medium bg-[#C0272D] text-white hover:bg-[#a82227] transition-colors"
+                >
+                  Establish Custody{account ? ` for ${account.name}` : ''}
+                </button>
+              )}
+            </div>
           )}
         </div>
 

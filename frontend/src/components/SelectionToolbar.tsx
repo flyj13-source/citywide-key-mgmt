@@ -11,7 +11,7 @@
 
 import type { ReactNode } from 'react';
 import type { AccountIdItem } from '../lib/api';
-import { IconCheckOut, IconExport, IconReassign, IconDelete } from './Icons';
+import { IconCheckOut, IconExport, IconReassign, IconDelete, IconEstablish } from './Icons';
 
 const BTN =
   'inline-flex items-center gap-1.5 h-[30px] px-2.5 rounded text-xs font-medium ' +
@@ -80,6 +80,15 @@ export function selectionCapabilities(items: AccountIdItem[]) {
             : `The selected sites span ${managers.size} different account managers — reassign works on one manager's clients at a time`,
         };
 
+  // Establishing custody is the ONE bulk custody action that makes sense: it is
+  // an opening balance per client for one holder, and unlike a check-out it
+  // carries no per-site due date or hand-over event to invent.
+  const establish = n === 0
+    ? { ok: false as const, reason: 'Select at least one customer site' }
+    : !allCustomers
+      ? { ok: false as const, reason: 'Establish Custody applies to customer sites only' }
+      : { ok: true as const, reason: '' };
+
   const alreadyArchived = items.filter((i) => i.archived === 1).length;
   const archive = n === 0
     ? { ok: false as const, reason: 'Select at least one record' }
@@ -87,13 +96,13 @@ export function selectionCapabilities(items: AccountIdItem[]) {
       ? { ok: false as const, reason: 'Every selected record is already archived' }
       : { ok: true as const, reason: '' };
 
-  return { checkOut, reassign, archive, allCustomers, alreadyArchived, customers };
+  return { checkOut, establish, reassign, archive, allCustomers, alreadyArchived, customers };
 }
 
 export default function SelectionToolbar({
   count, total, pageCount, allMatching, items, canDelete,
   promoting, promoteError,
-  onPromote, onClear, onExport, onReassign, onCheckOut, onArchive,
+  onPromote, onClear, onExport, onReassign, onCheckOut, onEstablish, onArchive,
 }: {
   count: number;
   total: number;
@@ -108,6 +117,7 @@ export default function SelectionToolbar({
   onExport: () => void;
   onReassign: (sharedManager: string | null) => void;
   onCheckOut: () => void;
+  onEstablish: () => void;
   onArchive: () => void;
 }) {
   const cap = selectionCapabilities(items);
@@ -146,6 +156,10 @@ export default function SelectionToolbar({
 
         <div className="flex flex-wrap items-center gap-2 justify-end">
           <BarButton icon={<IconExport size={14} />} label="Export selected" onClick={onExport} primary />
+          <BarButton
+            icon={<IconEstablish size={14} />} label="Establish Custody"
+            onClick={onEstablish} disabled={!cap.establish.ok} reason={cap.establish.reason}
+          />
           <BarButton
             icon={<IconCheckOut size={14} />} label="Check Out"
             onClick={onCheckOut} disabled={!cap.checkOut.ok} reason={cap.checkOut.reason}

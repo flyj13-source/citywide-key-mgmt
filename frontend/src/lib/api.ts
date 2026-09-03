@@ -302,6 +302,35 @@ export const checkout = (data: {
     signature_status: SignatureStatus; email: MailOutcome;
   }>('/assignments/checkout', { method: 'POST', body: JSON.stringify(data) });
 
+/**
+ * Opening balance: record keys a holder ALREADY has. One holder, one or many
+ * clients — many clients produce one assignment each but a single
+ * acknowledgement covering all of them.
+ */
+export const establishCustody = (data: {
+  holder: string;
+  holder_email?: string | null;
+  holder_type: 'employee' | 'ic';
+  holder_id?: number | null;
+  /** Single-client form. */
+  account_id?: number;
+  keys?: { type: KeyTypeKey; qty: number }[];
+  /** Bulk form — takes precedence when present. */
+  clients?: { account_id: number; keys: { type: KeyTypeKey; qty: number }[] }[];
+  held_since?: string | null;
+  notes?: string | null;
+  no_email_reason?: string | null;
+}) =>
+  req<{
+    establish_group_id: string;
+    created: { id: number; account_id: number; account_name: string }[];
+    clients: number;
+    total_keys: number;
+    signoff_link: string | null;
+    signature_status: SignatureStatus;
+    email: MailOutcome;
+  }>('/assignments/establish', { method: 'POST', body: JSON.stringify(data) });
+
 /** Save an address onto the person's staff/IC record so the gap closes for good. */
 export const saveHolderEmail = (data: {
   holder_type: 'employee' | 'ic'; holder_id: number; email: string;
@@ -483,7 +512,7 @@ export const setCustodyNotification = (value: string) =>
 // Public sign-off portal (no JWT — the 48h token is the credential)
 export interface SignoffView {
   id: number;
-  action: 'checkout' | 'checkin';
+  action: 'checkout' | 'checkin' | 'established';
   holder: string;
   holder_type: 'employee' | 'ic';
   client: string;
@@ -499,6 +528,10 @@ export interface SignoffView {
   status: string;
   is_transfer: boolean;
   transfer_counterparty: string | null;
+  /** Opening balances: the approximate date the holder has had the keys. */
+  held_since: string | null;
+  /** Set when ONE acknowledgement covers several clients (bulk rollout). */
+  sites: { assignment_id: number; client: string; bc_number: string | null; keys: KeyLine[] }[] | null;
 }
 export const getSignoffByToken = (token: string) =>
   fetch(`${API_ORIGIN}/api/signoff/${token}`).then((r) => r.json());

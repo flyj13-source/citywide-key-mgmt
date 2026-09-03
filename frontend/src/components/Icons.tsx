@@ -153,3 +153,12 @@ export const IconSelect = (p: IconProps) => (
     <path d="M20 12v6a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h9" />
   </Svg>
 );
+
+/** ti-file-check — an opening balance: keys already held, now on record. */
+export const IconEstablish = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+    <path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z" />
+    <path d="M9 15l2 2l4 -4" />
+  </Svg>
+);

@@ -15,7 +15,7 @@ import type { KeyLine } from './custody';
 // "I acknowledge receipt of the keys listed above" would be evidence of the
 // wrong event.
 
-export type CustodyAction = 'checkout' | 'checkin';
+export type CustodyAction = 'checkout' | 'checkin' | 'established';
 
 export interface CustodyReceiptData {
   assignmentId: number;
@@ -39,6 +39,14 @@ export interface CustodyReceiptData {
   witnessedBy?: string | null;
   /** Set when this receipt is one half of a person-to-person transfer. */
   transferCounterparty?: string | null;
+  /** Approximate date the holder has had these keys (opening balances only). */
+  heldSince?: string | null;
+  /**
+   * Bulk opening balance: ONE acknowledgement covering several clients. When
+   * present the key table is grouped per site instead of being a flat list, so
+   * the signer sees exactly which keys they are confirming at which client.
+   */
+  sites?: { client: string; bcNumber?: string | null; keys: KeyLine[] }[];
 }
 
 const hasZone = (s: string) => /[Tt]/.test(s) || /[Zz]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s);
@@ -82,6 +90,17 @@ const RETURN_ACKNOWLEDGEMENT = [
   'date and time shown below.',
 ];
 
+// An opening balance is NOT a receipt. The holder already has these keys —
+// often for years — so asking them to acknowledge "receipt" would date the
+// custody to the day the software was rolled out and misstate the record.
+// This form confirms a state that already exists.
+const ESTABLISHED_ACKNOWLEDGEMENT = [
+  'I confirm that I currently hold the keys listed above, and agree to:',
+  '(1) safeguard all keys and access credentials, (2) not duplicate or share keys with',
+  'unauthorized personnel, (3) return all keys immediately upon request or upon termination',
+  'of my assignment/contract, and (4) report any lost or stolen keys within 24 hours.',
+];
+
 const COPY: Record<CustodyAction, {
   title: string; subtitle: string; label: string; ack: string[]; sigCaption: string; file: string;
 }> = {
@@ -100,6 +119,14 @@ const COPY: Record<CustodyAction, {
     ack: RETURN_ACKNOWLEDGEMENT,
     sigCaption: 'Electronic Signature — keys returned',
     file: 'keycheckin',
+  },
+  established: {
+    title: 'Key Custody Acknowledgement',
+    subtitle: 'BOSTON — Confirmation of keys already held',
+    label: 'Acknowledgement',
+    ack: ESTABLISHED_ACKNOWLEDGEMENT,
+    sigCaption: 'Electronic Signature — keys currently held',
+    file: 'keycustody',
   },
 };
 
@@ -128,14 +155,23 @@ export async function generateCustodyReceipt(d: CustodyReceiptData): Promise<str
   const rows: [string, string][] = [
     ['Holder', `${d.holder}  (${d.holderType === 'ic' ? 'Independent Contractor' : 'City Wide Employee'})`],
     ['Email', d.holderEmail || '—'],
-    ['Client', d.bcNumber ? `${d.client}  (BC #${d.bcNumber})` : d.client],
-    ['Checked out', fmt(d.checkedOutAt)],
+    d.sites && d.sites.length > 1
+      ? (['Clients', `${d.sites.length} client sites — listed below`] as [string, string])
+      : (['Client', d.bcNumber ? `${d.client}  (BC #${d.bcNumber})` : d.client] as [string, string]),
+    ...(d.action === 'established'
+      ? ([
+        ['Recorded', fmt(d.checkedOutAt)],
+        ['Keys held since', d.heldSince ? `${fmtDay(d.heldSince)}  (approximate)` : 'Not stated'],
+      ] as [string, string][])
+      : ([['Checked out', fmt(d.checkedOutAt)]] as [string, string][])),
     ...(d.action === 'checkout'
       ? ([['Due back', fmtDay(d.dueAt)]] as [string, string][])
-      : ([
-        ['Returned', fmt(d.returnedAt)],
-        ['Condition', CONDITION_LABEL[String(d.condition ?? '')] || d.condition || '—'],
-      ] as [string, string][])),
+      : d.action === 'checkin'
+        ? ([
+          ['Returned', fmt(d.returnedAt)],
+          ['Condition', CONDITION_LABEL[String(d.condition ?? '')] || d.condition || '—'],
+        ] as [string, string][])
+        : []),
     ...(d.transferCounterparty
       ? ([[d.action === 'checkout' ? 'Received from' : 'Handed to', d.transferCounterparty]] as [string, string][])
       : []),
@@ -155,15 +191,37 @@ export async function generateCustodyReceipt(d: CustodyReceiptData): Promise<str
   y -= 20;
 
   let total = 0;
-  d.keys.forEach((k, i) => {
-    total += k.qty;
-    if (i % 2 === 0) {
-      page.drawRectangle({ x: 36, y: y - 4, width: width - 72, height: 18, color: CW_LIGHT });
+  if (d.sites && d.sites.length > 1) {
+    // One acknowledgement, several sites: each client gets its own sub-heading
+    // so the signer can see which keys belong to which site.
+    let stripe = 0;
+    for (const site of d.sites) {
+      page.drawText(
+        site.bcNumber ? `${site.client}  (BC #${site.bcNumber})` : site.client,
+        { x: 44, y: y + 1, size: 10, font: bold, color: CW_RED },
+      );
+      y -= 16;
+      for (const k of site.keys) {
+        total += k.qty;
+        if (stripe++ % 2 === 0) {
+          page.drawRectangle({ x: 36, y: y - 4, width: width - 72, height: 18, color: CW_LIGHT });
+        }
+        page.drawText(`    ${k.label}`, { x: 44, y: y + 1, size: 10, font: regular, color: CW_CHARCOAL });
+        page.drawText(String(k.qty), { x: width - 90, y: y + 1, size: 10, font: bold, color: CW_CHARCOAL });
+        y -= 18;
+      }
     }
-    page.drawText(k.label, { x: 44, y: y + 1, size: 10, font: regular, color: CW_CHARCOAL });
-    page.drawText(String(k.qty), { x: width - 90, y: y + 1, size: 10, font: bold, color: CW_CHARCOAL });
-    y -= 18;
-  });
+  } else {
+    d.keys.forEach((k, i) => {
+      total += k.qty;
+      if (i % 2 === 0) {
+        page.drawRectangle({ x: 36, y: y - 4, width: width - 72, height: 18, color: CW_LIGHT });
+      }
+      page.drawText(k.label, { x: 44, y: y + 1, size: 10, font: regular, color: CW_CHARCOAL });
+      page.drawText(String(k.qty), { x: width - 90, y: y + 1, size: 10, font: bold, color: CW_CHARCOAL });
+      y -= 18;
+    });
+  }
 
   page.drawLine({ start: { x: 36, y: y + 10 }, end: { x: width - 36, y: y + 10 }, thickness: 1.5, color: CW_RED });
   y -= 4;

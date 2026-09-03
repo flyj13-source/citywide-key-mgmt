@@ -317,6 +317,20 @@ assignmentNeeded.push(
   // receive both signed PDFs.
   ['counterparty_name', 'TEXT'],
   ['counterparty_email', 'TEXT'],
+  // ── Opening balances ─────────────────────────────────────────────────────
+  // People already held keys before this system existed, so a check-IN had
+  // nothing to close against. `origin` separates HOW a row began without
+  // touching `status`, which still means "these keys are out with someone":
+  //   'checked_out'  — a transaction this system recorded
+  //   'established'  — an opening balance: keys already held, acknowledged
+  // Keeping status as 'checked_out' is deliberate. Twenty-six queries across
+  // ten files gate availability, archiving and reporting on that value; a
+  // second "keys are out" status would have to be added to every one of them,
+  // and a single miss would let a site be archived or over-checked-out while
+  // keys are genuinely in someone's pocket.
+  ['origin', "TEXT DEFAULT 'checked_out'"],
+  ['held_since', 'TEXT'],                 // approximate date the holder has had them
+  ['establish_group_id', 'TEXT'],         // one acknowledgement spanning many clients
 );
 for (const [col, def] of assignmentNeeded) {
   if (!assignmentCols.includes(col)) db.exec(`ALTER TABLE key_assignments ADD COLUMN ${col} ${def}`);

@@ -10,7 +10,7 @@ import {
   summarizeKeys, totalQty, KeyLine, bcNumberFor, bcNumberForAssignment,
   transferSignatureState,
 } from '../lib/custody';
-import { sendCheckoutNotice, sendCheckinNotice, sendSignedReceipt, caraAddress, MailResult } from '../lib/custodyMail';
+import { sendCheckoutNotice, sendCheckinNotice, sendEstablishNotice, sendSignedReceipt, caraAddress, MailResult } from '../lib/custodyMail';
 import { hashSignature } from '../lib/pdf';
 import { generateCustodyReceipt } from '../lib/custodyPdf';
 
@@ -219,7 +219,7 @@ function custodySummary(actor: string, verb: 'checkout' | 'checkin', holder: str
     : `${holder} recorded their own ${verb}`;
 }
 
-function logMail(req: AuthRequest, result: MailResult, kind: 'checkout' | 'checkin', accountName: string, accountId: number | null, holder: string) {
+function logMail(req: AuthRequest, result: MailResult, kind: 'checkout' | 'checkin' | 'established', accountName: string, accountId: number | null, holder: string) {
   logAudit(req, result.ok ? 'custody_email_sent' : 'custody_email_failed', accountName, accountId, {
     kind, holder, recipients: result.recipients, error: result.error, skipped: result.skipped || undefined,
   });
@@ -361,6 +361,191 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
   res.status(201).json({
     id,
     assignment: serializeAssignment(row),
+    signoff_link: signoffLink,
+    signature_status: signatureStatus,
+    email: {
+      ok: mail.ok, recipients: mail.recipients, error: mail.error,
+      attempts: mail.attempts, cara: caraAddress(),
+    },
+  });
+});
+
+// ── POST /api/assignments/establish ──────────────────────────────────────────
+// OPENING BALANCES. People held keys long before this system existed, so a
+// check-IN had no record to close against and simply failed. This records what
+// someone ALREADY holds and asks them to confirm it.
+//
+// It is deliberately NOT a check-out:
+//   • origin='established' marks the row as an opening balance, so reports can
+//     separate "we handed these over" from "they already had them".
+//   • status stays 'checked_out' — that value means "these keys are out with
+//     someone", which is exactly true here, and twenty-six queries across ten
+//     files gate availability, archiving and reporting on it. A second status
+//     meaning the same thing would have to be added to every one, and one miss
+//     would let a site be archived while keys are in someone's pocket.
+//   • The acknowledgement says "I currently hold", never "I am receiving" —
+//     signing a receipt would date the custody to today and misstate it.
+//
+// Accepts ONE holder and one OR MANY clients. Many clients produce one row per
+// client but a SINGLE acknowledgement covering all of them (Cara has hundreds
+// of these to do; asking a contractor to sign eleven forms is not a rollout).
+router.post('/establish', requireAuth, async (req: AuthRequest, res: Response) => {
+  const body = req.body || {};
+  const actor = req.manager?.name ?? 'System';
+
+  const holder = cleanText(body.holder ?? body.assignee);
+  if (!holder) return res.status(400).json({ error: 'A holder is required' });
+  const holder_email = cleanText(body.holder_email ?? body.assignee_email);
+  const holder_type = body.holder_type === 'ic' ? 'ic' : 'employee';
+  const holder_id = body.holder_id != null && body.holder_id !== '' ? Number(body.holder_id) : null;
+
+  // One shape for both cases: a single client is a one-entry list.
+  const rawSites = Array.isArray(body.clients) && body.clients.length
+    ? body.clients
+    : [{ account_id: body.account_id, keys: body.keys }];
+
+  const sites: { account: any; account_id: number; account_name: string; lines: KeyLine[] }[] = [];
+  for (const entry of rawSites) {
+    const account_id = entry?.account_id != null && entry.account_id !== '' ? Number(entry.account_id) : null;
+    if (!account_id) return res.status(400).json({ error: 'A client is required' });
+    const acctRaw = db.prepare('SELECT * FROM accounts WHERE id = ?').get(account_id) as any;
+    if (!acctRaw) return res.status(404).json({ error: `Client ${account_id} not found` });
+    const account = Object.assign({}, acctRaw);
+
+    const parsed = parseKeyLines(entry?.keys);
+    if (parsed.error) return res.status(400).json({ error: `${account.ic_company_name}: ${parsed.error}` });
+    if (!parsed.lines.length) {
+      return res.status(400).json({ error: `${account.ic_company_name}: select at least one key` });
+    }
+    // Availability still applies — an opening balance cannot claim more keys
+    // than the site is recorded as having, or the totals stop meaning anything.
+    const conflict = checkAvailability(account_id, parsed.lines);
+    if (conflict) return res.status(409).json({ error: `${account.ic_company_name}: ${conflict}` });
+
+    sites.push({ account, account_id, account_name: account.ic_company_name, lines: parsed.lines });
+  }
+
+  const held_since = cleanText(body.held_since) || new Date().toISOString().slice(0, 10);
+  const notes = cleanText(body.notes);
+
+  // Same missing-email gate as a check-out: no address means no acknowledgement
+  // can be sent, so the caller must say in writing why it is proceeding unsigned.
+  const no_email_reason = cleanText(body.no_email_reason);
+  if (!holder_email && !no_email_reason) {
+    return res.status(422).json({
+      error: `${holder} has no email on file — an acknowledgement cannot be sent.`,
+      code: 'HOLDER_EMAIL_MISSING',
+      holder,
+      remedies: ['add_email', 'continue_without_signature'],
+    });
+  }
+
+  const recorded_at = new Date().toISOString();
+  const minted = holder_email ? mintToken() : { token: null, expires: null };
+  const groupId = crypto.randomUUID();
+  const initialSigStatus: SignatureStatus = holder_email ? 'awaiting_signature' : 'signature_unavailable';
+
+  const insert = db.prepare(`
+    INSERT INTO key_assignments
+      (account_id, account_name, assignee, assignee_email, key_type, keys_held, keys_json,
+       holder_type, holder_id, recorded_by, checked_out_at, due_at, notes, status,
+       signoff_token, signoff_expires_at, signature_status, no_email_reason,
+       origin, held_since, establish_group_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'checked_out', ?, ?, ?, ?, 'established', ?, ?)
+  `);
+
+  const created: { id: number; account_id: number; account_name: string; lines: KeyLine[] }[] = [];
+
+  db.exec('BEGIN');
+  try {
+    for (const site of sites) {
+      const r = insert.run(
+        site.account_id, site.account_name, holder, holder_email,
+        site.lines[0]?.type ?? 'physical', summarizeKeys(site.lines), JSON.stringify(site.lines),
+        holder_type, holder_id, actor, recorded_at, notes,
+        minted.token, minted.expires, initialSigStatus, no_email_reason,
+        held_since, groupId,
+      );
+      created.push({
+        id: Number(r.lastInsertRowid),
+        account_id: site.account_id, account_name: site.account_name, lines: site.lines,
+      });
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+
+  // One audit entry per client — every record stays individually traceable…
+  for (const c of created) {
+    logAudit(req, 'custody_established', c.account_name, c.account_id, {
+      assignment_id: c.id, establish_group_id: groupId,
+      holder, holder_type, holder_email,
+      actor, keys: c.lines, total_keys: totalQty(c.lines),
+      held_since, origin: 'established',
+      signature_status: initialSigStatus,
+      no_email_reason: no_email_reason || undefined,
+      summary: `${actor} recorded an opening balance: ${holder} already holds keys at ${c.account_name}`,
+    });
+  }
+  // …plus a summary when one acknowledgement spans several.
+  if (created.length > 1) {
+    logAudit(req, 'custody_established_bulk', null, null, {
+      establish_group_id: groupId, holder, holder_type,
+      clients: created.length, client_names: created.map((c) => c.account_name),
+      total_keys: created.reduce((n, c) => n + totalQty(c.lines), 0),
+      held_since, actor,
+    });
+  }
+
+  const signoffLink = minted.token ? signoffLinkFor(minted.token) : null;
+  const first = created[0];
+  const mail = await sendEstablishNotice({
+    holder, holderEmail: holder_email, holderType: holder_type,
+    client: first.account_name,
+    bcNumber: bcNumberFor(sites[0].account),
+    keys: first.lines,
+    sites: created.length > 1
+      ? created.map((c, i) => ({
+        client: c.account_name, bcNumber: bcNumberFor(sites[i].account), keys: c.lines,
+      }))
+      : undefined,
+    recordedAt: recorded_at, heldSince: held_since, recordedBy: actor,
+    notes, signoffLink, noEmailReason: no_email_reason,
+  });
+  logMail(req, mail, 'established', first.account_name, first.account_id, holder);
+
+  let signatureStatus: SignatureStatus = initialSigStatus;
+  if (holder_email && !mail.ok) {
+    signatureStatus = 'signature_send_failed';
+    logAudit(req, 'signature_send_failed', first.account_name, first.account_id, {
+      establish_group_id: groupId, holder, recipients: mail.recipients,
+      attempts: mail.attempts, error: mail.error,
+    });
+  }
+  const stamp = db.prepare(
+    `UPDATE key_assignments
+        SET signature_status = ?, signature_send_attempts = ?, signature_send_error = ?,
+            signature_last_attempt_at = ?
+      WHERE id = ?`
+  );
+  for (const c of created) {
+    stamp.run(signatureStatus, mail.attempts, mail.ok ? null : (mail.error ?? null), new Date().toISOString(), c.id);
+  }
+
+  if (!holder_email) {
+    logAudit(req, 'signature_unavailable', first.account_name, first.account_id, {
+      establish_group_id: groupId, holder, holder_type, reason: no_email_reason,
+      note: 'Opening balance recorded without an acknowledgement — holder has no email on file',
+    });
+  }
+
+  res.status(201).json({
+    establish_group_id: groupId,
+    created: created.map((c) => ({ id: c.id, account_id: c.account_id, account_name: c.account_name })),
+    clients: created.length,
+    total_keys: created.reduce((n, c) => n + totalQty(c.lines), 0),
     signoff_link: signoffLink,
     signature_status: signatureStatus,
     email: {
