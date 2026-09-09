@@ -420,8 +420,11 @@ export interface TestDataResult {
   real_customers: { before: number; after: number; unchanged: boolean };
   error?: string;
 }
-export const resetTestData = () =>
-  req<TestDataResult>('/settings/test-data/reset', { method: 'POST', body: '{}' });
+/** `confirm` must be the literal word RESET — the server checks it too. */
+export const resetTestData = (confirm: string) =>
+  req<TestDataResult>('/settings/test-data/reset', {
+    method: 'POST', body: JSON.stringify({ confirm }),
+  });
 export const seedTestData = () =>
   req<TestDataResult>('/settings/test-data/seed', { method: 'POST', body: '{}' });
 /**

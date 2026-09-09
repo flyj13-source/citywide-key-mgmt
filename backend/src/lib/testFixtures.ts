@@ -21,6 +21,7 @@ export const TEST_VENDOR_NO = '09999900002';
 export const TEST_MANAGER_NAME = 'ZZ Test Manager';
 export const TEST_NO_EMAIL_STAFF_NAME = 'ZZ Test No-Email Staff';
 export const TEST_EMAIL = 'keys@citywidekeys.com';
+export const TEST_CLIENT_NOTES = 'Test fixture — safe to check out, transfer, and reset';
 
 export interface FixtureIds {
   client: number;
@@ -132,13 +133,13 @@ export function seedTestFixtures(): FixtureIds {
         contractor_metal = 2, contractor_card = 0, contractor_fob = 1, contractor_dispenser = 0,
         office_metal = 0, office_card = 0, office_fob = 1, office_dispenser = 1,
         am_keys = 2, ccm_keys = 1, contractor_keys = 3,
-        keys_yn = 1, security_app_yn = 0, lockbox_code = 'TEST',
+        keys_yn = 1, security_app_yn = 1, lockbox_code = 'TEST', notes = ?,
         door_code_encrypted = NULL, door_code_iv = NULL,
         alarm_code_encrypted = NULL, alarm_code_iv = NULL
       WHERE id = ?
     `).run(
       TEST_CLIENT_NAME, TEST_MANAGER_NAME, TEST_MANAGER_NAME,
-      TEST_IC_NAME, TEST_VENDOR_NO, client.id,
+      TEST_IC_NAME, TEST_VENDOR_NO, TEST_CLIENT_NOTES, client.id,
     );
   } else {
     const r = db.prepare(`
@@ -151,7 +152,7 @@ export function seedTestFixtures(): FixtureIds {
         contractor_metal, contractor_card, contractor_fob, contractor_dispenser,
         office_metal, office_card, office_fob, office_dispenser,
         am_keys, ccm_keys, contractor_keys,
-        keys_yn, security_app_yn, lockbox_code
+        keys_yn, security_app_yn, lockbox_code, notes
       ) VALUES (
         ?, ?, 'customer', 'active', 0, 1,
         ?, ?, ?, ?,
@@ -161,11 +162,12 @@ export function seedTestFixtures(): FixtureIds {
         2, 0, 1, 0,
         0, 0, 1, 1,
         2, 1, 3,
-        1, 0, 'TEST'
+        1, 1, 'TEST', ?
       )
     `).run(
       TEST_CLIENT_NAME, TEST_CLIENT_BC,
       TEST_MANAGER_NAME, TEST_MANAGER_NAME, TEST_IC_NAME, TEST_VENDOR_NO,
+      TEST_CLIENT_NOTES,
     );
     client = { id: Number(r.lastInsertRowid) };
     created.push('client');

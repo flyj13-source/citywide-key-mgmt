@@ -66,6 +66,10 @@ describe('TEST FIXTURE EMAILS ARE PREFIXED', () => {
     expect(r.ok).toBe(true);
     expect(sent[0].subject.startsWith('[TEST] ')).toBe(true);
     expect(sent[0].subject).toContain(fx.TEST_MANAGER_NAME);
+    // And it actually goes to the fixture inbox, not a real employee.
+    expect(fx.TEST_EMAIL).toBe('keys@citywidekeys.com');
+    expect(r.recipients).toContain('keys@citywidekeys.com');
+    expect(sent[0].to).toContain('keys@citywidekeys.com');
   });
 
   it('leaves a real recipient\'s subject untouched', async () => {

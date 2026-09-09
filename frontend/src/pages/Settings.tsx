@@ -101,12 +101,14 @@ export default function Settings() {
   const [tdResult, setTdResult] = useState<TestDataResult | null>(null);
   const [tdError, setTdError] = useState('');
   const [tdConfirm, setTdConfirm] = useState(false);
+  const [tdTyped, setTdTyped] = useState('');
 
   const runTestData = async (which: 'reset' | 'seed') => {
     setTdBusy(which); setTdError(''); setTdResult(null);
     try {
-      setTdResult(which === 'reset' ? await resetTestData() : await seedTestData());
+      setTdResult(which === 'reset' ? await resetTestData(tdTyped.trim()) : await seedTestData());
       setTdConfirm(false);
+      setTdTyped('');
     } catch (err: any) {
       setTdError(err?.message || String(err));
     } finally { setTdBusy(null); }
@@ -516,7 +518,7 @@ export default function Settings() {
                 >
                   {tdBusy === 'seed' ? 'Repairing…' : 'Seed / repair fixtures'}
                 </button>
-                {!tdConfirm ? (
+                {!tdConfirm && (
                   <button
                     type="button"
                     onClick={() => setTdConfirm(true)}
@@ -525,26 +527,47 @@ export default function Settings() {
                   >
                     Reset test data…
                   </button>
-                ) : (
-                  <span className="inline-flex items-center gap-2">
+                )}
+              </div>
+              {tdConfirm && (
+                <div className="rounded border-2 border-[#C0272D] bg-[#fbeaea] px-4 py-3 space-y-2">
+                  <div className="text-sm font-semibold text-[#C0272D]">
+                    This deletes every key assignment, key form and audit row belonging to the ZZ TEST
+                    records, then re-seeds the four fixtures.
+                  </div>
+                  <label className="block text-sm text-[#1a1a1a]">
+                    Type <span className="font-mono font-bold">RESET</span> to confirm:
+                  </label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      value={tdTyped}
+                      onChange={(e) => setTdTyped(e.target.value)}
+                      disabled={tdBusy !== null}
+                      className="input w-40 font-mono"
+                      placeholder="RESET"
+                      autoComplete="off"
+                      autoFocus
+                    />
                     <button
                       type="button"
                       onClick={() => runTestData('reset')}
-                      disabled={tdBusy !== null}
-                      className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors"
+                      disabled={tdBusy !== null || tdTyped.trim().toUpperCase() !== 'RESET'}
+                      className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
-                      {tdBusy === 'reset' ? 'Resetting…' : 'Yes — delete test activity'}
+                      {tdBusy === 'reset' ? 'Resetting…' : 'Reset test data'}
                     </button>
                     <button
                       type="button"
-                      onClick={() => setTdConfirm(false)}
+                      onClick={() => { setTdConfirm(false); setTdTyped(''); }}
                       className="px-3 py-2 text-sm text-cw-muted hover:text-[#1a1a1a]"
                     >
                       Cancel
                     </button>
-                  </span>
-                )}
-              </div>
+                  </div>
+                </div>
+              )}
+
               <p className="text-[11px] text-gray-400">
                 Reset deletes only key assignments, key forms and audit rows belonging to the ZZ TEST records,
                 then re-seeds them. Real client and staff data is never in scope — the result below reports the

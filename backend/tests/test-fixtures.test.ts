@@ -124,6 +124,53 @@ describe('§1 THE FOUR FIXTURES', () => {
   });
 });
 
+describe('§1a THE CLIENT IS POPULATED, NOT A SHELL', () => {
+  it('carries every field a workflow needs', () => {
+    fx.seedTestFixtures();
+    const c = scalarRow(
+      'SELECT * FROM accounts WHERE bc_client_number = ? AND record_type = ?',
+      '09999900001', 'customer',
+    );
+    expect(c).toMatchObject({
+      ic_company_name: 'ZZ TEST CLIENT — Do Not Use',
+      account_manager: 'ZZ Test Manager', ccm_manager: 'ZZ Test Manager',
+      ic_name: 'ZZ TEST CONTRACTOR — Do Not Use', bc_vendor_number: '09999900002',
+      keys_yn: 1, security_app_yn: 1,
+      metal_keys: 4, key_cards: 2, has_fob: 2, dispenser_keys: 1,
+      lockbox_code: 'TEST',
+      notes: 'Test fixture — safe to check out, transfer, and reset',
+      is_test: 1,
+    });
+    // Nothing sensitive lives on a test record.
+    expect(c.door_code_encrypted).toBeNull();
+    expect(c.alarm_code_encrypted).toBeNull();
+  });
+
+  it('has a holder grid, so there is something to move', () => {
+    fx.seedTestFixtures();
+    const c = scalarRow('SELECT * FROM accounts WHERE bc_client_number = ?', '09999900001');
+    expect(c).toMatchObject({
+      am_metal: 1, am_card: 1, am_fob: 0, am_dispenser: 0,
+      ccm_metal: 1, ccm_card: 0, ccm_fob: 0, ccm_dispenser: 0,
+      contractor_metal: 2, contractor_card: 0, contractor_fob: 1, contractor_dispenser: 0,
+      office_metal: 0, office_card: 0, office_fob: 1, office_dispenser: 1,
+    });
+  });
+
+  it('a hollowed-out row is refilled by the next seed', () => {
+    const ids = fx.seedTestFixtures();
+    db.prepare(
+      'UPDATE accounts SET security_app_yn = 0, notes = NULL, metal_keys = 0, am_metal = 0 WHERE id = ?'
+    ).run(ids.client);
+    fx.seedTestFixtures();
+    expect(scalarRow('SELECT security_app_yn, notes, metal_keys, am_metal FROM accounts WHERE id = ?', ids.client))
+      .toMatchObject({
+        security_app_yn: 1, metal_keys: 4, am_metal: 1,
+        notes: 'Test fixture — safe to check out, transfer, and reset',
+      });
+  });
+});
+
 describe('§1b THE NO-EMAIL FIXTURE — the failure path needs a subject', () => {
   it('exists as crew with no address, flagged is_test', () => {
     const row = scalarRow(
@@ -207,7 +254,7 @@ describe('§3 THE RESET BUTTON', () => {
       keys: [{ type: 'metal', qty: 1 }],
     });
 
-    const res = await auth(request(app).post('/api/settings/test-data/reset')).send({});
+    const res = await auth(request(app).post('/api/settings/test-data/reset')).send({ confirm: 'RESET' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.real_customers).toMatchObject({ before: 6, after: 6, unchanged: true });
@@ -218,6 +265,29 @@ describe('§3 THE RESET BUTTON', () => {
     expect(scalar("SELECT COUNT(*) AS c FROM accounts WHERE COALESCE(is_test,0)=1")).toBe(2);
   });
 
+  it('refuses to run without the typed confirmation', async () => {
+    const ids = fx.seedTestFixtures();
+    await auth(request(app).post('/api/assignments/checkout')).send({
+      account_id: ids.client, holder: 'ZZ Test Manager',
+      holder_email: 'keys@citywidekeys.com', holder_type: 'employee',
+      keys: [{ type: 'metal', qty: 1 }],
+    });
+    const before = scalar('SELECT COUNT(*) AS c FROM key_assignments');
+    expect(before).toBeGreaterThan(0);
+
+    for (const body of [{}, { confirm: '' }, { confirm: 'yes' }, { confirm: 'reset please' }]) {
+      const res = await auth(request(app).post('/api/settings/test-data/reset')).send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('CONFIRMATION_REQUIRED');
+    }
+    // Nothing was deleted by any of those.
+    expect(scalar('SELECT COUNT(*) AS c FROM key_assignments')).toBe(before);
+
+    // Case-insensitive, whitespace-tolerant — but it has to be the word.
+    const ok = await auth(request(app).post('/api/settings/test-data/reset')).send({ confirm: ' reset ' });
+    expect(ok.status).toBe(200);
+  });
+
   it('is admin only', async () => {
     const bcrypt = (await import('bcryptjs')).default;
     db.prepare("INSERT OR IGNORE INTO managers (name, email, password_hash, role) VALUES ('Viewer','viewer2@citywideboston.com',?, 'manager')")
@@ -225,7 +295,7 @@ describe('§3 THE RESET BUTTON', () => {
     const login = await request(app).post('/api/auth/login')
       .send({ email: 'viewer2@citywideboston.com', password: 'demo1234' });
     const res = await request(app).post('/api/settings/test-data/reset')
-      .set('Authorization', `Bearer ${login.body.token}`).send({});
+      .set('Authorization', `Bearer ${login.body.token}`).send({ confirm: 'RESET' });
     expect(res.status).toBe(403);
   });
 

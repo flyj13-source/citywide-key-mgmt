@@ -109,6 +109,9 @@ router.put('/custody-defaults', requireAuth, (req: AuthRequest, res: Response) =
 
 const isEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
+/** What an admin must type before the reset will run. */
+const RESET_CONFIRM_WORD = 'RESET';
+
 /** Real (non-fixture) customers — the number a reset must never move. */
 function realCustomerCount(): number {
   const row = db.prepare(
@@ -333,6 +336,15 @@ router.post('/email/test', requireAuth, async (req: AuthRequest, res: Response) 
 router.post('/test-data/reset', requireAuth, (req: AuthRequest, res: Response) => {
   if (req.manager?.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
+  }
+  // Typed confirmation, enforced HERE and not only in the UI: this endpoint
+  // deletes rows, and a stray POST should not be able to do that.
+  if (String(req.body?.confirm ?? '').trim().toUpperCase() !== RESET_CONFIRM_WORD) {
+    return res.status(400).json({
+      error: `Type ${RESET_CONFIRM_WORD} to confirm.`,
+      code: 'CONFIRMATION_REQUIRED',
+      required: RESET_CONFIRM_WORD,
+    });
   }
   const before = realCustomerCount();
   try {
