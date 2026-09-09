@@ -119,6 +119,16 @@ export default function Dashboard() {
             value={overdueList.length}
             sub={overdueList.length > 0 ? 'require attention' : 'all on time'}
             color={overdueList.length > 0 ? 'text-red-600' : 'text-green-700'}
+            footer={overdueList.length > 0
+              ? (
+                <Link
+                  to="/registry?tab=checkedout&view=overdue"
+                  className="text-xs text-cw-red hover:underline"
+                >
+                  Triage these →
+                </Link>
+              )
+              : undefined}
           />
           <MetricCard label="Staff Key Holders" value={staffCount} sub="active staff" />
           {/* Signature gap — red whenever anything is unsigned, because an
@@ -185,7 +195,7 @@ export default function Dashboard() {
           <div className="card">
             <div className="px-5 py-4 border-b border-cw-border flex items-center justify-between">
               <h2 className="font-semibold text-sm">Overdue Assignments</h2>
-              <Link to="/registry?tab=checkedout" className="text-xs text-cw-red hover:underline">View all →</Link>
+              <Link to="/registry?tab=checkedout&view=overdue" className="text-xs text-cw-red hover:underline">View all →</Link>
             </div>
             <div className="divide-y divide-cw-border">
               {overdueList.length === 0 ? (

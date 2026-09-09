@@ -17,7 +17,8 @@ import {
   parseScope, serializeForm, snapshotHolder, FORM_EVENT_LABEL,
   type FormEventType,
 } from '../lib/keyForm';
-import { failedSendCount, failedSendIds } from '../lib/keyForm';
+import { failedSendCount, failedSendIds, correctionFormCounts } from '../lib/keyForm';
+import { checkReason, voidKeyForm, acknowledgeKeyForm, MIN_REASON_LENGTH } from '../lib/corrections';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { sendKeyForm, caraAddress, notifyAddresses } from '../lib/custodyMail';
 
@@ -63,7 +64,11 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   });
   // Always returned, regardless of the active filter — the chip has to show
   // the backlog even while the list is filtered to something else.
-  res.json({ forms: rows, total, page, limit, failed_count: failedSendCount() });
+  res.json({
+    forms: rows, total, page, limit,
+    failed_count: failedSendCount(),
+    ...correctionFormCounts(),
+  });
 });
 
 // ── GET /api/key-forms/:id ───────────────────────────────────────────────────
@@ -255,6 +260,92 @@ router.post('/retry-failed', requireAuth, async (req: AuthRequest, res: Response
     results,
     remaining: failedSendCount(),
   });
+});
+
+// ── Corrections on key forms ─────────────────────────────────────────────────
+const FORM_CORRECTION_DENIED = 'Delete access required — contact Cara Angeloni';
+function requireDelete(req: AuthRequest, res: Response): boolean {
+  if (!req.manager?.can_delete) { res.status(403).json({ error: FORM_CORRECTION_DENIED }); return false; }
+  return true;
+}
+
+router.post('/:id(\\d+)/void', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireDelete(req, res)) return;
+  const check = checkReason(req.body?.reason);
+  if (!check.ok) {
+    return res.status(400).json({ error: check.error, code: 'REASON_REQUIRED', min_length: MIN_REASON_LENGTH });
+  }
+  const id = Number(req.params.id);
+  const row = getKeyForm(id);
+  if (!row) return res.status(404).json({ error: 'Form not found' });
+  const out = voidKeyForm(id, check.reason, req.manager?.name ?? 'System');
+  if (!out) return res.status(409).json({ error: 'This form is already voided.', code: 'ALREADY_VOIDED' });
+
+  logAudit(req, 'key_form_voided', null, null, {
+    form_id: id, form_no: row.form_no, holder: row.holder_name,
+    previous_status: out.previous_status, reason: check.reason,
+    voided_by: req.manager?.name ?? 'System',
+  });
+  res.json({ ok: true, form: serializeForm(getKeyForm(id)), reason: check.reason });
+});
+
+router.post('/:id(\\d+)/acknowledge', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireDelete(req, res)) return;
+  const check = checkReason(req.body?.reason);
+  if (!check.ok) {
+    return res.status(400).json({ error: check.error, code: 'REASON_REQUIRED', min_length: MIN_REASON_LENGTH });
+  }
+  const id = Number(req.params.id);
+  const row = getKeyForm(id);
+  if (!row) return res.status(404).json({ error: 'Form not found' });
+  const out = acknowledgeKeyForm(id, check.reason, req.manager?.name ?? 'System');
+  if (out && 'refused' in out) return res.status(409).json({ error: out.refused });
+  if (!out) return res.status(409).json({ error: 'This form is already acknowledged.' });
+
+  logAudit(req, 'key_form_acknowledged_unsigned', null, null, {
+    form_id: id, form_no: row.form_no, holder: row.holder_name,
+    previous_status: out.previous_status, reason: check.reason,
+    acknowledged_by: req.manager?.name ?? 'System',
+    signature_collected: false,
+  });
+  res.json({ ok: true, form: serializeForm(getKeyForm(id)), reason: check.reason });
+});
+
+// ── POST /api/key-forms/bulk-correct ────────────────────────────────────────
+router.post('/bulk-correct', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireDelete(req, res)) return;
+  const action = req.body?.action === 'acknowledge' ? 'acknowledge' : 'void';
+  const check = checkReason(req.body?.reason);
+  if (!check.ok) {
+    return res.status(400).json({ error: check.error, code: 'REASON_REQUIRED', min_length: MIN_REASON_LENGTH });
+  }
+  const ids: number[] = Array.isArray(req.body?.ids)
+    ? (req.body.ids as any[]).map(Number).filter((n) => Number.isInteger(n) && n > 0)
+    : [];
+  if (!ids.length) return res.status(400).json({ error: 'No forms selected' });
+  if (ids.length > 200) return res.status(400).json({ error: 'Too many forms at once (max 200)' });
+
+  const actor = req.manager?.name ?? 'System';
+  const applied: number[] = [];
+  const skipped: { id: number; why: string }[] = [];
+  for (const id of [...new Set(ids)]) {
+    const row = getKeyForm(id);
+    if (!row) { skipped.push({ id, why: 'not found' }); continue; }
+    const out = action === 'void'
+      ? voidKeyForm(id, check.reason, actor)
+      : acknowledgeKeyForm(id, check.reason, actor);
+    if (!out || 'refused' in out) {
+      skipped.push({ id, why: out && 'refused' in out ? out.refused : 'already applied' });
+      continue;
+    }
+    applied.push(id);
+    logAudit(req, action === 'void' ? 'key_form_voided' : 'key_form_acknowledged_unsigned', null, null, {
+      form_id: id, form_no: row.form_no, holder: row.holder_name,
+      reason: check.reason, by: actor, bulk: true,
+      ...(action === 'acknowledge' ? { signature_collected: false } : {}),
+    });
+  }
+  res.json({ ok: true, action, applied: applied.length, skipped, ids: applied });
 });
 
 // ── PUBLIC: GET /api/key-forms/token/:token — the signature page ─────────────

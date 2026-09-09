@@ -7,8 +7,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Modal from './Modal';
+import CorrectionModal, { type CorrectionAction } from './CorrectionModal';
+import { getManager } from '../lib/auth';
 import {
   getKeyFormDocs, generateKeyFormDocs, sendKeyFormDoc, bulkSendKeyFormDocs, retryFailedKeyForms,
+  bulkCorrectKeyForms,
   downloadKeyFormDocPdf, getHolders,
   type KeyFormDoc, type HolderOption,
 } from '../lib/api';
@@ -28,6 +31,9 @@ const STATUS_FILTERS = [
   { key: 'sent', label: 'Sent' },
   { key: 'signed', label: 'Signed' },
   { key: 'unsigned', label: 'Unsigned' },
+  // Corrections. Voided forms are hidden from every other view.
+  { key: 'voided', label: 'Voided' },
+  { key: 'acknowledged_unsigned', label: 'Acknowledged · unsigned' },
   // Not a stored status: a failed send leaves the row 'unsigned', which is
   // also what a never-sent form reads as. The server filters on send_error.
   { key: 'send_failed', label: 'Failed to send' },
@@ -35,6 +41,28 @@ const STATUS_FILTERS = [
 
 /** Status is the thing an auditor scans for, so it carries real colour. */
 function StatusPill({ status, noEmail }: { status: string; noEmail: boolean }) {
+  // Corrections outrank everything else the pill would say — including the
+  // no-email warning, which is moot once the form is voided or settled.
+  if (status === 'voided') {
+    return (
+      <span
+        title="Voided — this form should not exist"
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#eeeeec] text-[#6b6b68] border border-[#d5d5d1] line-through"
+      >
+        Voided
+      </span>
+    );
+  }
+  if (status === 'acknowledged_unsigned') {
+    return (
+      <span
+        title="Acknowledged without a signature — no signature was collected"
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#f2efe6] text-[#7a6a45] border border-[#ddd2b6]"
+      >
+        Ackd · unsigned
+      </span>
+    );
+  }
   if (noEmail && status !== 'signed') {
     return (
       <span
@@ -290,6 +318,8 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
   const [failedCount, setFailedCount] = useState(0);
   const [retrying, setRetrying] = useState(false);
   const [retryResult, setRetryResult] = useState<string | null>(null);
+  const canCorrect = !!getManager()?.can_delete;
+  const [correcting, setCorrecting] = useState<{ action: CorrectionAction; ids: number[] } | null>(null);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -404,10 +434,47 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
             Send Selected ({selected.size})
           </button>
         )}
+        {selected.size > 0 && canCorrect && (
+          <>
+            <button
+              onClick={() => setCorrecting({ action: 'acknowledge', ids: [...selected] })}
+              className="px-3 h-[34px] rounded text-sm font-medium bg-white border border-[#1a1a1a] text-[#1a1a1a] hover:border-[#7a6a45] hover:text-[#7a6a45] transition-colors"
+            >
+              Mark acknowledged
+            </button>
+            <button
+              onClick={() => setCorrecting({ action: 'void', ids: [...selected] })}
+              className="px-3 h-[34px] rounded text-sm font-medium bg-[#C0272D] text-white hover:bg-[#a82227] transition-colors"
+            >
+              Void selected
+            </button>
+          </>
+        )}
         <button onClick={() => setShowGenerate(true)} className="px-3 h-[34px] rounded text-sm font-medium bg-[#C0272D] text-white hover:bg-[#a82227] transition-colors">
           Generate Key Form
         </button>
       </div>
+
+      {correcting && (
+        <CorrectionModal
+          action={correcting.action}
+          target="form"
+          count={correcting.ids.length}
+          sample={forms.filter((f) => correcting.ids.includes(f.id)).map((f) => `${f.form_no} — ${f.holder_name}`)}
+          onClose={() => setCorrecting(null)}
+          onConfirm={async (reason) => {
+            const r = await bulkCorrectKeyForms(correcting.action, correcting.ids, reason);
+            const skipped = r.skipped.length ? `, ${r.skipped.length} skipped` : '';
+            setRetryResult(
+              `✓ ${r.applied} form${r.applied === 1 ? '' : 's'} `
+              + `${correcting.action === 'void' ? 'voided' : 'acknowledged'}${skipped}.`
+            );
+            setCorrecting(null);
+            setSelected(new Set());
+            load();
+          }}
+        />
+      )}
 
       {retryResult && (
         <div className={`rounded border px-3 py-2 text-sm ${

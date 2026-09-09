@@ -25,6 +25,9 @@ import KeyFormsTab from '../components/KeyFormsTab';
 import BulkArchiveModal from '../components/BulkArchiveModal';
 import { useBulkSelect } from '../lib/useBulkSelect';
 import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
+import CorrectionModal, { type CorrectionAction } from '../components/CorrectionModal';
+import { getCorrectionCounts, voidAssignment, acknowledgeAssignment, bulkCorrectAssignments,
+  type CorrectionCounts } from '../lib/api';
 import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getManagerRoster, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, getSignatureGaps, bulkArchiveAccounts,
   type Assignment, type SignatureGaps, type ManagerRosterRow, type UnmatchedManager,
   type StaffManager } from '../lib/api';
@@ -1179,6 +1182,32 @@ export default function Registry() {
   >(null);
   // "Missing signatures" narrows the Checked Out tab to what Cara has to chase.
   const [signatureFilter, setSignatureFilter] = useState(searchParams.get('signature') === 'missing');
+  // ── Corrections ───────────────────────────────────────────────────────────
+  // `view` drives the Overdue / Awaiting / Voided / Acknowledged chips. Read
+  // from the URL so the dashboard's overdue card can link straight into the
+  // filtered list rather than dropping Cara on an unfiltered page.
+  const [custodyView, setCustodyView] = useState(searchParams.get('view') ?? '');
+  const [correctionCounts, setCorrectionCounts] = useState<CorrectionCounts | null>(null);
+  const [correcting, setCorrecting] = useState<
+    { action: CorrectionAction; rows: Assignment[] } | null
+  >(null);
+  const canCorrect = !!getManager()?.can_delete;
+  // Custody-tab selection, kept separate from the account-row bulk machinery:
+  // different rows, different actions, and mixing them would let an account
+  // selection leak into a custody correction.
+  const [custodySelected, setCustodySelected] = useState<Set<number>>(new Set());
+  const toggleCustodyRow = useCallback((id: number) => {
+    setCustodySelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const loadCorrectionCounts = useCallback(() => {
+    getCorrectionCounts().then(setCorrectionCounts).catch(() => setCorrectionCounts(null));
+  }, []);
+  useEffect(() => { loadCorrectionCounts(); }, [loadCorrectionCounts]);
   const [gaps, setGaps] = useState<SignatureGaps | null>(null);
   const LIMIT = 50;
 
@@ -1273,6 +1302,7 @@ export default function Registry() {
         page: String(page),
         limit: String(LIMIT),
         ...(signatureFilter && tab === 'checkedout' ? { signature: 'missing' } : {}),
+        ...(custodyView ? { view: custodyView } : {}),
         ...(showTest ? { include_test: '1' } : {}),
       });
       setCustody(data.assignments);
@@ -1280,7 +1310,13 @@ export default function Registry() {
     } finally {
       setCustodyLoading(false);
     }
-  }, [tab, debouncedSearch, custodySort, page, signatureFilter, showTest]);
+  }, [tab, debouncedSearch, custodySort, page, signatureFilter, custodyView, showTest]);
+
+  // A filter change must never leave a tick behind on a row that is no longer
+  // on screen — the bulk action would then hit something invisible.
+  useEffect(() => {
+    setCustodySelected(new Set());
+  }, [tab, debouncedSearch, custodyView, signatureFilter, page, showTest]);
 
   // Signature-gap counts drive the filter chip and the dashboard card.
   const loadGaps = useCallback(() => {
@@ -1828,6 +1864,35 @@ export default function Registry() {
           </div>
         )}
 
+        {/* Correction / triage chips. One row, one place to work through the
+            backlog: what is late, what is unsigned, and what has been settled. */}
+        {isCustodyTab && tab === 'checkedout' && correctionCounts && (
+          <div className="flex flex-wrap items-center gap-2">
+            {([
+              ['', 'Active', null],
+              ['overdue', 'Overdue', correctionCounts.overdue],
+              ['awaiting_signature', 'Awaiting signature', correctionCounts.awaiting_signature],
+              ['voided', 'Voided', correctionCounts.voided],
+              ['acknowledged_unsigned', 'Acknowledged · unsigned', correctionCounts.acknowledged_unsigned],
+            ] as [string, string, number | null][]).map(([key, label, count]) => (
+              // A chip with nothing behind it is noise; Active always shows.
+              (count === null || count > 0 || custodyView === key) && (
+                <button
+                  key={key || 'active'}
+                  onClick={() => { setCustodyView(key); setPage(1); }}
+                  className={`px-3 py-1.5 text-xs font-medium rounded border transition-colors ${
+                    custodyView === key
+                      ? 'bg-[#1a1a1a] text-white border-[#1a1a1a]'
+                      : 'border-cw-border text-[#1a1a1a] hover:border-[#1a1a1a]'
+                  }`}
+                >
+                  {label}{count !== null ? ` (${count})` : ''}
+                </button>
+              )
+            ))}
+          </div>
+        )}
+
         {/* Missing-signature filter — only meaningful on the active-custody tab */}
         {isCustodyTab && tab === 'checkedout' && gaps && (
           <div className="flex flex-wrap items-center gap-3">
@@ -1857,6 +1922,39 @@ export default function Registry() {
           </div>
         )}
 
+        {/* Bulk correction bar — only while rows are actually ticked. */}
+        {isCustodyTab && tab === 'checkedout' && canCorrect && custodySelected.size > 0 && (
+          <div className="flex flex-wrap items-center gap-3 rounded border-2 border-[#1a1a1a] bg-[#f4f4f2] px-4 py-2.5">
+            <span className="text-sm font-semibold text-[#1a1a1a]">
+              {custodySelected.size} record{custodySelected.size === 1 ? '' : 's'} selected
+            </span>
+            <button
+              onClick={() => setCorrecting({
+                action: 'acknowledge',
+                rows: custody.filter((a) => custodySelected.has(a.id)),
+              })}
+              className="px-3 h-[34px] rounded text-sm font-medium bg-white border border-[#1a1a1a] text-[#1a1a1a] hover:border-[#7a6a45] hover:text-[#7a6a45] transition-colors"
+            >
+              Mark acknowledged
+            </button>
+            <button
+              onClick={() => setCorrecting({
+                action: 'void',
+                rows: custody.filter((a) => custodySelected.has(a.id)),
+              })}
+              className="px-3 h-[34px] rounded text-sm font-medium bg-[#C0272D] text-white hover:bg-[#a82227] transition-colors"
+            >
+              Void selected
+            </button>
+            <button
+              onClick={() => setCustodySelected(new Set())}
+              className="text-sm text-cw-muted hover:text-[#1a1a1a] ml-auto"
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
         {/* Custody · Roster (AMs / CCMs) · CW Employees · Archived · client table */}
         {isCustodyTab ? (
           tab === 'checkedout' ? (
@@ -1875,6 +1973,14 @@ export default function Registry() {
               })}
               onNotice={setNotice}
               onSignInPerson={(a, kind) => setSignInPersonFor({ assignment: a, kind })}
+              canCorrect={canCorrect}
+              onCorrect={(a, action) => setCorrecting({ action, rows: [a] })}
+              selected={custodySelected}
+              onToggleRow={toggleCustodyRow}
+              onToggleAll={() => setCustodySelected((prev) => {
+                const selectable = custody.filter((a) => !a.voided).map((a) => a.id);
+                return selectable.every((id) => prev.has(id)) ? new Set() : new Set(selectable);
+              })}
             />
           ) : (
             <CheckedInTable
@@ -2056,6 +2162,40 @@ export default function Registry() {
           kind={signInPersonFor.kind}
           onClose={() => setSignInPersonFor(null)}
           onDone={onCustodyChanged}
+        />
+      )}
+
+      {correcting && (
+        <CorrectionModal
+          action={correcting.action}
+          target="record"
+          count={correcting.rows.length}
+          sample={correcting.rows.map((a) => `${a.holder} — ${a.account_name}`)}
+          offerNotice={correcting.rows.length === 1 && !!correcting.rows[0].holder_email}
+          onClose={() => setCorrecting(null)}
+          onConfirm={async (reason, notify) => {
+            const ids = correcting.rows.map((a) => a.id);
+            if (ids.length === 1) {
+              if (correcting.action === 'void') await voidAssignment(ids[0], reason, notify);
+              else await acknowledgeAssignment(ids[0], reason);
+              setNotice(
+                correcting.action === 'void'
+                  ? 'Record voided. It is out of active custody and kept in the audit log.'
+                  : 'Acknowledged without a signature — the record is not marked as signed.'
+              );
+            } else {
+              const r = await bulkCorrectAssignments(correcting.action, ids, reason);
+              const skipped = r.skipped.length ? `, ${r.skipped.length} skipped` : '';
+              setNotice(
+                `${r.applied} record${r.applied === 1 ? '' : 's'} `
+                + `${correcting.action === 'void' ? 'voided' : 'acknowledged'}${skipped}.`
+              );
+            }
+            setCorrecting(null);
+            bulk.exitBulk();
+            onCustodyChanged();
+            loadCorrectionCounts();
+          }}
         />
       )}
 

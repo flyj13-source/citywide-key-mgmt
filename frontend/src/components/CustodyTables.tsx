@@ -59,7 +59,15 @@ function KeyChips({ a }: { a: Assignment }) {
   );
 }
 
-function StatusPill({ overdue }: { overdue: boolean }) {
+function StatusPill({ overdue, voided }: { overdue: boolean; voided?: boolean }) {
+  // A voided record is not overdue and not on time — it should not exist.
+  if (voided) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap bg-[#eeeeec] text-[#6b6b68] border border-[#d5d5d1] line-through">
+        Voided
+      </span>
+    );
+  }
   return overdue
     ? <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap bg-[#fbeaea] text-[#C0272D] border border-[#f0c9cb]">Overdue</span>
     : <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap bg-[#eaf5ec] text-[#2d7a3a] border border-[#c9e4d0]">On time</span>;
@@ -84,6 +92,23 @@ function SignaturePill({ a, kind, onResent, onSignInPerson }: {
   onSignInPerson: (a: Assignment, kind: SignoffKind) => void;
 }) {
   const [busy, setBusy] = useState(false);
+
+  // Settled by hand. Amber-grey, its own words, and NEVER the green "Signed"
+  // pill — the whole point of the state is that no signature exists.
+  if (a.signature_status === 'acknowledged_unsigned') {
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap bg-[#f2efe6] text-[#7a6a45] border border-[#ddd2b6]"
+        title={
+          `Acknowledged without a signature${a.acknowledged_by ? ` by ${a.acknowledged_by}` : ''}`
+          + `${a.acknowledge_reason ? ` — ${a.acknowledge_reason}` : ''}`
+        }
+      >
+        Acknowledged · unsigned
+      </span>
+    );
+  }
+
   const signedAt = kind === 'checkin' ? a.checkin_signed_at : a.signed_at;
   const hasPdf = kind === 'checkin' ? a.has_checkin_pdf : a.has_pdf;
   const witnessed = kind === 'checkout' ? a.signed_in_person_by : null;
@@ -228,6 +253,7 @@ function SortHeader({
 
 export function CheckedOutTable({
   rows, loading, sort, onSort, onCheckIn, onTransfer, onNotice, onSignInPerson,
+  onCorrect, canCorrect = false, selected, onToggleRow, onToggleAll,
 }: {
   rows: Assignment[];
   loading: boolean;
@@ -237,12 +263,34 @@ export function CheckedOutTable({
   onTransfer: (a: Assignment) => void;
   onNotice: (msg: string) => void;
   onSignInPerson: (a: Assignment, kind: SignoffKind) => void;
+  /** Corrections — gated to can_delete, so absent for most users. */
+  onCorrect?: (a: Assignment, action: 'void' | 'acknowledge') => void;
+  canCorrect?: boolean;
+  /** Bulk selection. Only rendered when corrections are available at all. */
+  selected?: Set<number>;
+  onToggleRow?: (id: number) => void;
+  onToggleAll?: () => void;
 }) {
+  const selectable = canCorrect && !!selected && !!onToggleRow;
+  const selectableRows = rows.filter((r) => !r.voided);
+  const allSelected = selectable && selectableRows.length > 0
+    && selectableRows.every((r) => selected!.has(r.id));
   return (
     <div className="card overflow-x-auto max-w-full">
       <table className="w-full text-sm border-collapse">
         <thead>
           <tr className="bg-[#1a1a1a] text-white text-xs">
+            {selectable && (
+              <th className="w-10 px-2 py-3">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-[#C0272D] cursor-pointer"
+                  checked={!!allSelected}
+                  onChange={() => onToggleAll?.()}
+                  aria-label="Select all correctable rows"
+                />
+              </th>
+            )}
             <SortHeader label="Holder" sortKey="holder" sort={sort} onSort={onSort} />
             <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Type</th>
             <SortHeader label="Client" sortKey="account_name" sort={sort} onSort={onSort} />
@@ -256,11 +304,30 @@ export function CheckedOutTable({
         </thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={9} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+            <tr><td colSpan={selectable ? 10 : 9} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
           ) : rows.length === 0 ? (
-            <tr><td colSpan={9} className="px-4 py-8 text-center text-cw-muted">Nothing is currently checked out</td></tr>
+            <tr><td colSpan={selectable ? 10 : 9} className="px-4 py-8 text-center text-cw-muted">Nothing here</td></tr>
           ) : rows.map((a, i) => (
-            <tr key={a.id} className={`border-b border-gray-100 ${i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'}`}>
+            <tr
+              key={a.id}
+              className={`border-b border-gray-100 ${
+                a.voided ? 'bg-[#f6f6f4] text-gray-400' : i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'
+              }`}
+            >
+              {selectable && (
+                <td className="px-2 py-3 text-center">
+                  {/* A voided row has nothing left to correct. */}
+                  {!a.voided && (
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-[#C0272D] cursor-pointer"
+                      checked={selected!.has(a.id)}
+                      onChange={() => onToggleRow!(a.id)}
+                      aria-label={`Select ${a.holder}`}
+                    />
+                  )}
+                </td>
+              )}
               <td className="px-3 py-3 font-medium text-[#1a1a1a] whitespace-nowrap">
                 {a.holder}
                 {a.recorded_by && a.recorded_by !== a.holder && (
@@ -272,7 +339,7 @@ export function CheckedOutTable({
               <td className="px-3 py-3 max-w-[320px]"><KeyChips a={a} /></td>
               <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{fmtDateTime(a.checked_out_at)}</td>
               <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{a.due_at ? fmtDate(a.due_at) : '—'}</td>
-              <td className="px-3 py-3 text-center"><StatusPill overdue={a.overdue} /></td>
+              <td className="px-3 py-3 text-center"><StatusPill overdue={a.overdue} voided={a.voided} /></td>
               <td className="px-3 py-3">
                 <SignaturePill a={a} kind="checkout" onResent={onNotice} onSignInPerson={onSignInPerson} />
                 {a.transfer_id && <div className="mt-1"><TransferPill a={a} /></div>}
@@ -292,7 +359,41 @@ export function CheckedOutTable({
                   >
                     Transfer
                   </button>
+                  {/* Corrections sit apart from the everyday actions: they say
+                      the record is wrong, not that custody moved. */}
+                  {canCorrect && onCorrect && !a.voided && (
+                    <>
+                      {a.signature_status !== 'acknowledged_unsigned' && !a.signed_at && (
+                        <button
+                          onClick={() => onCorrect(a, 'acknowledge')}
+                          title="The record is right, but no signature is coming"
+                          className="text-xs text-[#7a6a45] rounded px-2 py-1 hover:bg-[#f2efe6] transition-colors"
+                        >
+                          Acknowledge
+                        </button>
+                      )}
+                      <button
+                        onClick={() => onCorrect(a, 'void')}
+                        title="This record should not exist"
+                        className="text-xs text-[#6b6b68] rounded px-2 py-1 hover:bg-[#fbeaea] hover:text-[#C0272D] transition-colors"
+                      >
+                        Void
+                      </button>
+                    </>
+                  )}
                 </div>
+                {/* The reason travels with the record, so a corrected row
+                    explains itself without a trip to the audit log. */}
+                {a.voided && a.void_reason && (
+                  <div className="text-[11px] text-cw-muted mt-1 max-w-[22rem] ml-auto">
+                    Voided by {a.voided_by} — {a.void_reason}
+                  </div>
+                )}
+                {!a.voided && a.acknowledge_reason && (
+                  <div className="text-[11px] text-[#7a6a45] mt-1 max-w-[22rem] ml-auto">
+                    Acknowledged by {a.acknowledged_by} — {a.acknowledge_reason}
+                  </div>
+                )}
               </td>
             </tr>
           ))}

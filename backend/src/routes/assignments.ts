@@ -17,6 +17,11 @@ import { createKeyForm, serializeForm, getKeyForm, type FormEventType } from '..
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { NOT_TEST_ASSIGNMENT } from '../lib/testFixtures';
 import {
+  checkReason, voidAssignment, acknowledgeAssignment, correctionCounts, MIN_REASON_LENGTH,
+  SIGNATURE_OUTSTANDING,
+} from '../lib/corrections';
+import { sendVoidNotice } from '../lib/custodyMail';
+import {
   defaultDueDate, defaultDueDays, suggestedHolderFor, suggestedKeys, recentHolders,
 } from '../lib/custodyDefaults';
 
@@ -84,7 +89,21 @@ export function serializeAssignment(raw: any) {
     signature_send_attempts: a.signature_send_attempts ?? 0,
     counterparty_name: a.counterparty_name ?? null,
     counterparty_email: a.counterparty_email ?? null,
-    signoff_pending: a.status === 'checked_out' && !a.signed_at,
+    // ── Corrections ────────────────────────────────────────────────────────
+    // Surfaced so the row can show WHY it is out of the active list, and so
+    // an acknowledgement can never be mistaken for a signature.
+    voided: a.status === 'voided',
+    voided_at: a.voided_at ?? null,
+    voided_by: a.voided_by ?? null,
+    void_reason: a.void_reason ?? null,
+    status_before_void: a.status_before_void ?? null,
+    acknowledged_at: a.acknowledged_at ?? null,
+    acknowledged_by: a.acknowledged_by ?? null,
+    acknowledge_reason: a.acknowledge_reason ?? null,
+    // A pending sign-off means a signature is still expected. Voided and
+    // acknowledged records expect nothing, so neither is "pending".
+    signoff_pending: a.status === 'checked_out' && !a.signed_at
+      && a.signature_status !== 'acknowledged_unsigned',
     signoff_expires_at: a.signoff_expires_at ?? null,
     // Check-IN signature — its own independent state, so a record can be
     // "signed out, awaiting return signature" and say so.
@@ -133,6 +152,26 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
     where += ` AND ${NOT_TEST_ASSIGNMENT}`;
   }
   if (status) { where += ' AND status = ?'; params.push(status); }
+
+  // ── Correction filters ────────────────────────────────────────────────────
+  // A voided record is hidden from every ordinary view — it is a mistake, not
+  // history someone should have to scroll past — but reachable by asking for
+  // it, which is what keeps it auditable rather than deleted.
+  const view = String((req.query as any).view || '');
+  if (view === 'voided') {
+    where += " AND status = 'voided'";
+  } else if (view === 'acknowledged_unsigned') {
+    where += " AND COALESCE(signature_status,'') = 'acknowledged_unsigned' AND COALESCE(status,'') <> 'voided'";
+  } else if (view === 'overdue') {
+    where += " AND status = 'checked_out' AND due_at IS NOT NULL AND due_at < datetime('now')"
+      + " AND COALESCE(signature_status,'') <> 'acknowledged_unsigned'";
+  } else if (view === 'awaiting_signature') {
+    // Same broad meaning as the chip count: outstanding, not merely in flight.
+    where += " AND status = 'checked_out' AND COALESCE(signature_status,'') IN ("
+      + SIGNATURE_OUTSTANDING.map((x) => `'${x}'`).join(',') + ')';
+  } else if (!status || status !== 'voided') {
+    where += " AND COALESCE(status,'') <> 'voided'";
+  }
   if (search) {
     where += ' AND (assignee LIKE ? OR account_name LIKE ? OR keys_held LIKE ? OR assignee_email LIKE ?)';
     const s = `%${search}%`;
@@ -1487,6 +1526,138 @@ router.get('/signature-gaps', requireAuth, (_req: AuthRequest, res: Response) =>
     total_missing: no_email + send_failed + awaiting,
     staff_without_email: staffNoEmail,
   });
+});
+
+// ── Corrections ──────────────────────────────────────────────────────────────
+// Nothing here deletes. A record entered by mistake is VOIDED and a signature
+// that will never arrive is ACKNOWLEDGED; both leave the row in place with who
+// did it, when, and why.
+
+const CORRECTION_DENIED = 'Delete access required — contact Cara Angeloni';
+function requireDelete(req: AuthRequest, res: Response): boolean {
+  if (!req.manager?.can_delete) { res.status(403).json({ error: CORRECTION_DENIED }); return false; }
+  return true;
+}
+
+/** Counts behind the filter chips. */
+router.get('/correction-counts', requireAuth, (_req: AuthRequest, res: Response) => {
+  res.json(correctionCounts());
+});
+
+// ── POST /api/assignments/:id/void ──────────────────────────────────────────
+router.post('/:id(\\d+)/void', requireAuth, async (req: AuthRequest, res: Response) => {
+  if (!requireDelete(req, res)) return;
+  const check = checkReason(req.body?.reason);
+  if (!check.ok) {
+    return res.status(400).json({ error: check.error, code: 'REASON_REQUIRED', min_length: MIN_REASON_LENGTH });
+  }
+  const actor = req.manager?.name ?? 'System';
+  const out = voidAssignment(Number(req.params.id), check.reason, actor);
+  if (!out) {
+    const exists = db.prepare('SELECT status FROM key_assignments WHERE id = ?').get(req.params.id) as any;
+    if (!exists) return res.status(404).json({ error: 'Assignment not found' });
+    // Already voided — say so rather than silently overwriting the first
+    // reason and actor, which are the record.
+    return res.status(409).json({ error: 'This record is already voided.', code: 'ALREADY_VOIDED' });
+  }
+
+  logAudit(req, 'custody_voided', out.account_name, null, {
+    assignment_id: out.id, holder: out.holder, previous_status: out.previous_status,
+    reason: check.reason, voided_by: actor, link_invalidated: out.link_invalidated,
+    total_keys: out.total_keys,
+  });
+
+  // Optional courtesy: tell whoever was asked to sign that they no longer
+  // need to. Never blocks the void, and never invents a recipient.
+  let notice: MailResult | null = null;
+  const notify = req.body?.notify_holder === true || req.body?.notify_holder === 'true';
+  if (notify && out.holder_email) {
+    notice = await sendVoidNotice({
+      holder: out.holder ?? '', holderEmail: out.holder_email,
+      client: out.account_name ?? '', reason: check.reason, voidedBy: actor,
+    });
+    if (notice) logMail(req, notice, 'checkout', out.account_name ?? '', null, out.holder ?? '');
+  }
+
+  res.json({ ok: true, ...out, reason: check.reason, voided_by: actor, notice });
+});
+
+// ── POST /api/assignments/:id/acknowledge ───────────────────────────────────
+// NOT a signature. The record keeps saying so, everywhere it is rendered.
+router.post('/:id(\\d+)/acknowledge', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireDelete(req, res)) return;
+  const check = checkReason(req.body?.reason);
+  if (!check.ok) {
+    return res.status(400).json({ error: check.error, code: 'REASON_REQUIRED', min_length: MIN_REASON_LENGTH });
+  }
+  const actor = req.manager?.name ?? 'System';
+  const out = acknowledgeAssignment(Number(req.params.id), check.reason, actor);
+  if (out && 'refused' in out) return res.status(409).json({ error: out.refused });
+  if (!out) {
+    const exists = db.prepare('SELECT id FROM key_assignments WHERE id = ?').get(req.params.id);
+    if (!exists) return res.status(404).json({ error: 'Assignment not found' });
+    return res.status(409).json({ error: 'This record is already acknowledged.' });
+  }
+
+  logAudit(req, 'signature_acknowledged_unsigned', out.account_name, null, {
+    assignment_id: out.id, holder: out.holder,
+    previous_signature_status: out.previous_signature_status,
+    reason: check.reason, acknowledged_by: actor,
+    // Stated explicitly so nothing downstream can read this as a signature.
+    signature_collected: false,
+  });
+
+  res.json({ ok: true, ...out, reason: check.reason, acknowledged_by: actor });
+});
+
+// ── POST /api/assignments/bulk-correct ──────────────────────────────────────
+// One reason for the whole batch, applied per record, each audited on its own.
+router.post('/bulk-correct', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireDelete(req, res)) return;
+  const action = req.body?.action === 'acknowledge' ? 'acknowledge' : 'void';
+  const check = checkReason(req.body?.reason);
+  if (!check.ok) {
+    return res.status(400).json({ error: check.error, code: 'REASON_REQUIRED', min_length: MIN_REASON_LENGTH });
+  }
+  const ids: number[] = Array.isArray(req.body?.ids)
+    ? (req.body.ids as any[]).map(Number).filter((n) => Number.isInteger(n) && n > 0)
+    : [];
+  if (!ids.length) return res.status(400).json({ error: 'No records selected' });
+  if (ids.length > 200) return res.status(400).json({ error: 'Too many records at once (max 200)' });
+
+  const actor = req.manager?.name ?? 'System';
+  const done: number[] = [];
+  const skipped: { id: number; why: string }[] = [];
+
+  for (const id of [...new Set(ids)]) {
+    if (action === 'void') {
+      const out = voidAssignment(id, check.reason, actor);
+      if (!out) { skipped.push({ id, why: 'not found or already voided' }); continue; }
+      done.push(id);
+      logAudit(req, 'custody_voided', out.account_name, null, {
+        assignment_id: id, holder: out.holder, previous_status: out.previous_status,
+        reason: check.reason, voided_by: actor, bulk: true,
+      });
+    } else {
+      const out = acknowledgeAssignment(id, check.reason, actor);
+      if (!out || 'refused' in out) {
+        skipped.push({ id, why: out && 'refused' in out ? out.refused : 'not found or already acknowledged' });
+        continue;
+      }
+      done.push(id);
+      logAudit(req, 'signature_acknowledged_unsigned', out.account_name, null, {
+        assignment_id: id, holder: out.holder, reason: check.reason,
+        acknowledged_by: actor, signature_collected: false, bulk: true,
+      });
+    }
+  }
+
+  logAudit(req, action === 'void' ? 'custody_bulk_voided' : 'signature_bulk_acknowledged', null, null, {
+    requested: ids.length, applied: done.length, skipped: skipped.length,
+    reason: check.reason, by: actor,
+  });
+
+  res.json({ ok: true, action, applied: done.length, skipped, ids: done, reason: check.reason });
 });
 
 export default router;

@@ -11,7 +11,11 @@ import db from './db';
 import { KEY_TYPES, readKeyLines, type KeyLine } from './custody';
 
 export type FormEventType = 'checkin' | 'checkout' | 'transfer' | 'reassignment' | 'audit';
-export type FormStatus = 'draft' | 'sent' | 'signed' | 'unsigned';
+export type FormStatus =
+  | 'draft' | 'sent' | 'signed' | 'unsigned'
+  // Corrections. 'acknowledged_unsigned' is deliberately NOT 'signed': the
+  // audit trail must never claim a signature that does not exist.
+  | 'voided' | 'acknowledged_unsigned';
 
 export const FORM_EVENT_LABEL: Record<FormEventType, string> = {
   checkin: 'Check-in',
@@ -220,6 +224,13 @@ export function serializeForm(row: any): any {
     clients_covered: row.clients_covered,
     total_keys: row.total_keys,
     status: row.status,
+    // Correction state, so the row can say why it left the ordinary flow.
+    voided_at: row.voided_at ?? null,
+    voided_by: row.voided_by ?? null,
+    void_reason: row.void_reason ?? null,
+    acknowledged_at: row.acknowledged_at ?? null,
+    acknowledged_by: row.acknowledged_by ?? null,
+    acknowledge_reason: row.acknowledge_reason ?? null,
     generated_at: row.created_at,
     generated_by: row.generated_by,
     sent_to: sentTo,
@@ -267,6 +278,10 @@ export function listKeyForms(f: FormFilters): { rows: any[]; total: number } {
     where += " AND send_error IS NOT NULL AND TRIM(send_error) <> ''";
   } else if (f.status && f.status !== 'all') {
     where += ' AND status = ?'; params.push(f.status);
+  } else {
+    // Voided forms are corrections, not history to scroll past. They are one
+    // filter click away and never gone — asking for them by name shows them.
+    where += " AND COALESCE(status, '') <> 'voided'";
   }
   if (f.from) { where += ' AND created_at >= ?'; params.push(f.from); }
   if (f.to) { where += ' AND created_at <= ?'; params.push(`${f.to} 23:59:59`); }
@@ -279,6 +294,17 @@ export function listKeyForms(f: FormFilters): { rows: any[]; total: number } {
   return {
     rows: rows.map((r) => serializeForm(Object.assign({}, r))),
     total: Object.assign({}, countRow).c as number,
+  };
+}
+
+/** Voided and acknowledged form counts, for the filter chips. */
+export function correctionFormCounts(): { voided: number; acknowledged_unsigned: number } {
+  const n = (sql: string): number => {
+    try { return (Object.assign({}, db.prepare(sql).get()) as any).c as number; } catch { return 0; }
+  };
+  return {
+    voided: n("SELECT COUNT(*) AS c FROM key_form_docs WHERE status = 'voided'"),
+    acknowledged_unsigned: n("SELECT COUNT(*) AS c FROM key_form_docs WHERE status = 'acknowledged_unsigned'"),
   };
 }
 

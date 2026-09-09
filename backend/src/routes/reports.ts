@@ -18,6 +18,10 @@ function getOverdue() {
     FROM key_assignments
     WHERE status = 'checked_out' AND due_at IS NOT NULL AND due_at < datetime('now')
       AND ${NOT_TEST_ASSIGNMENT}
+      -- A voided record has already left 'checked_out', so this is really
+      -- about the acknowledged ones: the keys may still be out, but chasing a
+      -- signature that was settled by hand is not what overdue means.
+      AND COALESCE(signature_status, '') <> 'acknowledged_unsigned'
     ORDER BY due_at ASC
   `).all() as any[]).map((r) => Object.assign({}, r));
 }

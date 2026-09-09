@@ -207,6 +207,15 @@ export interface Assignment {
   signature_typed_name: string | null;
   has_pdf: boolean;
   signoff_pending: boolean;
+  // Corrections — why this record left the ordinary flow.
+  voided?: boolean;
+  voided_at?: string | null;
+  voided_by?: string | null;
+  void_reason?: string | null;
+  status_before_void?: string | null;
+  acknowledged_at?: string | null;
+  acknowledged_by?: string | null;
+  acknowledge_reason?: string | null;
   signoff_expires_at: string | null;
   // Check-IN signature — tracked independently of the check-out one, so a
   // record can be signed out and still awaiting its return signature.
@@ -266,7 +275,9 @@ export interface HolderOption {
 // arrive" are never rendered the same way.
 export type SignatureStatus =
   | 'signed' | 'awaiting_signature' | 'signature_unavailable'
-  | 'signature_send_failed' | 'not_required';
+  | 'signature_send_failed' | 'not_required'
+  // Settled by hand. NOT a signature, and never rendered as one.
+  | 'acknowledged_unsigned';
 
 /** The two states that will NOT resolve on their own — always red. */
 export const SIGNATURE_NEEDS_ATTENTION: SignatureStatus[] =
@@ -459,7 +470,9 @@ export const setCustodyDefaults = (due_days: number) =>
 
 // ── Key Forms ────────────────────────────────────────────────────────────────
 export type FormEventType = 'checkin' | 'checkout' | 'transfer' | 'reassignment' | 'audit';
-export type FormStatus = 'draft' | 'sent' | 'signed' | 'unsigned';
+export type FormStatus =
+  | 'draft' | 'sent' | 'signed' | 'unsigned'
+  | 'voided' | 'acknowledged_unsigned';
 
 export interface KeyFormLine {
   account_id: number | null;
@@ -472,6 +485,12 @@ export interface KeyFormLine {
 export interface KeyFormDoc {
   id: number;
   form_no: string;
+  voided_at?: string | null;
+  voided_by?: string | null;
+  void_reason?: string | null;
+  acknowledged_at?: string | null;
+  acknowledged_by?: string | null;
+  acknowledge_reason?: string | null;
   event_type: FormEventType;
   event_label: string;
   holder_name: string;
@@ -596,6 +615,47 @@ export const checkin = (data: {
     signoff_link: string | null; email: MailOutcome;
     reconciled?: boolean; key_form?: KeyFormDoc | null;
   }>('/assignments/checkin', { method: 'POST', body: JSON.stringify(data) });
+
+// ── Corrections ─────────────────────────────────────────────────────────────
+export const CORRECTION_MIN_REASON = 10;
+export interface CorrectionCounts {
+  overdue: number;
+  awaiting_signature: number;
+  voided: number;
+  acknowledged_unsigned: number;
+}
+export const getCorrectionCounts = () =>
+  req<CorrectionCounts>('/assignments/correction-counts');
+
+export const voidAssignment = (id: number, reason: string, notify_holder = false) =>
+  req<{ ok: true; link_invalidated: boolean; notice: MailOutcome | null }>(
+    `/assignments/${id}/void`, { method: 'POST', body: JSON.stringify({ reason, notify_holder }) },
+  );
+export const acknowledgeAssignment = (id: number, reason: string) =>
+  req<{ ok: true }>(`/assignments/${id}/acknowledge`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  });
+export const bulkCorrectAssignments = (
+  action: 'void' | 'acknowledge', ids: number[], reason: string,
+) =>
+  req<{ ok: true; applied: number; skipped: { id: number; why: string }[] }>(
+    '/assignments/bulk-correct', { method: 'POST', body: JSON.stringify({ action, ids, reason }) },
+  );
+
+export const voidKeyFormDoc = (id: number, reason: string) =>
+  req<{ ok: true; form: KeyFormDoc }>(`/key-forms/${id}/void`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  });
+export const acknowledgeKeyFormDoc = (id: number, reason: string) =>
+  req<{ ok: true; form: KeyFormDoc }>(`/key-forms/${id}/acknowledge`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  });
+export const bulkCorrectKeyForms = (
+  action: 'void' | 'acknowledge', ids: number[], reason: string,
+) =>
+  req<{ ok: true; applied: number; skipped: { id: number; why: string }[] }>(
+    '/key-forms/bulk-correct', { method: 'POST', body: JSON.stringify({ action, ids, reason }) },
+  );
 
 export type SignoffKind = 'checkout' | 'checkin';
 

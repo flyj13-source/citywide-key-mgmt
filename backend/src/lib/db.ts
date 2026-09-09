@@ -317,6 +317,24 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
+// ── Corrections on key forms ────────────────────────────────────────────────
+// Same two states as key_assignments, guarded so an existing deployment gains
+// them without touching the rows already there.
+const formCols = (db.prepare('PRAGMA table_info(key_form_docs)').all() as any[]).map(
+  (c) => (Object.assign({}, c) as any).name as string,
+);
+for (const [col, def] of [
+  ['voided_at', 'TEXT'],
+  ['voided_by', 'TEXT'],
+  ['void_reason', 'TEXT'],
+  ['status_before_void', 'TEXT'],
+  ['acknowledged_at', 'TEXT'],
+  ['acknowledged_by', 'TEXT'],
+  ['acknowledge_reason', 'TEXT'],
+] as [string, string][]) {
+  if (!formCols.includes(col)) db.exec(`ALTER TABLE key_form_docs ADD COLUMN ${col} ${def}`);
+}
+
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_form_docs_token ON key_form_docs(token)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_form_docs_holder ON key_form_docs(holder_name)');
 
@@ -398,6 +416,19 @@ assignmentNeeded.push(
   // rows already written in production still carry these, and their signed
   // acknowledgements must keep opening. New rows never set them.
   ['establish_group_id', 'TEXT'],
+  // ── Corrections ────────────────────────────────────────────────────────────
+  // A record entered by mistake is VOIDED, never deleted: the row stays, the
+  // status changes, and who/when/why is written beside it. status_before_void
+  // is kept so the record can still be read as what it was.
+  ['voided_at', 'TEXT'],
+  ['voided_by', 'TEXT'],
+  ['void_reason', 'TEXT'],
+  ['status_before_void', 'TEXT'],
+  // A signature that will never arrive is ACKNOWLEDGED, which is a different
+  // claim from signed and must never be rendered as one.
+  ['acknowledged_at', 'TEXT'],
+  ['acknowledged_by', 'TEXT'],
+  ['acknowledge_reason', 'TEXT'],
 );
 for (const [col, def] of assignmentNeeded) {
   if (!assignmentCols.includes(col)) db.exec(`ALTER TABLE key_assignments ADD COLUMN ${col} ${def}`);

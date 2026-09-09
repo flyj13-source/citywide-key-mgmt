@@ -673,3 +673,52 @@ export async function sendTestEmail(opts: {
     { singleAttempt: true },
   );
 }
+
+// ── "No longer required" notice ──────────────────────────────────────────────
+// Sent only when the operator asks for it, and only to a holder who actually
+// has an address. It says the request is withdrawn — never that anything was
+// signed, and never that keys were returned.
+export async function sendVoidNotice(opts: {
+  holder: string;
+  holderEmail: string;
+  client: string;
+  reason: string;
+  voidedBy: string;
+}): Promise<MailResult> {
+  const html = brandedShell(
+    'Signature no longer required',
+    `The key record for ${opts.client} has been withdrawn.`,
+    `<p style="margin:0 0 20px;font-size:14px;color:${CW_CHARCOAL}">
+       Hello ${esc(opts.holder)}, you can ignore the earlier request to sign for keys at
+       <strong>${esc(opts.client)}</strong>. That record was entered in error and has been withdrawn,
+       so the signature link no longer works. No action is needed from you.
+     </p>
+     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:8px">
+       ${detailRows([
+         ['Client', opts.client],
+         ['Withdrawn by', opts.voidedBy],
+         ['Reason', opts.reason],
+       ])}
+     </table>
+     <p style="margin:16px 0 0;font-size:12px;color:${CW_MUTED}">
+       If you DO currently hold keys for this client, reply to this email — the withdrawal means the
+       record was wrong, not that the keys came back.
+     </p>`,
+    !!logoBytes(),
+  );
+  const text = [
+    `You can ignore the earlier request to sign for keys at ${opts.client}.`,
+    'That record was entered in error and has been withdrawn; the signature link no longer works.',
+    '',
+    `Client: ${opts.client}`,
+    `Withdrawn by: ${opts.voidedBy}`,
+    `Reason: ${opts.reason}`,
+    '',
+    'If you DO currently hold keys for this client, reply to this email.',
+  ].join('\n');
+
+  return sendBranded(
+    subjectFor('Signature no longer required', opts.holder, opts.client),
+    html, text, [opts.holderEmail],
+  );
+}
