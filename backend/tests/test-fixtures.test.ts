@@ -23,6 +23,11 @@ let fx: typeof import('../src/lib/testFixtures');
 const auth = (r: request.Test) => r.set('Authorization', `Bearer ${token}`);
 const scalar = (sql: string, ...p: any[]) =>
   Object.assign({}, db.prepare(sql).get(...p) as any).c as number;
+/** One row as a plain object, or null. */
+const scalarRow = (sql: string, ...p: any[]): any => {
+  const raw = db.prepare(sql).get(...p) as any;
+  return raw ? Object.assign({}, raw) : null;
+};
 
 beforeAll(async () => {
   app = (await import('../src/index')).default;
@@ -54,7 +59,7 @@ const realCustomers = (n: number) => {
   }
 };
 
-describe('§1 THE THREE FIXTURES', () => {
+describe('§1 THE FOUR FIXTURES', () => {
   it('creates a client, an IC and a staff member', () => {
     const client = Object.assign({}, db.prepare(
       "SELECT * FROM accounts WHERE bc_client_number = '09999900001'"
@@ -76,7 +81,7 @@ describe('§1 THE THREE FIXTURES', () => {
     ).get() as any);
     expect(ic).toMatchObject({
       ic_company_name: 'ZZ TEST CONTRACTOR — Do Not Use', is_test: 1,
-      ic_primary_contact: 'ZZ Test Contact', ic_email: 'tye.jordan@cinchit.com',
+      ic_primary_contact: 'ZZ Test Contact', ic_email: 'keys@citywidekeys.com',
     });
 
     const staff = Object.assign({}, db.prepare(
@@ -84,7 +89,7 @@ describe('§1 THE THREE FIXTURES', () => {
     ).get() as any);
     expect(staff).toMatchObject({
       manager_type: 'both', role_category: 'manager',
-      email: 'tye.jordan@cinchit.com', is_test: 1, active: 1,
+      email: 'keys@citywidekeys.com', is_test: 1, active: 1,
     });
   });
 
@@ -105,7 +110,7 @@ describe('§1 THE THREE FIXTURES', () => {
     const beforeStaff = scalar('SELECT COUNT(*) AS c FROM staff_managers');
     const again = fx.seedTestFixtures();
     expect(again.created).toEqual([]);
-    expect(again.existing.sort()).toEqual(['client', 'ic', 'staff']);
+    expect(again.existing.sort()).toEqual(['client', 'ic', 'no-email staff', 'staff']);
     expect(scalar('SELECT COUNT(*) AS c FROM accounts')).toBe(before);
     expect(scalar('SELECT COUNT(*) AS c FROM staff_managers')).toBe(beforeStaff);
   });
@@ -115,7 +120,130 @@ describe('§1 THE THREE FIXTURES', () => {
       Object.assign({}, db.prepare("SELECT ic_email AS e FROM accounts WHERE bc_vendor_number='09999900002'").get() as any).e,
       Object.assign({}, db.prepare("SELECT email AS e FROM staff_managers WHERE name='ZZ Test Manager'").get() as any).e,
     ];
-    expect(emails).toEqual(['tye.jordan@cinchit.com', 'tye.jordan@cinchit.com']);
+    expect(emails).toEqual(['keys@citywidekeys.com', 'keys@citywidekeys.com']);
+  });
+});
+
+describe('§1b THE NO-EMAIL FIXTURE — the failure path needs a subject', () => {
+  it('exists as crew with no address, flagged is_test', () => {
+    const row = scalarRow(
+      "SELECT name, email, role_category, active, COALESCE(is_test,0) AS is_test " +
+      "FROM staff_managers WHERE name = 'ZZ Test No-Email Staff'"
+    );
+    expect(row).toMatchObject({ role_category: 'crew', email: null, active: 1, is_test: 1 });
+  });
+
+  it('an address filled in by mistake is put back on the next seed', () => {
+    db.prepare("UPDATE staff_managers SET email = 'oops@example.test' WHERE name = 'ZZ Test No-Email Staff'").run();
+    fx.seedTestFixtures();
+    const row = scalarRow("SELECT email FROM staff_managers WHERE name = 'ZZ Test No-Email Staff'");
+    // Otherwise a well-meaning edit silently removes the only way to test the
+    // "no address on file" path.
+    expect(row.email).toBeNull();
+  });
+
+  it('checking out to them hits the missing-email gate', async () => {
+    const ids = fx.seedTestFixtures();
+    const res = await auth(request(app).post('/api/assignments/checkout')).send({
+      account_id: ids.client, holder: 'ZZ Test No-Email Staff',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }],
+    });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('HOLDER_EMAIL_MISSING');
+
+    // …and goes through once a reason is given, flagged as unsigned.
+    const forced = await auth(request(app).post('/api/assignments/checkout')).send({
+      account_id: ids.client, holder: 'ZZ Test No-Email Staff',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }],
+      no_email_reason: 'Testing the red-flag path',
+    });
+    expect(forced.status).toBe(201);
+    expect(forced.body.signature_status).toBe('signature_unavailable');
+  });
+});
+
+describe('§1d /api/_diag REPORTS THE FIXTURES', () => {
+  it('reports four present, with the identifying fields', async () => {
+    fx.seedTestFixtures();
+    const res = await auth(request(app).get('/api/_diag'));
+    expect(res.status).toBe(200);
+    expect(res.body.test_fixtures).toMatchObject({
+      expected: 4, present: 4, complete: true,
+      expected_contact: 'keys@citywidekeys.com',
+      is_test_column: { accounts: true, staff_managers: true },
+    });
+    expect(res.body.test_fixtures.records.client).toMatchObject({
+      name: 'ZZ TEST CLIENT — Do Not Use', is_test: 1,
+      account_manager: 'ZZ Test Manager', ic_name: 'ZZ TEST CONTRACTOR — Do Not Use',
+      bc_vendor_number: '09999900002', lockbox_code: 'TEST',
+    });
+    // The grid is populated, so there is something to move.
+    expect(res.body.test_fixtures.records.client.grid_total).toBeGreaterThan(0);
+    expect(res.body.test_fixtures.records.no_email_staff).toMatchObject({ email: null, is_test: 1 });
+  });
+
+  it('separates real customers from the count including fixtures', async () => {
+    realCustomers(5);
+    const res = await auth(request(app).get('/api/_diag'));
+    expect(res.body.test_fixtures.real_customers).toBe(5);
+    expect(res.body.test_fixtures.customers_including_test).toBe(6);
+  });
+
+  it('says so when a fixture is missing', async () => {
+    db.prepare("DELETE FROM staff_managers WHERE name = 'ZZ Test No-Email Staff'").run();
+    const res = await auth(request(app).get('/api/_diag'));
+    expect(res.body.test_fixtures).toMatchObject({ present: 3, complete: false });
+    expect(res.body.test_fixtures.records.no_email_staff).toBeNull();
+  });
+});
+
+describe('§3 THE RESET BUTTON', () => {
+  it('wipes test activity, re-seeds, and reports the real count unmoved', async () => {
+    realCustomers(6);
+    const ids = fx.seedTestFixtures();
+    await auth(request(app).post('/api/assignments/checkout')).send({
+      account_id: ids.client, holder: 'ZZ Test Manager',
+      holder_email: 'keys@citywidekeys.com', holder_type: 'employee',
+      keys: [{ type: 'metal', qty: 1 }],
+    });
+
+    const res = await auth(request(app).post('/api/settings/test-data/reset')).send({});
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.real_customers).toMatchObject({ before: 6, after: 6, unchanged: true });
+    expect(res.body.deleted.assignments).toBeGreaterThan(0);
+    expect(res.body.fixtures.noEmailStaff).toBeGreaterThan(0);
+    expect(scalar('SELECT COUNT(*) AS c FROM key_assignments')).toBe(0);
+    // The fixtures are back, not merely deleted.
+    expect(scalar("SELECT COUNT(*) AS c FROM accounts WHERE COALESCE(is_test,0)=1")).toBe(2);
+  });
+
+  it('is admin only', async () => {
+    const bcrypt = (await import('bcryptjs')).default;
+    db.prepare("INSERT OR IGNORE INTO managers (name, email, password_hash, role) VALUES ('Viewer','viewer2@citywideboston.com',?, 'manager')")
+      .run(bcrypt.hashSync('demo1234', 10));
+    const login = await request(app).post('/api/auth/login')
+      .send({ email: 'viewer2@citywideboston.com', password: 'demo1234' });
+    const res = await request(app).post('/api/settings/test-data/reset')
+      .set('Authorization', `Bearer ${login.body.token}`).send({});
+    expect(res.status).toBe(403);
+  });
+
+  it('seed repairs a damaged fixture without touching its activity', async () => {
+    const ids = fx.seedTestFixtures();
+    // Someone blanks the grid and the links.
+    db.prepare(
+      'UPDATE accounts SET am_metal=0, am_card=0, contractor_metal=0, lockbox_code=NULL, ' +
+      'account_manager=NULL, ic_name=NULL WHERE id = ?'
+    ).run(ids.client);
+
+    const res = await auth(request(app).post('/api/settings/test-data/seed')).send({});
+    expect(res.status).toBe(200);
+    const row = scalarRow('SELECT am_metal, am_card, contractor_metal, lockbox_code, account_manager, ic_name FROM accounts WHERE id = ?', ids.client);
+    expect(row).toMatchObject({
+      am_metal: 1, am_card: 1, contractor_metal: 2, lockbox_code: 'TEST',
+      account_manager: 'ZZ Test Manager', ic_name: 'ZZ TEST CONTRACTOR — Do Not Use',
+    });
   });
 });
 
@@ -186,7 +314,8 @@ describe('§2 ISOLATION — fixtures never pollute real numbers', () => {
     expect(off.body.map((s: any) => s.name)).toEqual(['Real Person']);
 
     const on = await auth(request(app).get('/api/staff?include_test=1'));
-    expect(on.body.map((s: any) => s.name).sort()).toEqual(['Real Person', 'ZZ Test Manager']);
+    expect(on.body.map((s: any) => s.name).sort())
+      .toEqual(['Real Person', 'ZZ Test Manager', 'ZZ Test No-Email Staff']);
   });
 
   it('a fixture check-out stays out of the active-custody count', async () => {
@@ -264,7 +393,7 @@ describe('§3 SAFETY RAILS', () => {
     const ids = fx.seedTestFixtures();
     await auth(request(app).post('/api/assignments/checkout')).send({
       account_id: ids.client, holder: 'ZZ Test Manager',
-      holder_email: 'tye.jordan@cinchit.com', holder_type: 'employee',
+      holder_email: 'keys@citywidekeys.com', holder_type: 'employee',
       keys: [{ type: 'metal', qty: 1 }],
     });
     const meta = JSON.parse(Object.assign({}, db.prepare(
@@ -278,7 +407,7 @@ describe('§3 SAFETY RAILS', () => {
     const ids = fx.seedTestFixtures();
     await auth(request(app).post('/api/assignments/checkout')).send({
       account_id: ids.client, holder: 'ZZ Test Manager',
-      holder_email: 'tye.jordan@cinchit.com', holder_type: 'employee',
+      holder_email: 'keys@citywidekeys.com', holder_type: 'employee',
       keys: [{ type: 'metal', qty: 1 }],
     });
     expect(scalar('SELECT COUNT(*) AS c FROM key_assignments')).toBeGreaterThan(0);
@@ -289,10 +418,11 @@ describe('§3 SAFETY RAILS', () => {
 
     expect(scalar('SELECT COUNT(*) AS c FROM key_assignments')).toBe(0);
     expect(scalar('SELECT COUNT(*) AS c FROM key_form_docs')).toBe(0);
-    // The three fixtures survive…
+    // All four fixtures survive — two accounts, two staff rows.
     expect(r.fixtures.client).toBeGreaterThan(0);
+    expect(r.fixtures.noEmailStaff).toBeGreaterThan(0);
     expect(scalar("SELECT COUNT(*) AS c FROM accounts WHERE COALESCE(is_test,0)=1")).toBe(2);
-    expect(scalar("SELECT COUNT(*) AS c FROM staff_managers WHERE COALESCE(is_test,0)=1")).toBe(1);
+    expect(scalar("SELECT COUNT(*) AS c FROM staff_managers WHERE COALESCE(is_test,0)=1")).toBe(2);
     // …and real data is untouched.
     expect(scalar("SELECT COUNT(*) AS c FROM accounts WHERE COALESCE(is_test,0)=0 AND record_type='customer'"))
       .toBe(realBefore);
@@ -315,7 +445,7 @@ describe('§4 THE FULL LOOP RUNS AGAINST THE FIXTURES', () => {
 
     const out = await auth(request(app).post('/api/assignments/checkout')).send({
       account_id: ids.client, holder: 'ZZ Test Manager',
-      holder_email: 'tye.jordan@cinchit.com', holder_type: 'employee',
+      holder_email: 'keys@citywidekeys.com', holder_type: 'employee',
       keys: [{ type: 'metal', qty: 1 }, { type: 'card', qty: 1 }],
     });
     expect(out.status).toBe(201);
@@ -336,13 +466,13 @@ describe('§4 THE FULL LOOP RUNS AGAINST THE FIXTURES', () => {
     const ids = fx.seedTestFixtures();
     await auth(request(app).post('/api/assignments/checkout')).send({
       account_id: ids.client, holder: 'ZZ Test Manager',
-      holder_email: 'tye.jordan@cinchit.com', holder_type: 'employee',
+      holder_email: 'keys@citywidekeys.com', holder_type: 'employee',
       keys: [{ type: 'metal', qty: 2 }],
     });
     const res = await auth(request(app).post('/api/assignments/transfer')).send({
       account_id: ids.client, mode: 'keys',
       from_holder: 'ZZ Test Manager', to_holder: 'ZZ TEST CONTRACTOR — Do Not Use',
-      to_holder_type: 'ic', to_holder_email: 'tye.jordan@cinchit.com',
+      to_holder_type: 'ic', to_holder_email: 'keys@citywidekeys.com',
       keys: [{ type: 'metal', qty: 1 }],
     });
     expect(res.status).toBe(201);
@@ -354,11 +484,11 @@ describe('§4 THE FULL LOOP RUNS AGAINST THE FIXTURES', () => {
     const ids = fx.seedTestFixtures();
     await auth(request(app).post('/api/assignments/checkout')).send({
       account_id: ids.client, holder: 'ZZ Test Manager',
-      holder_email: 'tye.jordan@cinchit.com', holder_type: 'employee',
+      holder_email: 'keys@citywidekeys.com', holder_type: 'employee',
       keys: [{ type: 'metal', qty: 1 }],
     });
     const res = await auth(request(app).get('/api/key-forms?search=ZZ Test'));
     expect(res.body.total).toBeGreaterThan(0);
-    expect(res.body.forms[0].holder_email).toBe('tye.jordan@cinchit.com');
+    expect(res.body.forms[0].holder_email).toBe('keys@citywidekeys.com');
   });
 });

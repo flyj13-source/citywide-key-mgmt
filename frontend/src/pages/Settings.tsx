@@ -3,6 +3,7 @@ import Layout from '../components/Layout';
 import {
   changePassword, getBackupStatus, runBackupNow, getCustodyNotification, setCustodyNotification,
   getCustodyDefaults, setCustodyDefaults, getEmailConfig, sendTestEmail,
+  resetTestData, seedTestData, type TestDataResult,
   type BackupStatus, type CustodyNotificationSetting, type CustodyDefaults,
   type EmailConfig, type TestEmailResult,
 } from '../lib/api';
@@ -91,6 +92,24 @@ export default function Settings() {
       setTesting(false);
       loadEmail();
     }
+  };
+
+  // ── Test data ──────────────────────────────────────────────────────────────
+  // The deployed equivalent of `npm run test-data:reset`, which cannot reach
+  // the managed host because there is no shell there.
+  const [tdBusy, setTdBusy] = useState<'reset' | 'seed' | null>(null);
+  const [tdResult, setTdResult] = useState<TestDataResult | null>(null);
+  const [tdError, setTdError] = useState('');
+  const [tdConfirm, setTdConfirm] = useState(false);
+
+  const runTestData = async (which: 'reset' | 'seed') => {
+    setTdBusy(which); setTdError(''); setTdResult(null);
+    try {
+      setTdResult(which === 'reset' ? await resetTestData() : await seedTestData());
+      setTdConfirm(false);
+    } catch (err: any) {
+      setTdError(err?.message || String(err));
+    } finally { setTdBusy(null); }
   };
 
   const handleSaveDue = async (e: React.FormEvent) => {
@@ -472,6 +491,98 @@ export default function Settings() {
             )}
           </form>
         </div>
+
+        {/* Test data */}
+        {isAdmin && (
+          <div className="card overflow-hidden">
+            <div className="px-5 py-3 bg-cw-black">
+              <h2 className="text-white font-semibold text-sm">Test Data</h2>
+            </div>
+            <div className="px-5 py-4 space-y-4">
+              <p className="text-sm text-cw-muted">
+                Four <span className="font-semibold text-[#1a1a1a]">ZZ TEST</span> records — a client, a staff
+                member, a contractor, and a staff member with no email for testing the missing-address flag.
+                They are excluded from every count, aggregate and export, and carry a{' '}
+                <span className="inline-flex items-center rounded-full border border-gray-500 text-gray-600 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide">Test</span>{' '}
+                pill in the registry.
+              </p>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => runTestData('seed')}
+                  disabled={tdBusy !== null}
+                  className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-50 transition-colors"
+                >
+                  {tdBusy === 'seed' ? 'Repairing…' : 'Seed / repair fixtures'}
+                </button>
+                {!tdConfirm ? (
+                  <button
+                    type="button"
+                    onClick={() => setTdConfirm(true)}
+                    disabled={tdBusy !== null}
+                    className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-[#fbeaea] hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-50 transition-colors"
+                  >
+                    Reset test data…
+                  </button>
+                ) : (
+                  <span className="inline-flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => runTestData('reset')}
+                      disabled={tdBusy !== null}
+                      className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors"
+                    >
+                      {tdBusy === 'reset' ? 'Resetting…' : 'Yes — delete test activity'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTdConfirm(false)}
+                      className="px-3 py-2 text-sm text-cw-muted hover:text-[#1a1a1a]"
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-gray-400">
+                Reset deletes only key assignments, key forms and audit rows belonging to the ZZ TEST records,
+                then re-seeds them. Real client and staff data is never in scope — the result below reports the
+                real customer count before and after.
+              </p>
+
+              {tdError && (
+                <p className="text-sm text-[#C0272D] bg-[#fbeaea] border border-[#f0c9cb] rounded px-3 py-2">{tdError}</p>
+              )}
+              {tdResult && (
+                <div className={`rounded border px-4 py-3 space-y-1 text-sm ${
+                  tdResult.real_customers.unchanged
+                    ? 'border-green-200 bg-green-50 text-green-800'
+                    : 'border-2 border-[#C0272D] bg-[#fbeaea] text-[#C0272D]'
+                }`}>
+                  <div className="font-semibold">
+                    {tdResult.real_customers.unchanged ? '✓ Done' : '⚠ Real data moved — investigate'}
+                  </div>
+                  {tdResult.deleted && (
+                    <div>
+                      Deleted {tdResult.deleted.assignments} assignment(s), {tdResult.deleted.forms} form(s),{' '}
+                      {tdResult.deleted.audit} audit row(s).
+                    </div>
+                  )}
+                  <div>
+                    Fixtures: client #{tdResult.fixtures.client} · IC #{tdResult.fixtures.ic} ·
+                    {' '}staff #{tdResult.fixtures.manager} · no-email staff #{tdResult.fixtures.noEmailStaff}
+                    {tdResult.fixtures.created.length > 0 && <> · created: {tdResult.fixtures.created.join(', ')}</>}
+                  </div>
+                  <div>
+                    Real customers: {tdResult.real_customers.before} → {tdResult.real_customers.after}
+                    {tdResult.real_customers.unchanged ? ' (unchanged)' : ' — THIS SHOULD NOT HAVE CHANGED'}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Change Password */}
         <div className="card overflow-hidden">

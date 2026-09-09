@@ -1111,6 +1111,9 @@ export default function Registry() {
   const [counts, setCounts] = useState({
     ic: 0, customer: 0, office: 0, staff: 0, all: 0, archived: 0, checkedOut: 0, checkedIn: 0,
     am: 0, ccm: 0,
+    // How many EXTRA rows the "show test records" chip puts on screen. Kept
+    // separate so the real totals above are never quietly inflated.
+    testCustomer: 0, testIc: 0, testStaff: 0,
   });
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
@@ -1122,7 +1125,11 @@ export default function Registry() {
   // Test fixtures are hidden by default. The chip is the ONLY way they appear
   // in a list — off, they are not in the query at all, so they cannot be acted
   // on or counted by accident.
-  const [showTest, setShowTest] = useState(false);
+  // ON by default: Cara's team uses the ZZ TEST records themselves, so hiding
+  // them by default meant the fixtures were invisible to the people meant to
+  // exercise them. They are unmistakable — charcoal TEST pill, tinted row —
+  // so showing them costs nothing, and the counts still exclude them.
+  const [showTest, setShowTest] = useState(true);
   const [showExport, setShowExport] = useState(false);
   // Set by "Export selected" — narrows the export to exactly the ticked rows.
   const [exportIds, setExportIds] = useState<number[] | null>(null);
@@ -1291,7 +1298,10 @@ export default function Registry() {
   // Tab/type counts — independent of search, so they are NOT refetched while
   // typing. Refreshed on mount and after any mutation.
   const refreshCounts = useCallback(async () => {
-    const [icData, custData, officeData, allData, archData, staffData, outData, inData, amRoster, ccmRoster] = await Promise.all([
+    const [
+      icData, custData, officeData, allData, archData, staffData, outData, inData,
+      amRoster, ccmRoster, custTest, icTest, staffTest,
+    ] = await Promise.all([
       getAccounts({ limit: '1', type: 'ic' }),
       getAccounts({ limit: '1', type: 'customer' }),
       getAccounts({ limit: '1', type: 'customer', office_keys: '1' }),
@@ -1302,12 +1312,21 @@ export default function Registry() {
       getAssignments({ limit: '1', status: 'returned' }).catch(() => ({ total: 0, assignments: [] })),
       getManagerRoster('am').catch(() => ({ managers: [] as any[] })),
       getManagerRoster('ccm').catch(() => ({ managers: [] as any[] })),
+      // Same queries WITH the fixtures, so the difference is the fixture count.
+      getAccounts({ limit: '1', type: 'customer', include_test: '1' }).catch(() => ({ total: 0 } as any)),
+      getAccounts({ limit: '1', type: 'ic', include_test: '1' }).catch(() => ({ total: 0 } as any)),
+      getStaff({ includeInactive: false, includeTest: true }).catch(() => [] as any[]),
     ]);
     setCounts({
       ic: icData.total, customer: custData.total, office: officeData.total,
       staff: staffData.length, all: allData.total, archived: archData.total,
       checkedOut: outData.total, checkedIn: inData.total,
       am: amRoster.managers.length, ccm: ccmRoster.managers.length,
+      // The headline numbers stay REAL — dashboards and reports quote these.
+      // These are only how many extra rows the chip puts on screen.
+      testCustomer: Math.max(0, custTest.total - custData.total),
+      testIc: Math.max(0, icTest.total - icData.total),
+      testStaff: Math.max(0, staffTest.length - staffData.length),
     });
   }, []);
 
@@ -1333,12 +1352,14 @@ export default function Registry() {
   }, [loadRows, refreshCounts]);
 
   const tabs: { key: TabType; label: string }[] = useMemo(() => [
-    { key: 'customer', label: `Customers (${counts.customer})` },
-    { key: 'ic', label: `IC Vendors (${counts.ic})` },
+    // "577 +1 test" rather than a bare 577 beside 578 visible rows. The real
+    // number is never overwritten — it is the one every report quotes.
+    { key: 'customer', label: `Customers (${counts.customer}${showTest && counts.testCustomer ? ` +${counts.testCustomer} test` : ''})` },
+    { key: 'ic', label: `IC Vendors (${counts.ic}${showTest && counts.testIc ? ` +${counts.testIc} test` : ''})` },
     { key: 'am', label: `Account Managers (${counts.am})` },
     { key: 'ccm', label: `Contract Compliance Mgrs (${counts.ccm})` },
     { key: 'office', label: `Office (${counts.office})` },
-    { key: 'cwemployees', label: `CW Employees (${counts.staff})` },
+    { key: 'cwemployees', label: `CW Employees (${counts.staff}${showTest && counts.testStaff ? ` +${counts.testStaff} test` : ''})` },
     { key: 'checkedout', label: `Checked Out (${counts.checkedOut})` },
     { key: 'checkedin', label: `Checked In (${counts.checkedIn})` },
     { key: 'keyforms', label: 'Key Forms' },

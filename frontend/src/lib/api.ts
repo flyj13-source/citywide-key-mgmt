@@ -408,6 +408,22 @@ export interface TestEmailResult {
   sent_at?: string;
 }
 export const getEmailConfig = () => req<EmailConfig>('/settings/email');
+
+// ── Test fixtures ───────────────────────────────────────────────────────────
+export interface TestDataResult {
+  ok: boolean;
+  deleted?: { assignments: number; forms: number; audit: number };
+  fixtures: {
+    client: number; ic: number; manager: number; noEmailStaff: number;
+    created: string[]; existing: string[];
+  };
+  real_customers: { before: number; after: number; unchanged: boolean };
+  error?: string;
+}
+export const resetTestData = () =>
+  req<TestDataResult>('/settings/test-data/reset', { method: 'POST', body: '{}' });
+export const seedTestData = () =>
+  req<TestDataResult>('/settings/test-data/seed', { method: 'POST', body: '{}' });
 /**
  * Deliberately NOT routed through `req`: a failed test send answers 502 with
  * the diagnosis in the body, and `req` would collapse that into a thrown

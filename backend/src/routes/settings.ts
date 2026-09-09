@@ -10,6 +10,7 @@ import {
   smtpConfig, fromConfig, resendConfig, activeProvider, providerBlocker, RESEND_TEST_FROM,
 } from '../lib/mailer';
 import { sendTestEmail } from '../lib/custodyMail';
+import { resetTestData, seedTestFixtures, TEST_EMAIL } from '../lib/testFixtures';
 import db from '../lib/db';
 
 const router = Router();
@@ -108,6 +109,14 @@ router.put('/custody-defaults', requireAuth, (req: AuthRequest, res: Response) =
 
 const isEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
+/** Real (non-fixture) customers — the number a reset must never move. */
+function realCustomerCount(): number {
+  const row = db.prepare(
+    "SELECT COUNT(*) AS c FROM accounts WHERE record_type='customer' AND COALESCE(is_test,0)=0"
+  ).get() as any;
+  return Object.assign({}, row).c as number;
+}
+
 function lastTestSend(): any | null {
   try {
     const raw = db.prepare(
@@ -170,6 +179,16 @@ function emailConfig() {
     }
   }
   if (!notify.length) warnings.push('No custody notification recipient is configured.');
+  // The [TEST] subject prefix keys off the RECIPIENT address, so a notification
+  // recipient that is also a fixture contact would prefix every real custody
+  // email. Worth saying before it happens rather than after.
+  if (notify.some((a) => a.trim().toLowerCase() === TEST_EMAIL.toLowerCase())) {
+    warnings.push(
+      `The notification recipient (${TEST_EMAIL}) is also the test-fixture contact address. ` +
+      'Every custody email sent there will carry the "[TEST] " subject prefix, including real ones. ' +
+      'Use a different address for notifications.'
+    );
+  }
 
   const providerLabel = provider === 'resend'
     ? 'Resend (HTTPS API)'
@@ -302,6 +321,63 @@ router.post('/email/test', requireAuth, async (req: AuthRequest, res: Response) 
     sent_at: new Date().toISOString(),
     config: cfg,
   });
+});
+
+// ── POST /api/settings/test-data/reset ───────────────────────────────────────
+// Wipes everything the ZZ TEST fixtures produced — assignments, key forms,
+// audit rows — and re-seeds the four of them clean. Deletes only rows
+// reachable from a test record; a real assignment is never in scope.
+//
+// Admin only, and it is the deployed equivalent of `npm run test-data:reset`,
+// which cannot reach the managed host because there is no shell there.
+router.post('/test-data/reset', requireAuth, (req: AuthRequest, res: Response) => {
+  if (req.manager?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+  const before = realCustomerCount();
+  try {
+    const r = resetTestData();
+    const after = realCustomerCount();
+    // A reset that moved the real count has deleted something it should not
+    // have. Report it rather than letting it pass as success.
+    const drift = after !== before;
+    logAudit(req, drift ? 'test_data_reset_drift' : 'test_data_reset', null, null, {
+      assignments: r.assignments, forms: r.forms, audit: r.audit,
+      fixtures: r.fixtures, real_customers_before: before, real_customers_after: after,
+      by: req.manager?.name ?? 'System',
+    });
+    res.status(drift ? 500 : 200).json({
+      ok: !drift,
+      deleted: { assignments: r.assignments, forms: r.forms, audit: r.audit },
+      fixtures: r.fixtures,
+      real_customers: { before, after, unchanged: !drift },
+      ...(drift ? { error: `Real customer count moved ${before} → ${after}. Nothing else was reset.` } : {}),
+    });
+  } catch (e: any) {
+    logAudit(req, 'test_data_reset_failed', null, null, { error: e?.message ?? String(e) });
+    res.status(500).json({ ok: false, error: e?.stack || e?.message || String(e) });
+  }
+});
+
+// ── POST /api/settings/test-data/seed ────────────────────────────────────────
+// Seeds or REPAIRS the fixtures without touching their assignments or forms.
+// Idempotent, so pressing it twice does nothing the second time.
+router.post('/test-data/seed', requireAuth, (req: AuthRequest, res: Response) => {
+  if (req.manager?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+  const before = realCustomerCount();
+  try {
+    const fixtures = seedTestFixtures();
+    const after = realCustomerCount();
+    logAudit(req, 'test_data_seeded', null, null, {
+      fixtures, real_customers_before: before, real_customers_after: after,
+      by: req.manager?.name ?? 'System',
+    });
+    res.json({ ok: true, fixtures, real_customers: { before, after, unchanged: after === before } });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.stack || e?.message || String(e) });
+  }
 });
 
 export default router;

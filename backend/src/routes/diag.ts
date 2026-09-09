@@ -3,6 +3,10 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import db, { DATABASE_FILE } from '../lib/db';
 import { buildInfo } from '../lib/buildInfo';
 import { backfillStaffManagers } from '../lib/backfillStaffManagers';
+import {
+  TEST_CLIENT_NAME, TEST_CLIENT_BC, TEST_IC_NAME, TEST_VENDOR_NO,
+  TEST_MANAGER_NAME, TEST_NO_EMAIL_STAFF_NAME, TEST_EMAIL,
+} from '../lib/testFixtures';
 import { logAudit } from '../lib/audit';
 
 const router = Router();
@@ -101,6 +105,43 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
     )
   `);
 
+  // ── Test fixtures ──────────────────────────────────────────────────────────
+  // Whether the four ZZ TEST records actually exist ON THIS DATABASE, which is
+  // otherwise unanswerable from outside: the seed runs at boot, so "the code
+  // shipped" and "the rows are there" are different questions.
+  const fixtureRow = (sql: string, ...p: any[]) => {
+    try {
+      const raw = db.prepare(sql).get(...p) as any;
+      return raw ? Object.assign({}, raw) : null;
+    } catch { return null; }
+  };
+  const smHasIsTest = columnsOf('staff_managers').includes('is_test');
+  const acctHasIsTest = accountCols.includes('is_test');
+
+  const fxClient = fixtureRow(
+    "SELECT id, ic_company_name AS name, COALESCE(is_test,0) AS is_test, account_manager, ccm_manager, " +
+    "ic_name, bc_vendor_number, lockbox_code, " +
+    "COALESCE(am_metal,0)+COALESCE(am_card,0)+COALESCE(ccm_metal,0)+COALESCE(contractor_metal,0)+" +
+    "COALESCE(contractor_fob,0)+COALESCE(office_fob,0)+COALESCE(office_dispenser,0) AS grid_total " +
+    "FROM accounts WHERE bc_client_number = ? AND record_type = 'customer'", TEST_CLIENT_BC);
+  const fxIc = fixtureRow(
+    "SELECT id, ic_company_name AS name, COALESCE(is_test,0) AS is_test, ic_email, ic_primary_contact " +
+    "FROM accounts WHERE bc_vendor_number = ? AND (record_type='ic' OR record_type IS NULL)", TEST_VENDOR_NO);
+  const fxStaff = smHasIsTest
+    ? fixtureRow("SELECT id, name, COALESCE(is_test,0) AS is_test, email, manager_type, role_category, active " +
+                 'FROM staff_managers WHERE name = ?', TEST_MANAGER_NAME)
+    : null;
+  const fxNoEmail = smHasIsTest
+    ? fixtureRow("SELECT id, name, COALESCE(is_test,0) AS is_test, email, role_category, active " +
+                 'FROM staff_managers WHERE name = ?', TEST_NO_EMAIL_STAFF_NAME)
+    : null;
+
+  const expectedNames = {
+    client: TEST_CLIENT_NAME, ic: TEST_IC_NAME,
+    staff: TEST_MANAGER_NAME, no_email_staff: TEST_NO_EMAIL_STAFF_NAME,
+  };
+  const present = [fxClient, fxIc, fxStaff, fxNoEmail].filter((r) => r && r.is_test === 1).length;
+
   res.json({
     build: {
       commit: build.commit,
@@ -114,6 +155,29 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
       path: DATABASE_FILE,
       on_mount: DATABASE_FILE.startsWith('/data'),
       tables: scalar("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table'"),
+    },
+    test_fixtures: {
+      // The whole point: 4 means the seed ran and the rows are here.
+      expected: 4,
+      present,
+      complete: present === 4,
+      is_test_column: { accounts: acctHasIsTest, staff_managers: smHasIsTest },
+      expected_names: expectedNames,
+      expected_contact: TEST_EMAIL,
+      records: { client: fxClient, ic: fxIc, staff: fxStaff, no_email_staff: fxNoEmail },
+      // How many rows are flagged in total — a fixture that got duplicated or
+      // a real row wrongly flagged both show up here.
+      flagged_totals: {
+        accounts: scalar('SELECT COUNT(*) AS c FROM accounts WHERE COALESCE(is_test,0)=1'),
+        staff_managers: smHasIsTest
+          ? scalar('SELECT COUNT(*) AS c FROM staff_managers WHERE COALESCE(is_test,0)=1')
+          : -1,
+      },
+      // What the isolation is actually worth right now.
+      real_customers: scalar(
+        "SELECT COUNT(*) AS c FROM accounts WHERE record_type='customer' AND COALESCE(is_test,0)=0"
+      ),
+      customers_including_test: scalar("SELECT COUNT(*) AS c FROM accounts WHERE record_type='customer'"),
     },
     holder_grid: {
       expected: gridCells.length,
