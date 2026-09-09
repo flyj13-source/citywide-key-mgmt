@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { createTransport } from './mailer';
+import { createTransport, fromConfig, fromHeader } from './mailer';
 import { custodyNotifyRecipients, custodyNotifyDisplay } from './settings';
 import type { KeyLine } from './custody';
 import db from './db';
@@ -86,7 +86,7 @@ function keyRows(keys: KeyLine[]): string {
     </tr>`).join('');
 }
 
-function detailRows(pairs: [string, string][]): string {
+export function detailRows(pairs: [string, string][]): string {
   return pairs.map(([label, value]) => `
     <tr>
       <td style="padding:5px 0;color:${CW_MUTED};font-size:13px;width:150px;vertical-align:top">${esc(label)}</td>
@@ -138,6 +138,11 @@ export interface MailResult {
   skipped?: boolean;
   /** How many send attempts were made (0 when skipped before trying). */
   attempts: number;
+  /** The SMTP message ID, present only on an accepted send. This is the
+   *  handle to give the mail admin when tracing a message. */
+  messageId?: string;
+  /** The server's raw acceptance line, e.g. "250 2.0.0 OK ...". */
+  response?: string;
 }
 
 export interface MailAttachment {
@@ -271,8 +276,28 @@ function isTestRecipient(to: string[]): boolean {
   }
 }
 
+/**
+ * Everything an SMTP failure actually told us, flattened into one string.
+ * Nothing is swallowed: the diagnosis lives in the pieces most error handling
+ * discards — the enhanced status code, the server's response line, and the
+ * failing command.
+ */
+export function smtpErrorText(err: any): string {
+  if (!err) return 'SMTP send failed';
+  const parts: string[] = [];
+  if (err.message) parts.push(String(err.message));
+  if (err.code && !parts.some((p) => p.includes(String(err.code)))) parts.push(`code=${err.code}`);
+  if (err.responseCode) parts.push(`responseCode=${err.responseCode}`);
+  if (err.command) parts.push(`command=${err.command}`);
+  if (err.response && !parts.some((p) => p.includes(String(err.response)))) {
+    parts.push(`response=${String(err.response).trim()}`);
+  }
+  return parts.join(' · ') || 'SMTP send failed';
+}
+
 export async function sendBranded(
   subject: string, html: string, text: string, to: string[], attachments: MailAttachment[] = [],
+  opts: { singleAttempt?: boolean } = {},
 ): Promise<MailResult> {
   const recipients = Array.from(new Set(to.filter(Boolean).map((t) => t.trim()).filter(Boolean)));
   // A test-run email must be unmistakable in an inbox.
@@ -286,8 +311,10 @@ export async function sendBranded(
     return { ok: false, recipients, skipped: true, attempts: 0, error: 'SMTP is not configured (SMTP_USER / SMTP_PASS unset)' };
   }
   const logo = logoBytes();
+  const reply = fromConfig().replyTo;
   const payload = {
-    from: `City Wide Key Management <${process.env.SMTP_USER}>`,
+    from: fromHeader(),
+    ...(reply ? { replyTo: reply } : {}),
     to: recipients.join(', '),
     subject,
     text,
@@ -303,17 +330,29 @@ export async function sendBranded(
   // A transient SMTP hiccup must not become a permanently unsigned record, so
   // retry with backoff before reporting failure. Only after the last attempt
   // does the caller mark the record 'signature_send_failed'.
+  // A diagnostic send does NOT retry: three attempts with backoff would turn
+  // a config error into a seven-second wait and report the same failure at the
+  // end of it. Real custody mail keeps the retries, where a transient hiccup
+  // would otherwise cost a signature.
+  const maxAttempts = opts.singleAttempt ? 1 : MAX_SEND_ATTEMPTS;
   let lastError = 'SMTP send failed';
-  for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      await createTransport().sendMail(payload);
-      return { ok: true, recipients, attempts: attempt };
+      const info: any = await createTransport().sendMail(payload);
+      return {
+        ok: true, recipients, attempts: attempt,
+        messageId: info?.messageId, response: info?.response,
+      };
     } catch (err: any) {
-      lastError = err?.message || 'SMTP send failed';
-      if (attempt < MAX_SEND_ATTEMPTS) await sleep(RETRY_BACKOFF_MS[attempt - 1] ?? 4000);
+      // Keep the WHOLE thing. An Office 365 rejection carries its meaning in
+      // the response line and the code (5.7.60 send-as, 5.7.57 auth,
+      // ESOCKET/ETLS for the handshake) — `err.message` alone often reads as
+      // a bare "Invalid login" that says nothing about which of those it was.
+      lastError = smtpErrorText(err);
+      if (attempt < maxAttempts) await sleep(RETRY_BACKOFF_MS[attempt - 1] ?? 4000);
     }
   }
-  return { ok: false, recipients, attempts: MAX_SEND_ATTEMPTS, error: lastError };
+  return { ok: false, recipients, attempts: maxAttempts, error: lastError };
 }
 
 export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
@@ -572,5 +611,54 @@ export async function sendSignedReceipt(d: SignedReceiptMail): Promise<MailResul
     subject, html, text,
     [d.holderEmail || '', ...notifyAddresses(), d.counterpartyEmail || ''],
     d.pdf ? [{ ...d.pdf, contentType: 'application/pdf' }] : [],
+  );
+}
+
+// ── Test email ───────────────────────────────────────────────────────────────
+// Proves the whole chain end to end: env → transport → STARTTLS → auth →
+// Office 365 → an inbox. It reports what it BELIEVES it is doing (host, port,
+// TLS mode, From) inside the message body, so the copy that arrives can be
+// checked against the copy that was intended.
+export async function sendTestEmail(opts: {
+  to: string[];
+  environment: string;
+  host: string;
+  port: number;
+  tlsMode: string;
+  from: string;
+  triggeredBy: string;
+}): Promise<MailResult> {
+  const at = new Date().toISOString();
+  const rows: [string, string][] = [
+    ['Environment', opts.environment],
+    ['SMTP host', `${opts.host}:${opts.port}`],
+    ['TLS mode', opts.tlsMode],
+    ['From address', opts.from],
+    ['Sent to', opts.to.join(', ')],
+    ['Triggered by', opts.triggeredBy],
+    ['Timestamp', fmtDate(at)],
+  ];
+  const html = brandedShell(
+    'Test email',
+    'If you are reading this, outbound mail is working.',
+    `<p style="margin:0 0 20px;font-size:14px;color:${CW_CHARCOAL}">
+       This message was sent from the City Wide Key Management Settings screen to confirm that
+       SMTP delivery is configured correctly. It carries no key or client data.
+     </p>
+     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:8px">
+       ${detailRows(rows)}
+     </table>`,
+    !!logoBytes(),
+  );
+  const text = [
+    'City Wide Key Management — test email',
+    'If you are reading this, outbound mail is working.',
+    '',
+    ...rows.map(([k, v]) => `${k}: ${v}`),
+  ].join('\n');
+
+  return sendBranded(
+    'City Wide Key Management — test email', html, text, opts.to, [],
+    { singleAttempt: true },
   );
 }

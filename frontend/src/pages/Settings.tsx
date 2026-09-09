@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/Layout';
 import {
   changePassword, getBackupStatus, runBackupNow, getCustodyNotification, setCustodyNotification,
-  getCustodyDefaults, setCustodyDefaults,
+  getCustodyDefaults, setCustodyDefaults, getEmailConfig, sendTestEmail,
   type BackupStatus, type CustodyNotificationSetting, type CustodyDefaults,
+  type EmailConfig, type TestEmailResult,
 } from '../lib/api';
 import { getManager } from '../lib/auth';
 
@@ -54,6 +55,43 @@ export default function Settings() {
       .catch(() => setDue(null));
   }, []);
   useEffect(() => { loadDue(); }, [loadDue]);
+
+  // ── Email ──────────────────────────────────────────────────────────────────
+  // Read-only picture of how mail is actually wired, plus the one button that
+  // proves it. Admin only, because it sends real mail from the real mailbox.
+  const [email, setEmail] = useState<EmailConfig | null>(null);
+  const [emailLoading, setEmailLoading] = useState(true);
+  const [testTo, setTestTo] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<TestEmailResult | null>(null);
+
+  const loadEmail = useCallback(() => {
+    setEmailLoading(true);
+    getEmailConfig()
+      .then(setEmail)
+      .catch(() => setEmail(null))
+      .finally(() => setEmailLoading(false));
+  }, []);
+  useEffect(() => { loadEmail(); }, [loadEmail]);
+
+  const handleTestEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTesting(true); setTestResult(null);
+    try {
+      const r = await sendTestEmail(testTo.trim() || undefined);
+      setTestResult(r);
+    } catch (err: any) {
+      // sendTestEmail is written not to throw; if it somehow does, show that
+      // rather than leaving the button spinning with nothing said.
+      setTestResult({
+        ok: false, recipients: [], message_id: null, response: null,
+        error: err?.message || String(err), skipped: false, attempts: 0,
+      });
+    } finally {
+      setTesting(false);
+      loadEmail();
+    }
+  };
 
   const handleSaveDue = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -217,6 +255,152 @@ export default function Settings() {
               {notifySaving ? 'Saving…' : 'Save recipient'}
             </button>
           </form>
+        </div>
+
+        {/* Email — configuration readout + test send */}
+        <div className="card overflow-hidden">
+          <div className="px-5 py-3 bg-cw-black flex items-center justify-between">
+            <h2 className="text-white font-semibold text-sm">Email</h2>
+            {email && (
+              <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold ${
+                email.smtp.configured ? 'bg-green-100 text-green-800' : 'bg-[#fbeaea] text-[#C0272D]'
+              }`}>
+                {email.smtp.configured ? 'SMTP configured' : 'SMTP not configured'}
+              </span>
+            )}
+          </div>
+
+          <div className="px-5 py-4 space-y-4">
+            {emailLoading && <p className="text-sm text-cw-muted">Loading configuration…</p>}
+
+            {email && (
+              <>
+                {/* What is actually wired, read-only. */}
+                <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                  {([
+                    ['Provider', email.provider],
+                    ['SMTP host', `${email.smtp.host}:${email.smtp.port}`
+                      + (email.smtp.host_source === 'default' ? '  (default — SMTP_HOST unset)' : '')],
+                    ['Connection', email.smtp.tls_mode],
+                    ['Authenticated as', email.smtp.user ?? '— not set —'],
+                    ['Password', email.smtp.password_set ? 'set' : '— not set —'],
+                    ['From address', email.from.header ?? '— not set —'],
+                    ['Reply-To', email.from.reply_to ?? 'none (replies go to the From address)'],
+                    ['Notification recipient', email.notification_recipients.join(', ') || 'nobody'],
+                    ['Environment', email.environment],
+                  ] as [string, string][]).map(([k, v]) => (
+                    <div key={k} className="flex flex-col">
+                      <dt className="text-[11px] uppercase tracking-wide text-cw-muted">{k}</dt>
+                      <dd className="text-[#1a1a1a] font-medium break-words">{v}</dd>
+                    </div>
+                  ))}
+                </dl>
+
+                {email.last_test && (
+                  <p className="text-xs text-cw-muted">
+                    Last test:{' '}
+                    <span className={email.last_test.ok ? 'text-green-800 font-semibold' : 'text-[#C0272D] font-semibold'}>
+                      {email.last_test.ok ? 'accepted' : 'failed'}
+                    </span>
+                    {' '}on {fmtWhen(email.last_test.at)}
+                    {email.last_test.by && <> by {email.last_test.by}</>}
+                    {email.last_test.recipients.length > 0 && <> → {email.last_test.recipients.join(', ')}</>}
+                    {email.last_test.message_id && (
+                      <> · <span className="font-mono">{email.last_test.message_id}</span></>
+                    )}
+                  </p>
+                )}
+
+                {/* Problems that a send would otherwise have to discover. */}
+                {email.warnings.length > 0 && (
+                  <div className="rounded border-2 border-[#C0272D] bg-[#fbeaea] px-4 py-3 space-y-1">
+                    <div className="text-sm font-semibold text-[#C0272D]">
+                      {email.warnings.length === 1 ? 'Configuration problem' : `${email.warnings.length} configuration problems`}
+                    </div>
+                    <ul className="list-disc pl-5 space-y-1">
+                      {email.warnings.map((w) => (
+                        <li key={w} className="text-sm text-[#1a1a1a]">{w}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {isAdmin ? (
+                  <form onSubmit={handleTestEmail} className="space-y-3 pt-2 border-t border-gray-200">
+                    <div className="flex flex-wrap items-end gap-3">
+                      <div className="flex-1 min-w-[240px]">
+                        <label className="block text-sm font-medium text-cw-text mb-1">
+                          Send to <span className="text-cw-muted font-normal">— any address, including external</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={testTo}
+                          onChange={(e) => setTestTo(e.target.value)}
+                          disabled={testing}
+                          className="input w-full"
+                          placeholder={email.notification_recipients.join(', ') || 'name@example.com'}
+                          autoComplete="off"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={testing}
+                        className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors"
+                      >
+                        {testing ? 'Sending…' : 'Send test email'}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-gray-400">
+                      Sends one CW-branded message stating the host, TLS mode, From address and timestamp.
+                      Leave "Send to" empty to use the notification recipient. Both outcomes are written to the audit log.
+                    </p>
+
+                    {testResult && (
+                      testResult.ok ? (
+                        <div className="rounded border border-green-200 bg-green-50 px-4 py-3 space-y-1">
+                          <div className="text-sm font-semibold text-green-800">
+                            ✓ Accepted by {email.smtp.host} — delivered to {testResult.recipients.join(', ')}
+                          </div>
+                          {testResult.message_id && (
+                            <div className="text-xs text-green-900">
+                              Message ID <span className="font-mono break-all">{testResult.message_id}</span>
+                            </div>
+                          )}
+                          {testResult.response && (
+                            <div className="text-xs text-green-900 font-mono break-all">{testResult.response}</div>
+                          )}
+                          <div className="text-[11px] text-green-800">
+                            Accepted by the server is not the same as landed in the inbox — check the mailbox, and the
+                            junk folder, before calling it done.
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded border-2 border-[#C0272D] bg-[#fbeaea] px-4 py-3 space-y-1">
+                          <div className="text-sm font-semibold text-[#C0272D]">
+                            {testResult.skipped ? 'Not sent' : 'Rejected'}
+                            {testResult.recipients.length > 0 && <> — {testResult.recipients.join(', ')}</>}
+                          </div>
+                          {/* The complete SMTP text, unabridged: whether this is
+                              auth, TLS or a tenant block is only legible here. */}
+                          <pre className="text-xs text-[#1a1a1a] whitespace-pre-wrap break-words font-mono bg-white/60 rounded px-2 py-1.5">
+{testResult.error || 'No error text was returned.'}
+                          </pre>
+                          <div className="text-[11px] text-[#7a5a00]">
+                            5.7.57 / 535 → authentication · 5.7.60 → the From address is not permitted to send as ·
+                            ESOCKET / ETLS / wrong version number → the TLS handshake · 5.7.708 → tenant or IP block.
+                          </div>
+                        </div>
+                      )
+                    )}
+                  </form>
+                ) : (
+                  <p className="text-xs text-cw-muted pt-2 border-t border-gray-200">
+                    Sending a test email is restricted to administrators.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         {/* Default due window */}

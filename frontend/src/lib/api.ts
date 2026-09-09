@@ -365,6 +365,66 @@ export interface CustodyDefaults {
   updated_by: string | null;
 }
 export const getCustodyDefaults = () => req<CustodyDefaults>('/settings/custody-defaults');
+
+// ── Email configuration + test send ─────────────────────────────────────────
+export interface EmailConfig {
+  provider: string;
+  smtp: {
+    host: string; port: number;
+    host_source: 'env' | 'default'; port_source: 'env' | 'default';
+    secure: boolean; require_tls: boolean;
+    tls_mode: string; min_tls_version: string;
+    user: string | null; password_set: boolean; configured: boolean;
+  };
+  from: {
+    name: string; address: string | null; header: string | null;
+    reply_to: string | null;
+    name_source: string; address_source: string; mismatch: boolean;
+  };
+  notification_recipients: string[];
+  environment: string;
+  warnings: string[];
+  last_test: {
+    ok: boolean; at: string; by: string | null;
+    recipients: string[]; message_id: string | null; error: string | null;
+  } | null;
+}
+export interface TestEmailResult {
+  ok: boolean;
+  recipients: string[];
+  message_id: string | null;
+  response: string | null;
+  error: string | null;
+  skipped: boolean;
+  attempts: number;
+  sent_at?: string;
+}
+export const getEmailConfig = () => req<EmailConfig>('/settings/email');
+/**
+ * Deliberately NOT routed through `req`: a failed test send answers 502 with
+ * the diagnosis in the body, and `req` would collapse that into a thrown
+ * string, losing the message ID, the attempt count and the skipped flag. The
+ * whole point of this call is the detail.
+ */
+export const sendTestEmail = async (to?: string): Promise<TestEmailResult> => {
+  const token = getToken();
+  const res = await fetch(`${BASE}/settings/email/test`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(to ? { to } : {}),
+  });
+  const body = await res.json().catch(() => null);
+  if (body && typeof body.ok === 'boolean') return body as TestEmailResult;
+  // 400 (bad address), 403 (not admin), or a non-JSON response.
+  return {
+    ok: false, recipients: [], message_id: null, response: null,
+    error: body?.error || `${res.status} ${res.statusText}`,
+    skipped: false, attempts: 0,
+  };
+};
 export const setCustodyDefaults = (due_days: number) =>
   req<{ due_days: number; example_due_at: string }>('/settings/custody-defaults', {
     method: 'PUT', body: JSON.stringify({ due_days }),
@@ -411,9 +471,17 @@ export interface KeyFormDoc {
 }
 
 export const getKeyFormDocs = (params: Record<string, string>) =>
-  req<{ forms: KeyFormDoc[]; total: number; page: number; limit: number }>(
+  req<{ forms: KeyFormDoc[]; total: number; page: number; limit: number; failed_count: number }>(
     `/key-forms?${new URLSearchParams(params)}`
   );
+
+/** Replay every form whose last send failed — the post-fix drain. */
+export const retryFailedKeyForms = () =>
+  req<{
+    queued: number; attempted: number; sent: number; failed: number;
+    remaining: number; stopped_early: boolean;
+    results: { id: number; form_no: string | null; ok: boolean; error?: string | null }[];
+  }>('/key-forms/retry-failed', { method: 'POST', body: '{}' });
 
 /** One form per holder, each carrying that person's CURRENT state. */
 export const generateKeyFormDocs = (holders: { name: string; type: 'employee' | 'ic'; email?: string | null }[]) =>

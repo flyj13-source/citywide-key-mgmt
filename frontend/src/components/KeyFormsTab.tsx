@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Modal from './Modal';
 import {
-  getKeyFormDocs, generateKeyFormDocs, sendKeyFormDoc, bulkSendKeyFormDocs,
+  getKeyFormDocs, generateKeyFormDocs, sendKeyFormDoc, bulkSendKeyFormDocs, retryFailedKeyForms,
   downloadKeyFormDocPdf, getHolders,
   type KeyFormDoc, type HolderOption,
 } from '../lib/api';
@@ -28,6 +28,9 @@ const STATUS_FILTERS = [
   { key: 'sent', label: 'Sent' },
   { key: 'signed', label: 'Signed' },
   { key: 'unsigned', label: 'Unsigned' },
+  // Not a stored status: a failed send leaves the row 'unsigned', which is
+  // also what a never-sent form reads as. The server filters on send_error.
+  { key: 'send_failed', label: 'Failed to send' },
 ];
 
 /** Status is the thing an auditor scans for, so it carries real colour. */
@@ -283,6 +286,11 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
   const [debounced, setDebounced] = useState('');
   const [eventType, setEventType] = useState('all');
   const [status, setStatus] = useState('all');
+  // Unfiltered backlog of forms whose last send failed — the chip shows it
+  // from any view, because a queue you cannot see is a queue you forget.
+  const [failedCount, setFailedCount] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  const [retryResult, setRetryResult] = useState<string | null>(null);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -307,6 +315,7 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
       const d = await getKeyFormDocs(params);
       setForms(d.forms);
       setTotal(d.total);
+      setFailedCount(d.failed_count ?? 0);
     } finally { setLoading(false); }
   }, [debounced, eventType, status, from, to]);
 
@@ -339,6 +348,52 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
         <select className="input w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
           {STATUS_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>
+
+        {/* Only present when there is actually a backlog. */}
+        {failedCount > 0 && (
+          <>
+            <button
+              type="button"
+              onClick={() => setStatus(status === 'send_failed' ? 'all' : 'send_failed')}
+              className={`inline-flex items-center gap-1.5 h-[34px] px-3 rounded text-sm font-medium border transition-colors ${
+                status === 'send_failed'
+                  ? 'bg-[#C0272D] border-[#C0272D] text-white'
+                  : 'bg-[#fbeaea] border-[#C0272D] text-[#C0272D] hover:bg-[#f7d9da]'
+              }`}
+              title="Forms whose last send was rejected by the mail server"
+            >
+              {failedCount} failed to send
+            </button>
+            <button
+              type="button"
+              disabled={retrying}
+              onClick={async () => {
+                setRetrying(true); setRetryResult(null);
+                try {
+                  const r = await retryFailedKeyForms();
+                  setFailedCount(r.remaining);
+                  const firstError = r.results.find((x) => !x.ok)?.error;
+                  setRetryResult(
+                    r.failed === 0
+                      ? `✓ All ${r.sent} form${r.sent === 1 ? '' : 's'} sent.`
+                      : r.stopped_early
+                        // Stopped at the first rejection rather than repeating
+                        // it across the whole backlog.
+                        ? `Stopped after the first rejection — ${r.remaining} form${r.remaining === 1 ? '' : 's'} still queued. ${firstError ?? ''}`
+                        : `${r.sent} sent, ${r.failed} still failing${firstError ? ` — ${firstError}` : ''}`
+                  );
+                  load();
+                } catch (e: any) {
+                  setRetryResult(e?.message || 'Retry failed');
+                } finally { setRetrying(false); }
+              }}
+              className="inline-flex items-center gap-1.5 h-[34px] px-3 rounded text-sm font-medium bg-white border border-[#1a1a1a] text-[#1a1a1a] hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-50 transition-colors"
+              title="Re-send every failed form, oldest first"
+            >
+              {retrying ? 'Retrying…' : 'Retry all failed'}
+            </button>
+          </>
+        )}
         <input type="date" className="input w-auto" value={from} onChange={(e) => setFrom(e.target.value)} title="Generated from" />
         <input type="date" className="input w-auto" value={to} onChange={(e) => setTo(e.target.value)} title="Generated to" />
         <span className="flex-1" />
@@ -354,6 +409,22 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
           Generate Key Form
         </button>
       </div>
+
+      {retryResult && (
+        <div className={`rounded border px-3 py-2 text-sm ${
+          retryResult.startsWith('✓')
+            ? 'border-green-200 bg-green-50 text-green-800'
+            : 'border-[#C0272D] bg-[#fbeaea] text-[#C0272D]'
+        }`}>
+          {retryResult}
+          <button
+            onClick={() => setRetryResult(null)}
+            className="ml-3 underline text-xs opacity-70 hover:opacity-100"
+          >
+            dismiss
+          </button>
+        </div>
+      )}
 
       <div className="card overflow-x-auto max-w-full">
         <table className="w-full text-sm border-collapse">

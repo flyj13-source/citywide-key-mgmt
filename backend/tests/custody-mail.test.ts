@@ -16,7 +16,10 @@ process.env.SMTP_PASS = 'not-a-real-password';
 delete process.env.CARA_EMAIL;
 
 const sent: any[] = [];
-vi.mock('../src/lib/mailer', () => ({
+// Only the transport is stubbed. The From/Reply-To helpers stay real, so these
+// tests exercise the same header construction production uses.
+vi.mock('../src/lib/mailer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/lib/mailer')>()),
   createTransport: () => ({
     sendMail: async (msg: any) => { sent.push(msg); return { messageId: 'test' }; },
   }),

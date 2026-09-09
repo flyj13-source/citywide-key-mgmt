@@ -17,6 +17,7 @@ import {
   parseScope, serializeForm, snapshotHolder, FORM_EVENT_LABEL,
   type FormEventType,
 } from '../lib/keyForm';
+import { failedSendCount, failedSendIds } from '../lib/keyForm';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { sendKeyForm, caraAddress, notifyAddresses } from '../lib/custodyMail';
 
@@ -60,7 +61,9 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
     limit,
     offset: (page - 1) * limit,
   });
-  res.json({ forms: rows, total, page, limit });
+  // Always returned, regardless of the active filter — the chip has to show
+  // the backlog even while the list is filtered to something else.
+  res.json({ forms: rows, total, page, limit, failed_count: failedSendCount() });
 });
 
 // ── GET /api/key-forms/:id ───────────────────────────────────────────────────
@@ -207,6 +210,51 @@ router.post('/bulk-send', requireAuth, async (req: AuthRequest, res: Response) =
     custom_recipient: to || undefined, sent_by: req.manager?.name ?? 'System',
   });
   res.json({ sent, failed: results.length - sent, results });
+});
+
+// ── POST /api/key-forms/retry-failed ─────────────────────────────────────────
+// Replays every form whose last send failed. Built for the case this exists
+// for: mail was misconfigured, a batch of forms queued up behind it, and the
+// config has now been fixed. Oldest first, so the queue drains in order.
+router.post('/retry-failed', requireAuth, async (req: AuthRequest, res: Response) => {
+  const ids = failedSendIds(200);
+  if (!ids.length) {
+    return res.json({
+      queued: 0, attempted: 0, sent: 0, failed: 0,
+      stopped_early: false, results: [], remaining: 0,
+    });
+  }
+
+  const results: { id: number; form_no: string | null; ok: boolean; error?: string | null }[] = [];
+  // Stop at the first rejection. These forms are queued precisely BECAUSE mail
+  // was misconfigured; if it still is, grinding through the whole backlog with
+  // per-form retries would take many minutes to report the same error the
+  // first attempt already gave. One failure is the answer.
+  let abortedAfter: number | null = null;
+  for (const id of ids) {
+    const row = getKeyForm(id);
+    if (!row) { results.push({ id, form_no: null, ok: false, error: 'Not found' }); continue; }
+    const r = await deliverKeyForm(req, id, null);
+    results.push({ id, form_no: row.form_no ?? `KF-${id}`, ok: r.ok, error: r.error });
+    if (!r.ok) { abortedAfter = results.length; break; }
+  }
+  const sent = results.filter((r) => r.ok).length;
+  logAudit(req, 'key_forms_retry_failed', null, null, {
+    queued: ids.length, attempted: results.length, sent, failed: results.length - sent,
+    stopped_early: abortedAfter !== null,
+    // The first remaining error is what the operator needs to see next.
+    first_error: results.find((r) => !r.ok)?.error ?? null,
+    retried_by: req.manager?.name ?? 'System',
+  });
+  res.json({
+    queued: ids.length,
+    attempted: results.length,
+    sent,
+    failed: results.length - sent,
+    stopped_early: abortedAfter !== null,
+    results,
+    remaining: failedSendCount(),
+  });
 });
 
 // ── PUBLIC: GET /api/key-forms/token/:token — the signature page ─────────────

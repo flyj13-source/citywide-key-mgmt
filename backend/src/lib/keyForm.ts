@@ -263,7 +263,14 @@ export function listKeyForms(f: FormFilters): { rows: any[]; total: number } {
   }
   if (f.holder) { where += ' AND LOWER(TRIM(holder_name)) = LOWER(TRIM(?))'; params.push(f.holder); }
   if (f.event_type && f.event_type !== 'all') { where += ' AND event_type = ?'; params.push(f.event_type); }
-  if (f.status && f.status !== 'all') { where += ' AND status = ?'; params.push(f.status); }
+  // 'send_failed' is not a stored status — a failed send leaves the form
+  // 'unsigned', which is also what a never-sent form reads as. The thing that
+  // actually distinguishes them is send_error, so the filter asks for that.
+  if (f.status === 'send_failed') {
+    where += " AND send_error IS NOT NULL AND TRIM(send_error) <> ''";
+  } else if (f.status && f.status !== 'all') {
+    where += ' AND status = ?'; params.push(f.status);
+  }
   if (f.from) { where += ' AND created_at >= ?'; params.push(f.from); }
   if (f.to) { where += ' AND created_at <= ?'; params.push(`${f.to} 23:59:59`); }
 
@@ -276,6 +283,22 @@ export function listKeyForms(f: FormFilters): { rows: any[]; total: number } {
     rows: rows.map((r) => serializeForm(Object.assign({}, r))),
     total: Object.assign({}, countRow).c as number,
   };
+}
+
+/** How many forms are sitting on a failed send right now. Drives the chip. */
+export function failedSendCount(): number {
+  const row = db.prepare(
+    "SELECT COUNT(*) AS c FROM key_form_docs WHERE send_error IS NOT NULL AND TRIM(send_error) <> ''"
+  ).get() as any;
+  return Object.assign({}, row).c as number;
+}
+
+/** Every form whose last send failed, oldest first so a retry replays in order. */
+export function failedSendIds(limit = 200): number[] {
+  return (db.prepare(
+    "SELECT id FROM key_form_docs WHERE send_error IS NOT NULL AND TRIM(send_error) <> '' " +
+    'ORDER BY id ASC LIMIT ?'
+  ).all(limit) as any[]).map((r) => Object.assign({}, r).id as number);
 }
 
 /** Record a send. Idempotent by design: re-sending is allowed and counted. */
