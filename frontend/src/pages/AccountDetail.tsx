@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Badge from '../components/Badge';
 import YesNo from '../components/YesNo';
 import { getAccount, revealCode } from '../lib/api';
+import { QuickCustodyButtons, useCustodyContext } from '../components/QuickCustody';
+import { CheckOutModal, CheckInModal } from '../components/CustodyModals';
+import { ActionButton, ActionRow, ActionGroup } from '../components/ActionRow';
+import { IconCheckOut, IconCheckIn } from '../components/Icons';
 
 function MetricCard({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -78,14 +82,27 @@ export default function AccountDetail() {
   const [account, setAccount] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [checkOutOpen, setCheckOutOpen] = useState(false);
+  const [checkInOpen, setCheckInOpen] = useState(false);
+  const [notice, setNotice] = useState('');
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!accountId) return;
     getAccount(Number(accountId))
       .then(setAccount)
       .catch(() => setError('Account not found'))
       .finally(() => setLoading(false));
   }, [accountId]);
+  useEffect(() => { load(); }, [load]);
+
+  // One click from the registry row, so this is where a handover actually
+  // starts: the client is already known, and so is everything that follows
+  // from it.
+  const snapshot = useMemo(
+    () => (account ? { id: account.id, name: account.ic_company_name } : null),
+    [account],
+  );
+  const { checkoutCtx, checkinCtx } = useCustodyContext(snapshot);
 
   if (loading) return <Layout><div className="p-8 text-cw-muted">Loading…</div></Layout>;
   if (error || !account) return <Layout><div className="p-8 text-red-500">{error || 'Not found'}</div></Layout>;
@@ -114,7 +131,54 @@ export default function AccountDetail() {
               </Badge>
             </div>
           </div>
+
+          {/* The handover happens here. The standard transaction is one
+              click; the "…" forms are the same thing with the defaults
+              already filled in, for when it is not the standard one. */}
+          <ActionRow>
+            <ActionGroup label="Daily custody">
+              <QuickCustodyButtons
+                checkoutCtx={checkoutCtx}
+                checkinCtx={checkinCtx}
+                onDone={load}
+                onError={setNotice}
+              />
+              <ActionButton
+                weight={checkoutCtx?.can_quick_checkout ? 'secondary' : 'primary'}
+                icon={<IconCheckOut />}
+                label={checkoutCtx?.can_quick_checkout ? 'Check Out…' : 'Check Out'}
+                onClick={() => setCheckOutOpen(true)}
+                title="Change the holder, keys or due date"
+              />
+              <ActionButton
+                weight={checkinCtx?.can_quick_checkin ? 'secondary' : 'primary'}
+                icon={<IconCheckIn />}
+                label={checkinCtx?.can_quick_checkin ? 'Check In…' : 'Check In'}
+                onClick={() => setCheckInOpen(true)}
+                title="Return a subset, or change the condition"
+              />
+            </ActionGroup>
+          </ActionRow>
         </div>
+
+        {notice && (
+          <p className="text-sm text-[#C0272D] bg-[#fbeaea] border border-[#f0c9cb] rounded px-3 py-2">{notice}</p>
+        )}
+
+        {checkOutOpen && (
+          <CheckOutModal
+            presetAccount={snapshot}
+            onClose={() => setCheckOutOpen(false)}
+            onDone={load}
+          />
+        )}
+        {checkInOpen && (
+          <CheckInModal
+            presetAccount={snapshot}
+            onClose={() => setCheckInOpen(false)}
+            onDone={load}
+          />
+        )}
 
         {/* Key Inventory */}
         <div>

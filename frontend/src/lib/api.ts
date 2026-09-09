@@ -250,10 +250,15 @@ export interface MailOutcome {
   cara?: string;
   /** How many send attempts were made (0 when skipped before trying). */
   attempts?: number;
+  /** Deliberately not sent — the holder is signing on this device right now.
+   *  Distinct from a send that was tried and failed. */
+  skipped?: boolean;
 }
 
 export interface HolderOption {
-  id: number;
+  /** Null when the person is named on a client row but has no roster or
+   *  vendor record behind them — still a valid holder, just not a linkable one. */
+  id: number | null;
   name: string;
   email: string | null;
   type: 'employee' | 'ic';
@@ -296,11 +301,74 @@ export const checkout = (data: {
   no_email_reason?: string | null;
   counterparty_name?: string | null;
   counterparty_email?: string | null;
+  /** 'in_person' suppresses the "please sign" email — the signature is being
+   *  captured here and the signed receipt follows seconds later. */
+  sign_mode?: 'in_person' | 'email';
 }) =>
   req<{
     id: number; assignment: Assignment; signoff_link: string | null;
     signature_status: SignatureStatus; email: MailOutcome;
   }>('/assignments/checkout', { method: 'POST', body: JSON.stringify(data) });
+
+// ── Custody context — every default the form opens with, in one call ────────
+export interface SuggestedHolder {
+  id: number | null;
+  name: string;
+  email: string | null;
+  type: 'employee' | 'ic';
+  /** "assigned IC" / "account manager" — shown on the quick-action button so
+   *  the pre-selected holder is never a mystery. */
+  reason: string;
+  has_email: boolean;
+}
+export interface CheckoutContext {
+  account: { id: number; name: string; record_type: string; bc_number: string | null };
+  keys: (KeyAvailability & { suggested: number })[];
+  suggested_holder: SuggestedHolder | null;
+  suggested_total: number;
+  due_at: string;
+  default_due_days: number;
+  can_quick_checkout: boolean;
+}
+export const getCheckoutContext = (accountId: number) =>
+  req<CheckoutContext>(`/assignments/checkout-context?account_id=${accountId}`);
+
+export interface CheckinContext {
+  account: { id: number; name: string };
+  open: Assignment[];
+  suggested_assignment_id: number | null;
+  suggested_keys: KeyLine[];
+  suggested_holder: { name: string; email: string | null } | null;
+  condition: string;
+  can_quick_checkin: boolean;
+}
+export const getCheckinContext = (accountId: number) =>
+  req<CheckinContext>(`/assignments/checkin-context?account_id=${accountId}`);
+
+export interface RecentHolder {
+  id: number | null;
+  name: string;
+  email: string | null;
+  type: 'employee' | 'ic';
+  last_used: string | null;
+  times: number;
+}
+export const getRecentHolders = (limit = 8) =>
+  req<{ holders: RecentHolder[] }>(`/assignments/recent-holders?limit=${limit}`);
+
+export interface CustodyDefaults {
+  due_days: number;
+  is_default: boolean;
+  fallback_due_days: number;
+  example_due_at: string;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+export const getCustodyDefaults = () => req<CustodyDefaults>('/settings/custody-defaults');
+export const setCustodyDefaults = (due_days: number) =>
+  req<{ due_days: number; example_due_at: string }>('/settings/custody-defaults', {
+    method: 'PUT', body: JSON.stringify({ due_days }),
+  });
 
 // ── Key Forms ────────────────────────────────────────────────────────────────
 export type FormEventType = 'checkin' | 'checkout' | 'transfer' | 'reassignment' | 'audit';
@@ -427,6 +495,7 @@ export const checkin = (data: {
   holder_id?: number | null;
   account_id?: number;
   returned_at?: string | null;
+  sign_mode?: 'in_person' | 'email';
 }) =>
   req<{
     success: true; partial: boolean; still_out: KeyLine[]; assignment: Assignment;

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Modal from './Modal';
+import SignaturePad, { type SignaturePadHandle } from './SignaturePad';
 import { getManager } from '../lib/auth';
 import {
-  getAccounts, getKeyAvailability, getHolders, checkout, checkin, getAssignments, saveHolderEmail,
+  getAccounts, getKeyAvailability, getHolders, getRecentHolders, checkout, checkin, getAssignments, saveHolderEmail,
+  getCheckoutContext, getCheckinContext, signInPerson, resendSignoff,
   type Assignment, type HolderOption, type KeyAvailability, type KeyTypeKey, type MailOutcome,
   type SignatureStatus,
 } from '../lib/api';
@@ -312,8 +314,13 @@ export function selectedLines(picks: Record<string, Pick>): { type: KeyTypeKey; 
 }
 
 // ── "Recording for" picker (self-service vs on-behalf) ───────────────────────
+// Two things sit above the full roster: whoever the client already assigns
+// (passed in as `suggested`, and normally already selected), and the people
+// who have actually held keys lately. An alphabetical list of 260+ records put
+// the person standing in front of you somewhere in the middle of a scroll.
 export function HolderPicker({
   mode, setMode, holder, setHolder, placeholder = '— Select the person receiving the keys —',
+  suggested = null,
 }: {
   mode: 'self' | 'other';
   setMode: (m: 'self' | 'other') => void;
@@ -321,9 +328,12 @@ export function HolderPicker({
   setHolder: (h: HolderOption | null) => void;
   /** Overridden for opening balances, where nobody is RECEIVING anything. */
   placeholder?: string;
+  /** The client's assigned IC or AM, pinned to the top with its reason. */
+  suggested?: (HolderOption & { reason?: string }) | null;
 }) {
   const me = getManager();
   const [options, setOptions] = useState<{ employees: HolderOption[]; ics: HolderOption[] }>({ employees: [], ics: [] });
+  const [recent, setRecent] = useState<HolderOption[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const loaded = useRef(false);
@@ -333,7 +343,19 @@ export function HolderPicker({
     loaded.current = true;
     setLoading(true);
     getHolders().then(setOptions).catch(() => setOptions({ employees: [], ics: [] })).finally(() => setLoading(false));
+    getRecentHolders(6)
+      .then((d) => setRecent(d.holders.map((h) => ({
+        id: h.id, name: h.name, email: h.email, type: h.type,
+        detail: h.type === 'ic' ? 'IC' : 'Employee', has_email: !!h.email,
+      }))))
+      .catch(() => setRecent([]));
   }, [mode]);
+
+  const sameHolder = (a: HolderOption | null, b: HolderOption | null) =>
+    !!a && !!b && a.type === b.type && a.name === b.name;
+
+  // The suggestion is not repeated in the recent strip — one row, one person.
+  const recentShown = recent.filter((r) => !sameHolder(r, suggested ?? null)).slice(0, 5);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -356,6 +378,43 @@ export function HolderPicker({
 
       {mode === 'other' && (
         <div className="space-y-2">
+          {(suggested || recentShown.length > 0) && (
+            <div className="flex flex-wrap gap-1.5">
+              {suggested && (
+                <button
+                  type="button"
+                  onClick={() => setHolder(suggested)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs transition-colors ${
+                    sameHolder(holder, suggested)
+                      ? 'bg-[#C0272D] border-[#C0272D] text-white'
+                      : 'bg-white border-cw-border text-[#1a1a1a] hover:border-[#C0272D]'
+                  }`}
+                  title={`Assigned to this client${suggested.email ? ` · ${suggested.email}` : ''}`}
+                >
+                  <span className="font-medium truncate max-w-[15rem]">{suggested.name}</span>
+                  <span className={sameHolder(holder, suggested) ? 'text-white/75' : 'text-cw-muted'}>
+                    {suggested.reason ?? 'assigned'}
+                  </span>
+                </button>
+              )}
+              {recentShown.map((r) => (
+                <button
+                  key={`${r.type}:${r.id ?? r.name}`}
+                  type="button"
+                  onClick={() => setHolder(r)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs transition-colors ${
+                    sameHolder(holder, r)
+                      ? 'bg-[#1a1a1a] border-[#1a1a1a] text-white'
+                      : 'bg-white border-cw-border text-[#1a1a1a] hover:border-[#1a1a1a]'
+                  }`}
+                  title={r.email ?? 'No email on file'}
+                >
+                  <span className="truncate max-w-[13rem]">{r.name}</span>
+                  <span className={sameHolder(holder, r) ? 'text-white/60' : 'text-gray-400'}>recent</span>
+                </button>
+              ))}
+            </div>
+          )}
           <input
             className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
             placeholder="Filter staff and IC vendors…"
@@ -364,15 +423,23 @@ export function HolderPicker({
           />
           <select
             className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
-            value={holder ? `${holder.type}:${holder.id}` : ''}
+            value={holder ? `${holder.type}:${holder.id ?? 'unlinked'}` : ''}
             onChange={(e) => {
               const [type, id] = e.target.value.split(':');
+              // Re-picking the unlinked entry keeps the holder it stands for;
+              // looking it up by id would find nothing and silently clear it.
+              if (id === 'unlinked') return;
               const list = type === 'ic' ? options.ics : options.employees;
               setHolder(list.find((o) => String(o.id) === id) ?? null);
             }}
             size={1}
           >
             <option value="">{loading ? 'Loading roster…' : placeholder}</option>
+            {/* A holder named on a client row can have no vendor or roster
+                record behind them. Still selectable — just not linkable. */}
+            {holder && holder.id == null && (
+              <option value={`${holder.type}:unlinked`}>{holder.name}</option>
+            )}
             {filtered.employees.length > 0 && (
               <optgroup label="City Wide Employees">
                 {filtered.employees.map((o) => (
@@ -401,6 +468,107 @@ export function HolderPicker({
   );
 }
 
+// ── Sign-now step ────────────────────────────────────────────────────────────
+// The default ending for a custody event: the person is standing there, so the
+// pad opens the moment the record is written rather than an email going out
+// asking them to do later what they could do now. Everything it posts goes
+// through the same sign-in-person route the recovery flow uses — same PDF,
+// same audit, same recorded witness.
+export function SignNowStep({
+  assignment, kind, onSigned, onSkip, intro,
+}: {
+  assignment: Assignment;
+  kind: 'checkout' | 'checkin';
+  onSigned: (r: { mail: MailOutcome; pdfError: string | null }) => void;
+  /** Leaves the record awaiting a signature — never a dead end, because the
+   *  48h link is already minted and the registry flags it. */
+  onSkip: () => void;
+  intro?: React.ReactNode;
+}) {
+  const me = getManager();
+  const padRef = useRef<SignaturePadHandle>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    const signature = padRef.current?.toDataURL();
+    if (!signature) { setError(`Ask ${assignment.holder} to sign in the box before confirming.`); return; }
+    setSaving(true); setError('');
+    try {
+      const r = await signInPerson(assignment.id, signature, kind);
+      onSigned({ mail: r.email, pdfError: r.pdf_error });
+    } catch (e: any) {
+      setError(e?.message || 'Could not save the signature');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      {intro}
+      <div className="rounded border border-cw-border bg-[#f4f4f2] px-4 py-3 text-sm">
+        <div className="font-semibold text-[#1a1a1a]">{assignment.holder}</div>
+        <div className="text-cw-muted text-xs mt-0.5">{assignment.account_name}</div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {assignment.keys.map((k) => (
+            <span key={k.type} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-cw-border text-[11px]">
+              {k.label}<span className="font-bold text-[#C0272D]">×{k.qty}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <label className="flex items-start gap-3 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          className="h-4 w-4 mt-0.5 accent-[#C0272D]"
+          checked={acknowledged}
+          onChange={(e) => setAcknowledged(e.target.checked)}
+        />
+        <span className="text-cw-text">
+          {kind === 'checkin'
+            ? `${assignment.holder} confirms they are returning these keys to City Wide Boston.`
+            : `${assignment.holder} acknowledges receipt of these keys, and agrees to safeguard them, not duplicate or share them, return them on request, and report any loss within 24 hours.`}
+        </span>
+      </label>
+
+      <div>
+        <div className="text-xs font-medium text-gray-600 mb-2">
+          Signature — hand the device to {assignment.holder}
+        </div>
+        <SignaturePad ref={padRef} />
+      </div>
+
+      <p className="text-[11px] text-gray-400">
+        Recorded as witnessed by <span className="font-semibold text-[#1a1a1a]">{me?.name}</span>.
+        The signed PDF goes to {assignment.holder_email ? `${assignment.holder_email}, ` : ''}Cara.
+      </p>
+
+      {error && <ErrorBanner>{error}</ErrorBanner>}
+
+      <div className="flex flex-wrap items-center gap-2 pt-4 border-t border-gray-200">
+        <button
+          onClick={submit}
+          disabled={saving || !acknowledged}
+          className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {saving ? 'Saving signature…' : 'Confirm signature'}
+        </button>
+        <button
+          onClick={onSkip}
+          disabled={saving}
+          className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors"
+        >
+          Email the link instead
+        </button>
+        <span className="text-[11px] text-gray-400 ml-auto">
+          The keys are already recorded — this adds the signature.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // ── Check Out modal ──────────────────────────────────────────────────────────
 
 export function CheckOutModal({
@@ -417,25 +585,65 @@ export function CheckOutModal({
   const [picks, setPicks] = useState<Record<string, Pick>>({});
   const [mode, setMode] = useState<'self' | 'other'>('self');
   const [holder, setHolder] = useState<HolderOption | null>(null);
+  const [suggested, setSuggested] = useState<(HolderOption & { reason?: string }) | null>(null);
   const [email, setEmail] = useState(me?.email ?? '');
   const [dueAt, setDueAt] = useState('');
   const [notes, setNotes] = useState('');
+  // Due date and notes are collapsed: most handovers need neither, and an
+  // always-visible empty field reads as something still to fill in.
+  const [showMore, setShowMore] = useState(false);
+  // Sign-now is the default. The person is standing at the handover; emailing
+  // a link asks them to come back to it later from somewhere else.
+  const [signMode, setSignMode] = useState<'in_person' | 'email'>('in_person');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [proceedUnsigned, setProceedUnsigned] = useState(false);
   const [noEmailReason, setNoEmailReason] = useState('');
+  // Set the moment the record is written, so the pad can open on top of it.
+  const [signing, setSigning] = useState<Assignment | null>(null);
   const [done, setDone] = useState<{
     mail: MailOutcome; link: string | null; holder: string; status: SignatureStatus;
+    signed?: boolean; pdfError?: string | null;
   } | null>(null);
 
+  // ── The form opens already answered ───────────────────────────────────────
+  // One call brings back the client's key types with a suggested quantity, the
+  // person normally holding them, and a due date. Everything remains editable;
+  // none of it starts blank.
   useEffect(() => {
-    if (!account) { setAvail([]); setPicks({}); return; }
+    if (!account) { setAvail([]); setPicks({}); setSuggested(null); return; }
     setAvailLoading(true);
-    getKeyAvailability(account.id)
-      .then((d) => setAvail(d.types))
-      .catch(() => setAvail([]))
-      .finally(() => setAvailLoading(false));
-    setPicks({});
+    let cancelled = false;
+    getCheckoutContext(account.id)
+      .then((ctx) => {
+        if (cancelled) return;
+        setAvail(ctx.keys);
+        setPicks(Object.fromEntries(
+          ctx.keys
+            .filter((k) => k.suggested > 0)
+            .map((k) => [k.type, { checked: true, qty: k.suggested }])
+        ));
+        setDueAt(ctx.due_at);
+        if (ctx.suggested_holder) {
+          const h: HolderOption & { reason?: string } = {
+            id: ctx.suggested_holder.id,
+            name: ctx.suggested_holder.name,
+            email: ctx.suggested_holder.email,
+            type: ctx.suggested_holder.type,
+            detail: ctx.suggested_holder.reason,
+            has_email: ctx.suggested_holder.has_email,
+            reason: ctx.suggested_holder.reason,
+          };
+          setSuggested(h);
+          setMode('other');
+          setHolder(h);
+        } else {
+          setSuggested(null);
+        }
+      })
+      .catch(() => { if (!cancelled) { setAvail([]); setPicks({}); setSuggested(null); } })
+      .finally(() => { if (!cancelled) setAvailLoading(false); });
+    return () => { cancelled = true; };
   }, [account]);
 
   useEffect(() => {
@@ -460,6 +668,9 @@ export function CheckOutModal({
   const submit = async () => {
     if (!canSubmit || !account) return;
     setSaving(true); setError('');
+    // No address means no link to email, so there is nothing to sign remotely
+    // — the on-device pad is the only way this record gets a signature at all.
+    const effectiveSignMode = missingEmail ? 'in_person' : signMode;
     try {
       const r = await checkout({
         account_id: account.id,
@@ -473,9 +684,15 @@ export function CheckOutModal({
         notes: notes.trim() || null,
         on_behalf: mode === 'other',
         no_email_reason: missingEmail ? noEmailReason.trim() : null,
+        sign_mode: effectiveSignMode,
       });
-      setDone({ mail: r.email, link: r.signoff_link, holder: holderName, status: r.signature_status });
       onDone();
+      if (effectiveSignMode === 'in_person') {
+        // The keys are recorded; the pad opens on top of that record.
+        setSigning(r.assignment);
+      } else {
+        setDone({ mail: r.email, link: r.signoff_link, holder: holderName, status: r.signature_status });
+      }
     } catch (e: any) {
       setError(e?.message || 'Check-out failed');
     } finally {
@@ -483,14 +700,61 @@ export function CheckOutModal({
     }
   };
 
+  // Closing the pad without signing must not lose the link: send it, so the
+  // record leaves this modal either signed or actively chasing a signature.
+  const emailInstead = async () => {
+    if (!signing) return;
+    let mail: MailOutcome = { ok: false, recipients: [], skipped: true };
+    let link: string | null = null;
+    try {
+      const r = await resendSignoff(signing.id, 'checkout');
+      mail = r.email; link = r.signoff_link;
+    } catch (e: any) {
+      mail = { ok: false, recipients: [], error: e?.message || 'Could not send the sign-off link' };
+    }
+    setDone({ mail, link, holder: signing.holder, status: 'awaiting_signature' });
+    setSigning(null);
+  };
+
+  if (signing) {
+    return (
+      <Modal title="Sign for the keys" onClose={onClose} width="max-w-lg">
+        <SignNowStep
+          assignment={signing}
+          kind="checkout"
+          intro={
+            <div className="text-sm bg-green-50 border border-green-200 text-green-800 rounded px-3 py-2">
+              ✓ {signing.total_keys} key{signing.total_keys === 1 ? '' : 's'} recorded to {signing.holder}. One
+              signature and this is complete.
+            </div>
+          }
+          onSigned={({ mail, pdfError }) => {
+            setSigning(null);
+            setDone({
+              mail, link: null, holder: signing.holder, status: 'signed',
+              signed: true, pdfError,
+            });
+          }}
+          onSkip={emailInstead}
+        />
+      </Modal>
+    );
+  }
+
   if (done) {
     return (
-      <Modal title="Keys checked out" onClose={onClose} width="max-w-lg">
+      <Modal title={done.signed ? 'Signed and checked out' : 'Keys checked out'} onClose={onClose} width="max-w-lg">
         <div className="space-y-4">
           <div className="text-sm text-cw-text">
             <span className="font-semibold">{totalKeys}</span> key{totalKeys === 1 ? '' : 's'} checked out to{' '}
-            <span className="font-semibold">{done.holder}</span> for <span className="font-semibold">{account?.name}</span>.
+            <span className="font-semibold">{done.holder}</span> for <span className="font-semibold">{account?.name}</span>
+            {done.signed ? ', signed on this device.' : '.'}
           </div>
+          {done.pdfError && (
+            <div className="text-sm bg-[#fff8e6] border border-[#e8cf8a] text-[#7a5a00] rounded px-3 py-2">
+              ⚠ The signature is saved, but the PDF receipt failed to generate ({done.pdfError}).
+            </div>
+          )}
           {done.status === 'signature_unavailable' ? (
             <div className="text-sm bg-[#fbeaea] border-2 border-[#C0272D] text-[#C0272D] rounded px-3 py-2">
               <strong>No signature was sent.</strong> {done.holder} has no email on file, so this record is
@@ -553,7 +817,7 @@ export function CheckOutModal({
 
         <div>
           <SectionLabel>Who is taking the keys</SectionLabel>
-          <HolderPicker mode={mode} setMode={setMode} holder={holder} setHolder={setHolder} />
+          <HolderPicker mode={mode} setMode={setMode} holder={holder} setHolder={setHolder} suggested={suggested} />
           <div className="mt-3">
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Holder email <span className="text-gray-400 font-normal">— receives the notification + sign-off link</span>
@@ -585,33 +849,76 @@ export function CheckOutModal({
           )}
         </div>
 
+        {/* Everything most handovers never touch, folded away. The due date is
+            already set, so the summary line says what it is rather than
+            leaving a field that looks unfinished. */}
         <div>
-          <SectionLabel>Details</SectionLabel>
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Due back</label>
-              <input type="date" className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
+          <button
+            type="button"
+            onClick={() => setShowMore((v) => !v)}
+            className="flex items-center gap-2 text-xs font-medium text-[#1a1a1a] hover:text-[#C0272D] transition-colors"
+          >
+            <span className={`inline-block transition-transform ${showMore ? 'rotate-90' : ''}`}>›</span>
+            More options
+            {!showMore && (
+              <span className="font-normal text-gray-400">
+                due {dueAt || 'not set'}{notes.trim() ? ' · notes added' : ''}
+              </span>
+            )}
+          </button>
+          {showMore && (
+            <div className="space-y-3 mt-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Due back</label>
+                <input type="date" className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+                <textarea className="input h-16 resize-none focus:ring-[#C0272D] focus:border-[#C0272D]" value={notes} onChange={(e) => setNotes(e.target.value)} />
+              </div>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
-              <textarea className="input h-16 resize-none focus:ring-[#C0272D] focus:border-[#C0272D]" value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </div>
-          </div>
+          )}
         </div>
 
         {error && <ErrorBanner>{error}</ErrorBanner>}
       </div>
 
-      <div className="flex items-center gap-2 pt-4 border-t border-gray-200 mt-4">
+      <div className="pt-4 border-t border-gray-200 mt-4 space-y-3">
+        {/* Outside the scroll area on purpose: this decides what the primary
+            button does, so it must never be a scroll away from it. */}
+        {!missingEmail && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span className="text-xs font-medium text-[#1a1a1a]">Signature</span>
+            {([
+              ['in_person', 'Sign here now', 'they are at the handover'],
+              ['email', 'Email the link', 'they are not here'],
+            ] as const).map(([value, label, hint]) => (
+              <label key={value} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  className="accent-[#C0272D]"
+                  checked={signMode === value}
+                  onChange={() => setSignMode(value)}
+                />
+                <span className={signMode === value ? 'font-medium text-[#1a1a1a]' : 'text-gray-600'}>{label}</span>
+                <span className="text-[11px] text-gray-400">— {hint}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      <div className="flex items-center gap-2">
         <button onClick={submit} disabled={!canSubmit} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
           {saving ? 'Checking out…' : `Check Out${totalKeys ? ` ${totalKeys} Key${totalKeys === 1 ? '' : 's'}` : ''}`}
         </button>
         <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
         <span className="text-[11px] text-gray-400 ml-auto">
           {missingEmail
-            ? 'No signature will be sent — Cara is still notified.'
-            : 'Emails the holder and Cara on save.'}
+            ? 'No email on file — sign here to capture a signature anyway.'
+            : signMode === 'in_person'
+              ? 'Opens the signature pad next.'
+              : 'Emails the holder a sign-off link and copies Cara.'}
         </span>
+      </div>
       </div>
     </Modal>
   );
@@ -641,9 +948,14 @@ export function CheckInModal({
   // costs the holder both their confirmation AND their return sign-off. The
   // notification recipient is told either way.
   const [notifyAnyway, setNotifyAnyway] = useState(false);
+  // Same default as a check-out: the person handing the keys back is here.
+  const [signMode, setSignMode] = useState<'in_person' | 'email'>('in_person');
+  const [showMore, setShowMore] = useState(false);
+  const [signing, setSigning] = useState<Assignment | null>(null);
   const [done, setDone] = useState<{
     mail: MailOutcome; partial: boolean; holder: string; link: string | null;
     reconciled?: boolean; form?: { form_no: string; total_keys: number } | null;
+    signed?: boolean; pdfError?: string | null;
   } | null>(null);
 
   // ── Manual entry ──────────────────────────────────────────────────────────
@@ -678,6 +990,13 @@ export function CheckInModal({
     [open, account],
   );
   const selected = open.find((a) => String(a.id) === selectedId) ?? null;
+
+  // One open check-out at this client is not a choice — pick it. Two or more
+  // is a real decision, so leave it to the user rather than guessing.
+  useEffect(() => {
+    if (selectedId || candidates.length !== 1) return;
+    setSelectedId(String(candidates[0].id));
+  }, [candidates, selectedId]);
 
   // Default to returning everything on the selected transaction — the common
   // case is a full return; unchecking a line makes it partial. Depends on
@@ -733,6 +1052,10 @@ export function CheckInModal({
       // nothing on file we send the whole entry and the server reconciles it,
       // creating and closing the record in one step. A check-in must never be
       // a dead end just because the check-OUT was never captured.
+      // With no address there is no link to send, so the on-device pad is the
+      // only route to a signature on this return.
+      const returningEmail = selected ? selected.holder_email : manualEmail.trim();
+      const effectiveSignMode = returningEmail ? signMode : 'in_person';
       const r = selected
         ? await checkin({
           id: selected.id,
@@ -740,6 +1063,7 @@ export function CheckInModal({
           condition_on_return: condition,
           notes: notes.trim() || null,
           on_behalf: (me?.name ?? '').trim().toLowerCase() !== selected.holder.trim().toLowerCase(),
+          sign_mode: effectiveSignMode,
         })
         : await checkin({
           holder: manualHolderName,
@@ -751,7 +1075,13 @@ export function CheckInModal({
           condition_on_return: condition,
           returned_at: returnedAt || null,
           notes: notes.trim() || null,
+          sign_mode: effectiveSignMode,
         });
+      onDone();
+      if (effectiveSignMode === 'in_person' && r.assignment) {
+        setSigning(r.assignment);
+        return;
+      }
       setDone({
         mail: r.email, partial: r.partial,
         holder: selected ? selected.holder : manualHolderName,
@@ -759,7 +1089,6 @@ export function CheckInModal({
         reconciled: !!(r as any).reconciled,
         form: (r as any).key_form ?? null,
       });
-      onDone();
     } catch (e: any) {
       setError(e?.message || 'Check-in failed');
     } finally {
@@ -767,9 +1096,44 @@ export function CheckInModal({
     }
   };
 
+  if (signing) {
+    return (
+      <Modal title="Sign for the return" onClose={onClose} width="max-w-lg">
+        <SignNowStep
+          assignment={signing}
+          kind="checkin"
+          intro={
+            <div className="text-sm bg-green-50 border border-green-200 text-green-800 rounded px-3 py-2">
+              ✓ Return recorded for {signing.holder}. One signature and this is complete.
+            </div>
+          }
+          onSigned={({ mail, pdfError }) => {
+            setSigning(null);
+            setDone({
+              mail, partial: false, holder: signing.holder, link: null,
+              signed: true, pdfError,
+            });
+          }}
+          onSkip={async () => {
+            let mail: MailOutcome = { ok: false, recipients: [], skipped: true };
+            let link: string | null = null;
+            try {
+              const r = await resendSignoff(signing.id, 'checkin');
+              mail = r.email; link = r.signoff_link;
+            } catch (e: any) {
+              mail = { ok: false, recipients: [], error: e?.message || 'Could not send the sign-off link' };
+            }
+            setDone({ mail, partial: false, holder: signing.holder, link });
+            setSigning(null);
+          }}
+        />
+      </Modal>
+    );
+  }
+
   if (done) {
     return (
-      <Modal title="Keys returned" onClose={onClose} width="max-w-lg">
+      <Modal title={done.signed ? 'Signed and returned' : 'Keys returned'} onClose={onClose} width="max-w-lg">
         <div className="space-y-4">
           <div className="text-sm text-cw-text">
             {done.partial
@@ -929,29 +1293,47 @@ export function CheckInModal({
               />
             )}
 
+            <div className="text-xs text-cw-muted">
+              Holder: <span className="font-semibold text-[#1a1a1a]">{selected.holder}</span>
+              {' · '}Out since {parseStamp(selected.checked_out_at)?.toLocaleDateString() ?? '—'}
+              {(me?.name ?? '').trim().toLowerCase() !== selected.holder.trim().toLowerCase() && (
+                <> · recorded by <span className="font-semibold text-[#1a1a1a]">{me?.name}</span> on their behalf</>
+              )}
+            </div>
+
+            {/* Condition already reads "Good" and notes are usually empty, so
+                both sit behind the fold with the current answer on the label. */}
             <div>
-              <SectionLabel>Return details</SectionLabel>
-              <div className="space-y-3">
-                <div className="text-xs text-cw-muted">
-                  Holder: <span className="font-semibold text-[#1a1a1a]">{selected.holder}</span>
-                  {' · '}Out since {parseStamp(selected.checked_out_at)?.toLocaleDateString() ?? '—'}
-                  {(me?.name ?? '').trim().toLowerCase() !== selected.holder.trim().toLowerCase() && (
-                    <> · recorded by <span className="font-semibold text-[#1a1a1a]">{me?.name}</span> on their behalf</>
-                  )}
+              <button
+                type="button"
+                onClick={() => setShowMore((v) => !v)}
+                className="flex items-center gap-2 text-xs font-medium text-[#1a1a1a] hover:text-[#C0272D] transition-colors"
+              >
+                <span className={`inline-block transition-transform ${showMore ? 'rotate-90' : ''}`}>›</span>
+                More options
+                {!showMore && (
+                  <span className="font-normal text-gray-400">
+                    condition {condition === 'missing_copy' ? 'missing copy' : condition}
+                    {notes.trim() ? ' · notes added' : ''}
+                  </span>
+                )}
+              </button>
+              {showMore && (
+                <div className="space-y-3 mt-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Condition on return</label>
+                    <select className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={condition} onChange={(e) => setCondition(e.target.value)}>
+                      <option value="good">Good</option>
+                      <option value="damaged">Damaged</option>
+                      <option value="missing_copy">Missing Copy</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+                    <textarea className="input h-16 resize-none focus:ring-[#C0272D] focus:border-[#C0272D]" value={notes} onChange={(e) => setNotes(e.target.value)} />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Condition on return</label>
-                  <select className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={condition} onChange={(e) => setCondition(e.target.value)}>
-                    <option value="good">Good</option>
-                    <option value="damaged">Damaged</option>
-                    <option value="missing_copy">Missing Copy</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
-                  <textarea className="input h-16 resize-none focus:ring-[#C0272D] focus:border-[#C0272D]" value={notes} onChange={(e) => setNotes(e.target.value)} />
-                </div>
-              </div>
+              )}
             </div>
           </>
         )}
@@ -959,12 +1341,38 @@ export function CheckInModal({
         {error && <ErrorBanner>{error}</ErrorBanner>}
       </div>
 
-      <div className="flex items-center gap-2 pt-4 border-t border-gray-200 mt-4">
-        <button onClick={submit} disabled={!canSubmit} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-          {saving ? 'Checking in…' : `Check In${submitCount ? ` ${submitCount} Key${submitCount === 1 ? '' : 's'}` : ''}`}
-        </button>
-        <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
-        <span className="text-[11px] text-gray-400 ml-auto">Emails the holder and Cara · sends a signature form.</span>
+      <div className="pt-4 border-t border-gray-200 mt-4 space-y-3">
+        {/* Same choice as a check-out, on the same footing and in the same
+            place: beside the button whose behaviour it changes. */}
+        {(selected?.holder_email || (!selected && manualEmail.trim())) && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span className="text-xs font-medium text-[#1a1a1a]">Signature</span>
+            {([
+              ['in_person', 'Sign here now', 'they are handing them back'],
+              ['email', 'Email the link', 'they are not here'],
+            ] as const).map(([value, label, hint]) => (
+              <label key={value} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  className="accent-[#C0272D]"
+                  checked={signMode === value}
+                  onChange={() => setSignMode(value)}
+                />
+                <span className={signMode === value ? 'font-medium text-[#1a1a1a]' : 'text-gray-600'}>{label}</span>
+                <span className="text-[11px] text-gray-400">— {hint}</span>
+              </label>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <button onClick={submit} disabled={!canSubmit} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+            {saving ? 'Checking in…' : `Check In${submitCount ? ` ${submitCount} Key${submitCount === 1 ? '' : 's'}` : ''}`}
+          </button>
+          <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
+          <span className="text-[11px] text-gray-400 ml-auto">
+            {signMode === 'in_person' ? 'Opens the signature pad next.' : 'Emails the holder and Cara · sends a signature form.'}
+          </span>
+        </div>
       </div>
     </Modal>
   );

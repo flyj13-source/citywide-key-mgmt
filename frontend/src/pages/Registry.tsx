@@ -8,6 +8,7 @@ import YesNo from '../components/YesNo';
 import TestPill from '../components/TestPill';
 import ExportMenu from '../components/ExportMenu';
 import { CheckOutModal, CheckInModal } from '../components/CustodyModals';
+import { QuickCustodyButtons, useCustodyContext } from '../components/QuickCustody';
 import ReassignModal from '../components/ReassignModal';
 import TransferModal from '../components/TransferModal';
 import { ActionRow, ActionGroup, ActionDivider, ActionButton } from '../components/ActionRow';
@@ -1153,7 +1154,9 @@ export default function Registry() {
   // snapshot too, so it still pre-fills the custody modals after switching to a
   // tab whose row list no longer contains it.
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [selectedSnapshot, setSelectedSnapshot] = useState<{ id: number; name: string } | null>(null);
+  // selectedSnapshot is DERIVED from the selection further down, so the action
+  // row always reflects the row actually ticked. It used to be a state that
+  // only one code path ever set, which left the row context-free in practice.
   const [archiveTarget, setArchiveTarget] = useState<any | null>(null);
   const [archiveError, setArchiveError] = useState('');
   const [purgeTarget, setPurgeTarget] = useState<any | null>(null);
@@ -1410,17 +1413,20 @@ export default function Registry() {
     resetKey: `${tab}|${debouncedSearch}|${drill?.name ?? ''}|${page}|${showTest}`,
   });
 
+  // Exactly one ticked row is an unambiguous context: the action row pre-fills
+  // from it, and the one-click custody buttons appear for it.
+  const selectedSnapshot = useMemo(() => {
+    const only = bulk.selectedItems.length === 1 ? bulk.selectedItems[0] : null;
+    return only ? { id: only.id, name: only.ic_company_name } : null;
+  }, [bulk.selectedItems]);
+  const { checkoutCtx, checkinCtx } = useCustodyContext(selectedSnapshot);
+
   const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false);
   const [bulkArchiveError, setBulkArchiveError] = useState('');
 
   const toggleSelect = useCallback((id: number) => {
     setSelectedId((cur) => (cur === id ? null : id));
-    setSelectedSnapshot((cur) => {
-      if (cur?.id === id) return null;
-      const row = accounts.find((a) => a.id === id);
-      return row ? { id: row.id, name: row.ic_company_name } : null;
-    });
-  }, [accounts]);
+  }, []);
 
   // ── Bulk actions ──────────────────────────────────────────────────────────
   const doBulkArchive = async () => {
@@ -1466,9 +1472,8 @@ export default function Registry() {
   const doBulkCheckOut = () => {
     // Single-record by design (see selectionCapabilities): pre-fill from the
     // one selected customer.
-    const only = bulk.selectedItems[0];
-    if (!only) return;
-    setSelectedSnapshot({ id: only.id, name: only.ic_company_name });
+    if (!bulk.selectedItems[0]) return;
+    // selectedSnapshot already tracks the single ticked row.
     setCheckOutOpen(true);
   };
 
@@ -1581,21 +1586,30 @@ export default function Registry() {
               </>
             )}
 
-            {/* GROUP 1 — daily custody. The only filled buttons on the page. */}
+            {/* GROUP 1 — daily custody. The only filled buttons on the page.
+                With a row selected the standard transaction is one click; the
+                general Check Out / Check In buttons remain beside it for
+                everything that is not the standard transaction. */}
             <ActionGroup label="Daily custody">
-              <ActionButton
-                weight="primary"
-                icon={<IconCheckOut />}
-                label="Check Out"
-                onClick={() => setCheckOutOpen(true)}
-                title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Check keys out to an employee or IC'}
+              <QuickCustodyButtons
+                checkoutCtx={checkoutCtx}
+                checkinCtx={checkinCtx}
+                onDone={() => { loadRows(); refreshCounts(); loadGaps(); }}
+                onError={(m) => setNotice(m)}
               />
               <ActionButton
-                weight="primary"
+                weight={checkoutCtx?.can_quick_checkout ? 'secondary' : 'primary'}
+                icon={<IconCheckOut />}
+                label={checkoutCtx?.can_quick_checkout ? 'Check Out…' : 'Check Out'}
+                onClick={() => setCheckOutOpen(true)}
+                title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name} — change the holder, keys or due date` : 'Check keys out to an employee or IC'}
+              />
+              <ActionButton
+                weight={checkinCtx?.can_quick_checkin ? 'secondary' : 'primary'}
                 icon={<IconCheckIn />}
-                label="Check In"
+                label={checkinCtx?.can_quick_checkin ? 'Check In…' : 'Check In'}
                 onClick={() => setCheckInFor({ assignmentId: null, account: selectedSnapshot })}
-                title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name}` : 'Record returned keys'}
+                title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name} — return a subset or change the condition` : 'Record returned keys'}
               />
               <ActionButton
                 weight="primary"

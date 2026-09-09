@@ -16,6 +16,9 @@ import { generateCustodyReceipt } from '../lib/custodyPdf';
 import { createKeyForm, serializeForm, getKeyForm, type FormEventType } from '../lib/keyForm';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { NOT_TEST_ASSIGNMENT } from '../lib/testFixtures';
+import {
+  defaultDueDate, defaultDueDays, suggestedHolderFor, suggestedKeys, recentHolders,
+} from '../lib/custodyDefaults';
 
 const router = Router();
 
@@ -167,6 +170,77 @@ router.get('/key-types', requireAuth, (_req: AuthRequest, res: Response) => {
 
 // ── GET /api/assignments/availability?account_id=N ───────────────────────────
 // Per-type: what exists at the client site, what is already out, what is left.
+// ── GET /api/assignments/checkout-context?account_id=N ──────────────────────
+// Everything a pre-filled check-out needs, in ONE call: the client, the key
+// types with a suggested quantity, who normally takes them, and a due date.
+// The point is that the caller has to decide nothing to get a valid
+// transaction — the quick action posts exactly what comes back from here.
+router.get('/checkout-context', requireAuth, (req: AuthRequest, res: Response) => {
+  const accountId = Number(req.query.account_id);
+  if (!accountId) return res.status(400).json({ error: 'account_id is required' });
+  const raw = db.prepare('SELECT * FROM accounts WHERE id = ?').get(accountId) as any;
+  if (!raw) return res.status(404).json({ error: 'Account not found' });
+  const account = Object.assign({}, raw);
+
+  const keys = suggestedKeys(accountId);
+  const holder = suggestedHolderFor(account);
+  res.json({
+    account: {
+      id: account.id,
+      name: account.ic_company_name,
+      record_type: account.record_type ?? 'ic',
+      bc_number: account.bc_client_number || account.bc_vendor_number || null,
+    },
+    keys,
+    // What the one-click button would actually do. Null when the site has no
+    // keys available or nobody assigned — the button hides rather than
+    // pretending it can act.
+    suggested_holder: holder,
+    suggested_total: keys.reduce((n: number, k: any) => n + k.suggested, 0),
+    due_at: defaultDueDate(),
+    default_due_days: defaultDueDays(),
+    can_quick_checkout: !!holder && keys.some((k: any) => k.suggested > 0),
+  });
+});
+
+// ── GET /api/assignments/checkin-context?account_id=N ───────────────────────
+// The mirror: what is actually out at this client, so a return pre-fills with
+// the open check-out and its full key set rather than an empty form.
+router.get('/checkin-context', requireAuth, (req: AuthRequest, res: Response) => {
+  const accountId = Number(req.query.account_id);
+  if (!accountId) return res.status(400).json({ error: 'account_id is required' });
+  const raw = db.prepare('SELECT * FROM accounts WHERE id = ?').get(accountId) as any;
+  if (!raw) return res.status(404).json({ error: 'Account not found' });
+  const account = Object.assign({}, raw);
+
+  const open = (db.prepare(
+    `SELECT * FROM key_assignments
+      WHERE account_id = ? AND status = 'checked_out'
+      ORDER BY checked_out_at DESC`
+  ).all(accountId) as any[]).map(serializeAssignment);
+
+  // One open record is the unambiguous case — pre-select it and return all of
+  // its keys, since a full return is the norm and a partial one is the edit.
+  const only = open.length === 1 ? open[0] : null;
+  res.json({
+    account: { id: account.id, name: account.ic_company_name },
+    open,
+    suggested_assignment_id: only ? only.id : null,
+    suggested_keys: only ? only.keys : [],
+    suggested_holder: only ? { name: only.holder, email: only.holder_email ?? null } : null,
+    condition: 'good',
+    can_quick_checkin: !!only,
+  });
+});
+
+// ── GET /api/assignments/recent-holders ─────────────────────────────────────
+// Most-recently-used people first. An alphabetical list of 260+ records put
+// the person standing in front of you in the middle of a scroll.
+router.get('/recent-holders', requireAuth, (req: AuthRequest, res: Response) => {
+  const limit = Math.min(25, Math.max(1, Number(req.query.limit) || 8));
+  res.json({ holders: recentHolders(limit) });
+});
+
 router.get('/availability', requireAuth, (req: AuthRequest, res: Response) => {
   const accountId = Number(req.query.account_id);
   if (!accountId) return res.status(400).json({ error: 'account_id is required' });
@@ -342,6 +416,14 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
   const counterparty_name = cleanText(body.counterparty_name);
   const counterparty_email = cleanText(body.counterparty_email);
 
+  // ── Sign-now vs email-the-link ────────────────────────────────────────────
+  // 'in_person' means the holder is standing here and will sign on the device
+  // in the next few seconds, so the "please sign" email would arrive asking
+  // for something already done. The token is still minted: if the pad is
+  // closed without a signature the record is recoverable through exactly the
+  // same link, and the registry still shows it as awaiting one.
+  const signInPerson = body.sign_mode === 'in_person';
+
   const checked_out_at = new Date().toISOString();
   // A record with nowhere to send the link gets NO token — an unusable token
   // would only make the record look like it is waiting for something.
@@ -382,18 +464,23 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
 
   // Cara is notified either way (spec 4) — when there is no holder email the
   // notice goes to her alone, carrying a red "No signature sent" banner.
-  const mail = await sendCheckoutNotice({
-    holder, holderEmail: holder_email, holderType: holder_type,
-    client: account_name, bcNumber: bcNumberFor(account), keys: lines,
-    checkedOutAt: checked_out_at, dueAt: due_at, recordedBy: actor, onBehalf, signoffLink,
-    noEmailReason: no_email_reason,
-  });
-  logMail(req, mail, 'checkout', account_name, account_id, holder);
+  // Signing in person skips it: the signed receipt that follows seconds later
+  // carries the same facts plus the signature, so sending both would ask the
+  // holder to sign something they just signed.
+  const mail: MailResult = signInPerson
+    ? { ok: true, recipients: [], skipped: true, attempts: 0 }
+    : await sendCheckoutNotice({
+        holder, holderEmail: holder_email, holderType: holder_type,
+        client: account_name, bcNumber: bcNumberFor(account), keys: lines,
+        checkedOutAt: checked_out_at, dueAt: due_at, recordedBy: actor, onBehalf, signoffLink,
+        noEmailReason: no_email_reason,
+      });
+  if (!signInPerson) logMail(req, mail, 'checkout', account_name, account_id, holder);
 
   // Email existed but SMTP gave up after its retries → this record is NOT
   // waiting for a signature, it is stuck. Say so in red, not amber.
   let signatureStatus: SignatureStatus = initialSigStatus;
-  if (holder_email && !mail.ok) {
+  if (holder_email && !mail.ok && !signInPerson) {
     signatureStatus = 'signature_send_failed';
     logAudit(req, 'signature_send_failed', account_name, account_id, {
       assignment_id: id, holder, recipients: mail.recipients,
@@ -430,6 +517,9 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
     signature_status: signatureStatus,
     email: {
       ok: mail.ok, recipients: mail.recipients, error: mail.error,
+      // Deliberately not sent (the holder is signing here) reads very
+      // differently from sent-and-failed. The banner needs to tell them apart.
+      skipped: !!mail.skipped,
       attempts: mail.attempts, cara: caraAddress(),
     },
   });
@@ -524,7 +614,10 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
     assignment: serializeAssignment(row),
     key_form: form,
     signoff_link: null,
-    email: { ok: mail.ok, recipients: mail.recipients, error: mail.error, cara: caraAddress() },
+    email: {
+      ok: mail.ok, recipients: mail.recipients, error: mail.error,
+      skipped: !!mail.skipped, cara: caraAddress(),
+    },
   });
 }
 
@@ -649,14 +742,19 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
     signature_requested: true,
   });
 
-  const mail = await sendCheckinNotice({
-    holder, holderEmail: assignment.assignee_email ?? null,
-    holderType: (assignment.holder_type as 'employee' | 'ic') ?? null,
-    client: assignment.account_name, bcNumber: bcNumberForAssignment(assignment),
-    keys: returning, returnedAt: returned_at, condition, recordedBy: actor, onBehalf,
-    signoffLink,
-  });
-  logMail(req, mail, 'checkin', assignment.account_name, assignment.account_id, holder);
+  // Same rule as check-out: when the return is being signed for on the device
+  // right now, the "please sign" email would chase a signature already given.
+  const signInPerson = req.body?.sign_mode === 'in_person';
+  const mail: MailResult = signInPerson
+    ? { ok: true, recipients: [], skipped: true, attempts: 0 }
+    : await sendCheckinNotice({
+        holder, holderEmail: assignment.assignee_email ?? null,
+        holderType: (assignment.holder_type as 'employee' | 'ic') ?? null,
+        client: assignment.account_name, bcNumber: bcNumberForAssignment(assignment),
+        keys: returning, returnedAt: returned_at, condition, recordedBy: actor, onBehalf,
+        signoffLink,
+      });
+  if (!signInPerson) logMail(req, mail, 'checkin', assignment.account_name, assignment.account_id, holder);
 
   const keyForm = await generateEventForm(req, {
     eventType: 'checkin', holderName: holder,
@@ -675,7 +773,10 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
     assignment: serializeAssignment(row),
     key_form: keyForm,
     signoff_link: signoffLink,
-    email: { ok: mail.ok, recipients: mail.recipients, error: mail.error, cara: caraAddress() },
+    email: {
+      ok: mail.ok, recipients: mail.recipients, error: mail.error,
+      skipped: !!mail.skipped, cara: caraAddress(),
+    },
   });
 });
 
@@ -746,7 +847,10 @@ router.post('/:id/resend-signoff', requireAuth, async (req: AuthRequest, res: Re
 
   res.json({
     success: true, kind, signoff_link: signoffLink,
-    email: { ok: mail.ok, recipients: mail.recipients, error: mail.error, cara: caraAddress() },
+    email: {
+      ok: mail.ok, recipients: mail.recipients, error: mail.error,
+      skipped: !!mail.skipped, cara: caraAddress(),
+    },
   });
 });
 

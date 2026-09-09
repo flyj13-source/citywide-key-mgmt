@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/Layout';
 import {
   changePassword, getBackupStatus, runBackupNow, getCustodyNotification, setCustodyNotification,
-  type BackupStatus, type CustodyNotificationSetting,
+  getCustodyDefaults, setCustodyDefaults,
+  type BackupStatus, type CustodyNotificationSetting, type CustodyDefaults,
 } from '../lib/api';
 import { getManager } from '../lib/auth';
 
@@ -37,6 +38,35 @@ export default function Settings() {
   const [notifySaving, setNotifySaving] = useState(false);
   const [notifyError, setNotifyError] = useState('');
   const [notifyToast, setNotifyToast] = useState(false);
+
+  // ── Default due window ─────────────────────────────────────────────────────
+  // Every check-out opens with a due date already set, today + this many days.
+  // Stored rather than hardcoded so "we give them 30 days" can become 14.
+  const [due, setDue] = useState<CustodyDefaults | null>(null);
+  const [dueValue, setDueValue] = useState('');
+  const [dueSaving, setDueSaving] = useState(false);
+  const [dueError, setDueError] = useState('');
+  const [dueToast, setDueToast] = useState(false);
+
+  const loadDue = useCallback(() => {
+    getCustodyDefaults()
+      .then((d) => { setDue(d); setDueValue(String(d.due_days)); })
+      .catch(() => setDue(null));
+  }, []);
+  useEffect(() => { loadDue(); }, [loadDue]);
+
+  const handleSaveDue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setDueSaving(true); setDueError(''); setDueToast(false);
+    try {
+      await setCustodyDefaults(Number(dueValue));
+      loadDue();
+      setDueToast(true);
+      setTimeout(() => setDueToast(false), 4000);
+    } catch (err: any) {
+      setDueError(err?.message || 'Could not save the due window');
+    } finally { setDueSaving(false); }
+  };
 
   const loadNotify = useCallback(async () => {
     setNotifyLoading(true);
@@ -186,6 +216,62 @@ export default function Settings() {
             >
               {notifySaving ? 'Saving…' : 'Save recipient'}
             </button>
+          </form>
+        </div>
+
+        {/* Default due window */}
+        <div className="card overflow-hidden">
+          <div className="px-5 py-3 bg-cw-black">
+            <h2 className="text-white font-semibold text-sm">Key Check-Out Defaults</h2>
+          </div>
+          <form onSubmit={handleSaveDue} className="px-5 py-4 space-y-4">
+            <p className="text-sm text-cw-muted">
+              Every check-out opens with a due date already filled in — today plus this many days. It stays
+              editable on each transaction; this only sets where it starts.
+            </p>
+
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-sm font-medium text-cw-text mb-1">Default due window</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={3650}
+                    value={dueValue}
+                    onChange={(e) => setDueValue(e.target.value)}
+                    disabled={dueSaving}
+                    className="input w-24 text-center"
+                  />
+                  <span className="text-sm text-cw-muted">days</span>
+                </div>
+              </div>
+              <button
+                type="submit"
+                disabled={dueSaving || !dueValue.trim()}
+                className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 transition-colors"
+              >
+                {dueSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+
+            {due && (
+              <p className="text-xs text-cw-muted">
+                A check-out started now would be due{' '}
+                <span className="font-semibold text-[#1a1a1a]">{due.example_due_at}</span>
+                {due.is_default && <span className="ml-1 text-gray-400">(built-in default of {due.fallback_due_days} days)</span>}
+                {due.updated_at && due.updated_by && <> · last changed by {due.updated_by} on {fmtWhen(due.updated_at)}</>}
+              </p>
+            )}
+
+            {dueError && (
+              <p className="text-sm text-[#C0272D] bg-[#fbeaea] border border-[#f0c9cb] rounded px-3 py-2">{dueError}</p>
+            )}
+            {dueToast && (
+              <p className="text-sm text-green-800 bg-green-50 border border-green-200 rounded px-3 py-2">
+                ✓ Saved — the next check-out opens with this due date.
+              </p>
+            )}
           </form>
         </div>
 
