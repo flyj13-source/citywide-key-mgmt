@@ -369,6 +369,17 @@ export const getCustodyDefaults = () => req<CustodyDefaults>('/settings/custody-
 // ── Email configuration + test send ─────────────────────────────────────────
 export interface EmailConfig {
   provider: string;
+  provider_key: 'smtp' | 'resend';
+  provider_source: 'MAIL_PROVIDER' | 'auto' | 'default';
+  provider_configured: boolean;
+  blocker: string | null;
+  resend: {
+    api_key_set: boolean;
+    key_hint: string | null;
+    endpoint: string;
+    shared_test_sender: boolean;
+    test_sender_address: string;
+  };
   smtp: {
     host: string; port: number;
     host_source: 'env' | 'default'; port_source: 'env' | 'default';
@@ -379,7 +390,8 @@ export interface EmailConfig {
   from: {
     name: string; address: string | null; header: string | null;
     reply_to: string | null;
-    name_source: string; address_source: string; mismatch: boolean;
+    name_source: string; address_source: string;
+    mismatch: boolean; shared_test_sender: boolean;
   };
   notification_recipients: string[];
   environment: string;

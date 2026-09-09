@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { createTransport, fromConfig, fromHeader } from './mailer';
+import {
+  deliverMessage, fromConfig, fromHeader, activeProvider, providerBlocker,
+} from './mailer';
 import { custodyNotifyRecipients, custodyNotifyDisplay } from './settings';
 import type { KeyLine } from './custody';
 import db from './db';
@@ -138,11 +140,14 @@ export interface MailResult {
   skipped?: boolean;
   /** How many send attempts were made (0 when skipped before trying). */
   attempts: number;
-  /** The SMTP message ID, present only on an accepted send. This is the
-   *  handle to give the mail admin when tracing a message. */
+  /** The provider's message ID, present only on an accepted send. This is the
+   *  handle to give the mail admin (or paste into Resend's dashboard) when
+   *  tracing a message. */
   messageId?: string;
-  /** The server's raw acceptance line, e.g. "250 2.0.0 OK ...". */
+  /** The provider's raw acceptance line, e.g. "250 2.0.0 OK ...". */
   response?: string;
+  /** Which path carried it — the two fail in different ways. */
+  provider?: 'smtp' | 'resend';
 }
 
 export interface MailAttachment {
@@ -277,10 +282,11 @@ function isTestRecipient(to: string[]): boolean {
 }
 
 /**
- * Everything an SMTP failure actually told us, flattened into one string.
+ * Everything a delivery failure actually told us, flattened into one string.
  * Nothing is swallowed: the diagnosis lives in the pieces most error handling
- * discards — the enhanced status code, the server's response line, and the
- * failing command.
+ * discards — the status or error name, the provider's response body, and the
+ * failing command. Both providers raise the same enriched shape, so a failure
+ * reads the same way whichever one produced it.
  */
 export function smtpErrorText(err: any): string {
   if (!err) return 'SMTP send failed';
@@ -307,22 +313,23 @@ export async function sendBranded(
   if (!recipients.length) {
     return { ok: false, recipients: [], skipped: true, attempts: 0, error: 'No recipient address on file' };
   }
-  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    return { ok: false, recipients, skipped: true, attempts: 0, error: 'SMTP is not configured (SMTP_USER / SMTP_PASS unset)' };
+  // Whatever the active provider is, say why it cannot send rather than
+  // failing at the transport with something less legible.
+  const blocker = providerBlocker();
+  if (blocker) {
+    return { ok: false, recipients, skipped: true, attempts: 0, error: blocker };
   }
   const logo = logoBytes();
   const reply = fromConfig().replyTo;
   const payload = {
     from: fromHeader(),
-    ...(reply ? { replyTo: reply } : {}),
-    to: recipients.join(', '),
+    replyTo: reply,
+    to: recipients,
     subject,
     text,
     html,
     attachments: [
-      ...(logo
-        ? [{ filename: 'cw-logo.png', content: logo, cid: 'cwlogo', contentDisposition: 'inline' as const }]
-        : []),
+      ...(logo ? [{ filename: 'cw-logo.png', content: logo, contentType: 'image/png', cid: 'cwlogo' }] : []),
       ...attachments.map((a) => ({ filename: a.filename, content: a.content, contentType: a.contentType })),
     ],
   };
@@ -338,10 +345,11 @@ export async function sendBranded(
   let lastError = 'SMTP send failed';
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const info: any = await createTransport().sendMail(payload);
+      const info = await deliverMessage(payload);
       return {
         ok: true, recipients, attempts: attempt,
-        messageId: info?.messageId, response: info?.response,
+        messageId: info.messageId, response: info.response,
+        provider: info.provider,
       };
     } catch (err: any) {
       // Keep the WHOLE thing. An Office 365 rejection carries its meaning in
@@ -352,7 +360,10 @@ export async function sendBranded(
       if (attempt < maxAttempts) await sleep(RETRY_BACKOFF_MS[attempt - 1] ?? 4000);
     }
   }
-  return { ok: false, recipients, attempts: maxAttempts, error: lastError };
+  return {
+    ok: false, recipients, attempts: maxAttempts, error: lastError,
+    provider: activeProvider().provider,
+  };
 }
 
 export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
@@ -622,17 +633,17 @@ export async function sendSignedReceipt(d: SignedReceiptMail): Promise<MailResul
 export async function sendTestEmail(opts: {
   to: string[];
   environment: string;
-  host: string;
-  port: number;
-  tlsMode: string;
+  provider: string;
+  /** How the message left: an SMTP host + TLS mode, or the Resend endpoint. */
+  transport: string;
   from: string;
   triggeredBy: string;
 }): Promise<MailResult> {
   const at = new Date().toISOString();
   const rows: [string, string][] = [
     ['Environment', opts.environment],
-    ['SMTP host', `${opts.host}:${opts.port}`],
-    ['TLS mode', opts.tlsMode],
+    ['Provider', opts.provider],
+    ['Delivered via', opts.transport],
     ['From address', opts.from],
     ['Sent to', opts.to.join(', ')],
     ['Triggered by', opts.triggeredBy],
@@ -643,7 +654,7 @@ export async function sendTestEmail(opts: {
     'If you are reading this, outbound mail is working.',
     `<p style="margin:0 0 20px;font-size:14px;color:${CW_CHARCOAL}">
        This message was sent from the City Wide Key Management Settings screen to confirm that
-       SMTP delivery is configured correctly. It carries no key or client data.
+       outbound email is configured correctly. It carries no key or client data.
      </p>
      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:8px">
        ${detailRows(rows)}

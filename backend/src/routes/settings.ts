@@ -6,7 +6,9 @@ import {
   parseRecipients, custodyNotifyRecipients, seedCustodyNotifyDefault,
 } from '../lib/settings';
 import { DUE_DAYS_KEY, DEFAULT_DUE_DAYS, defaultDueDays, defaultDueDate } from '../lib/custodyDefaults';
-import { smtpConfig, fromConfig } from '../lib/mailer';
+import {
+  smtpConfig, fromConfig, resendConfig, activeProvider, providerBlocker, RESEND_TEST_FROM,
+} from '../lib/mailer';
 import { sendTestEmail } from '../lib/custodyMail';
 import db from '../lib/db';
 
@@ -133,28 +135,61 @@ function lastTestSend(): any | null {
 function emailConfig() {
   const smtp = smtpConfig();
   const from = fromConfig();
+  const resend = resendConfig();
   const notify = custodyNotifyRecipients();
+  const { provider, source: providerSource } = activeProvider();
 
   // Anything here means mail is misconfigured in a way a test send will expose.
   const warnings: string[] = [];
-  if (!smtp.user) warnings.push('SMTP_USER is not set — no mail can be sent.');
-  if (!smtp.hasPassword) warnings.push('SMTP_PASS is not set — no mail can be sent.');
-  if (smtp.port === 587 && smtp.secure) {
-    warnings.push('Port 587 is a STARTTLS port but SMTP_SECURE forces implicit TLS — the handshake will fail.');
-  }
-  if (smtp.port === 465 && !smtp.secure) {
-    warnings.push('Port 465 is the implicit-TLS port but the transport is set to STARTTLS — the handshake will fail.');
-  }
-  if (from.mismatch) {
-    warnings.push(
-      `MAIL_FROM_ADDRESS (${from.address}) is not the authenticated mailbox (${smtp.user}). ` +
-      'Office 365 rejects this with 5.7.60 SendAsDenied unless that mailbox has Send As rights.'
-    );
+
+  if (provider === 'resend') {
+    if (!resend.apiKeySet) warnings.push('RESEND_API_KEY is not set — no mail can be sent.');
+    if (from.sharedTestSender) {
+      // The single most surprising Resend restriction, and the one that makes
+      // a "working" test send look like working custody mail when it is not.
+      warnings.push(
+        `Sending from ${from.address}, Resend's shared sender. It needs no domain verification, but it can ` +
+        'ONLY deliver to the email address that owns the Resend account. Custody mail to staff and ICs ' +
+        'needs a verified domain and MAIL_FROM_ADDRESS set to an address on it.'
+      );
+    }
+  } else {
+    if (!smtp.user) warnings.push('SMTP_USER is not set — no mail can be sent.');
+    if (!smtp.hasPassword) warnings.push('SMTP_PASS is not set — no mail can be sent.');
+    if (smtp.port === 587 && smtp.secure) {
+      warnings.push('Port 587 is a STARTTLS port but SMTP_SECURE forces implicit TLS — the handshake will fail.');
+    }
+    if (smtp.port === 465 && !smtp.secure) {
+      warnings.push('Port 465 is the implicit-TLS port but the transport is set to STARTTLS — the handshake will fail.');
+    }
+    if (from.mismatch) {
+      warnings.push(
+        `MAIL_FROM_ADDRESS (${from.address}) is not the authenticated mailbox (${smtp.user}). ` +
+        'Office 365 rejects this with 5.7.60 SendAsDenied unless that mailbox has Send As rights.'
+      );
+    }
   }
   if (!notify.length) warnings.push('No custody notification recipient is configured.');
 
+  const providerLabel = provider === 'resend'
+    ? 'Resend (HTTPS API)'
+    : smtp.host.toLowerCase().includes('office365')
+      ? 'Microsoft 365 SMTP (Exchange Online)'
+      : `SMTP — ${smtp.host}`;
+
   return {
-    provider: smtp.host.toLowerCase().includes('office365') ? 'Microsoft 365 (Exchange Online)' : smtp.host,
+    provider: providerLabel,
+    provider_key: provider,
+    provider_source: providerSource,
+    provider_configured: !providerBlocker(),
+    blocker: providerBlocker(),
+    resend: {
+      api_key_set: resend.apiKeySet,
+      key_hint: resend.keyHint,
+      endpoint: resend.endpoint,
+      shared_test_sender: from.sharedTestSender,
+      test_sender_address: RESEND_TEST_FROM,
+    },
     smtp: {
       host: smtp.host,
       port: smtp.port,
@@ -181,6 +216,7 @@ function emailConfig() {
       name_source: from.nameSource,
       address_source: from.addressSource,
       mismatch: from.mismatch,
+      shared_test_sender: from.sharedTestSender,
     },
     notification_recipients: notify,
     environment: process.env.NODE_ENV || 'development',
@@ -220,10 +256,11 @@ router.post('/email/test', requireAuth, async (req: AuthRequest, res: Response) 
     result = await sendTestEmail({
       to: recipients,
       environment: cfg.environment,
-      host: cfg.smtp.host,
-      port: cfg.smtp.port,
-      tlsMode: cfg.smtp.tls_mode,
-      from: cfg.from.header ?? '(no From address — SMTP_USER unset)',
+      provider: cfg.provider,
+      transport: cfg.provider_key === 'resend'
+        ? `HTTPS POST ${cfg.resend.endpoint}`
+        : `${cfg.smtp.host}:${cfg.smtp.port} · ${cfg.smtp.tls_mode}`,
+      from: cfg.from.header ?? '(no From address resolved)',
       triggeredBy,
     });
   } catch (err: any) {
@@ -246,7 +283,10 @@ router.post('/email/test', requireAuth, async (req: AuthRequest, res: Response) 
     error: result.error ?? null,
     skipped: !!result.skipped,
     attempts: result.attempts,
-    host: cfg.smtp.host, port: cfg.smtp.port, tls_mode: cfg.smtp.tls_mode,
+    provider: cfg.provider_key,
+    host: cfg.provider_key === 'resend' ? cfg.resend.endpoint : cfg.smtp.host,
+    port: cfg.provider_key === 'resend' ? 443 : cfg.smtp.port,
+    tls_mode: cfg.provider_key === 'resend' ? 'HTTPS' : cfg.smtp.tls_mode,
     from: cfg.from.header,
     triggered_by: triggeredBy,
   });

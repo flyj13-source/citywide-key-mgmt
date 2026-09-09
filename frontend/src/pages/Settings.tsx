@@ -263,9 +263,11 @@ export default function Settings() {
             <h2 className="text-white font-semibold text-sm">Email</h2>
             {email && (
               <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold ${
-                email.smtp.configured ? 'bg-green-100 text-green-800' : 'bg-[#fbeaea] text-[#C0272D]'
+                email.provider_configured ? 'bg-green-100 text-green-800' : 'bg-[#fbeaea] text-[#C0272D]'
               }`}>
-                {email.smtp.configured ? 'SMTP configured' : 'SMTP not configured'}
+                {email.provider_configured
+                  ? `${email.provider_key === 'resend' ? 'Resend' : 'SMTP'} configured`
+                  : `${email.provider_key === 'resend' ? 'Resend' : 'SMTP'} not configured`}
               </span>
             )}
           </div>
@@ -278,12 +280,22 @@ export default function Settings() {
                 {/* What is actually wired, read-only. */}
                 <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
                   {([
-                    ['Provider', email.provider],
-                    ['SMTP host', `${email.smtp.host}:${email.smtp.port}`
-                      + (email.smtp.host_source === 'default' ? '  (default — SMTP_HOST unset)' : '')],
-                    ['Connection', email.smtp.tls_mode],
-                    ['Authenticated as', email.smtp.user ?? '— not set —'],
-                    ['Password', email.smtp.password_set ? 'set' : '— not set —'],
+                    ['Provider', `${email.provider}${
+                      email.provider_source === 'auto' ? '  (auto — RESEND_API_KEY is set)'
+                      : email.provider_source === 'default' ? '  (default — MAIL_PROVIDER unset)'
+                      : ''}`],
+                    ...(email.provider_key === 'resend'
+                      ? ([
+                          ['Endpoint', email.resend.endpoint],
+                          ['API key', email.resend.api_key_set ? `set (${email.resend.key_hint})` : '— not set —'],
+                        ] as [string, string][])
+                      : ([
+                          ['SMTP host', `${email.smtp.host}:${email.smtp.port}`
+                            + (email.smtp.host_source === 'default' ? '  (default — SMTP_HOST unset)' : '')],
+                          ['Connection', email.smtp.tls_mode],
+                          ['Authenticated as', email.smtp.user ?? '— not set —'],
+                          ['Password', email.smtp.password_set ? 'set' : '— not set —'],
+                        ] as [string, string][])),
                     ['From address', email.from.header ?? '— not set —'],
                     ['Reply-To', email.from.reply_to ?? 'none (replies go to the From address)'],
                     ['Notification recipient', email.notification_recipients.join(', ') || 'nobody'],
@@ -351,7 +363,7 @@ export default function Settings() {
                       </button>
                     </div>
                     <p className="text-[11px] text-gray-400">
-                      Sends one CW-branded message stating the host, TLS mode, From address and timestamp.
+                      Sends one CW-branded message stating the provider, how it was delivered, the From address and the timestamp.
                       Leave "Send to" empty to use the notification recipient. Both outcomes are written to the audit log.
                     </p>
 
@@ -359,7 +371,8 @@ export default function Settings() {
                       testResult.ok ? (
                         <div className="rounded border border-green-200 bg-green-50 px-4 py-3 space-y-1">
                           <div className="text-sm font-semibold text-green-800">
-                            ✓ Accepted by {email.smtp.host} — delivered to {testResult.recipients.join(', ')}
+                            ✓ Accepted by {email.provider_key === 'resend' ? 'Resend' : email.smtp.host}
+                            {' — '}delivered to {testResult.recipients.join(', ')}
                           </div>
                           {testResult.message_id && (
                             <div className="text-xs text-green-900">
@@ -386,8 +399,9 @@ export default function Settings() {
 {testResult.error || 'No error text was returned.'}
                           </pre>
                           <div className="text-[11px] text-[#7a5a00]">
-                            5.7.57 / 535 → authentication · 5.7.60 → the From address is not permitted to send as ·
-                            ESOCKET / ETLS / wrong version number → the TLS handshake · 5.7.708 → tenant or IP block.
+                            {email.provider_key === 'resend'
+                              ? 'responseCode=401 → the API key · 403 with "domain is not verified" → verify the sending domain, or send from the shared sender to the account owner only · 422 → the message body · EFETCH → could not reach api.resend.com at all.'
+                              : '5.7.57 / 535 → authentication · 5.7.139 → SMTP AUTH disabled for the tenant · 5.7.60 → the From address is not permitted to send as · ESOCKET / ETLS / wrong version number → the TLS handshake · 5.7.708 → tenant or IP block.'}
                           </div>
                         </div>
                       )

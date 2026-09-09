@@ -16,13 +16,18 @@ process.env.SMTP_PASS = 'not-a-real-password';
 delete process.env.CARA_EMAIL;
 
 const sent: any[] = [];
-// Only the transport is stubbed. The From/Reply-To helpers stay real, so these
-// tests exercise the same header construction production uses.
-vi.mock('../src/lib/mailer', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../src/lib/mailer')>()),
-  createTransport: () => ({
-    sendMail: async (msg: any) => { sent.push(msg); return { messageId: 'test' }; },
-  }),
+// Stubbed at nodemailer, NOT at our own mailer module. Mocking the
+// createTransport EXPORT does not affect the module's own internal call to it,
+// so these tests would dial the real Office 365 and hang. Going one level
+// lower also means the provider layer, the From/Reply-To helpers and the
+// payload construction are all exercised for real.
+let sendBehaviour: (msg: any) => any = () => ({ messageId: 'test' });
+vi.mock('nodemailer', () => ({
+  default: {
+    createTransport: () => ({
+      sendMail: async (msg: any) => { sent.push(msg); return sendBehaviour(msg); },
+    }),
+  },
 }));
 
 let mail: typeof import('../src/lib/custodyMail');
@@ -40,6 +45,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   sent.length = 0;
+  sendBehaviour = () => ({ messageId: 'test' });
   settings.setSetting(settings.CUSTODY_NOTIFY_KEY, 'cara@citywideboston.com', 'test');
 });
 
@@ -270,13 +276,12 @@ describe('SEND FAILURES ARE REPORTED, NEVER SWALLOWED', () => {
   });
 
   it('turns a transport error into a reported failure', async () => {
-    const mailer = await import('../src/lib/mailer');
-    const spy = vi.spyOn(mailer, 'createTransport').mockReturnValue({
-      sendMail: async () => { throw new Error('550 mailbox unavailable'); },
-    } as any);
-    const r = await mail.sendBranded('Subject', '<p>x</p>', 'x', ['someone@example.test']);
+    // Thrown at the transport itself: spying on our own createTransport export
+    // would not affect the module's internal call to it.
+    sendBehaviour = () => { throw new Error('550 mailbox unavailable'); };
+    const r = await mail.sendBranded('Subject', '<p>x</p>', 'x', ['someone@example.test'], [], { singleAttempt: true });
     expect(r.ok).toBe(false);
     expect(r.error).toBe('550 mailbox unavailable');
-    spy.mockRestore();
+    sendBehaviour = () => ({ messageId: 'test' });
   });
 });
