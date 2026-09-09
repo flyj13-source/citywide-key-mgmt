@@ -48,12 +48,6 @@ export default function ManagerPanel({
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const shiftText = manager
-    ? [manager.shift ? `${manager.shift} shift` : null,
-       manager.day_night ? manager.day_night[0].toUpperCase() + manager.day_night.slice(1) : null]
-      .filter(Boolean).join(' · ')
-    : '';
-
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
@@ -69,11 +63,6 @@ export default function ManagerPanel({
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[#1a1a1a] text-white whitespace-nowrap">
                     {TYPE_LABEL[manager.manager_type] ?? manager.manager_type}
                   </span>
-                  {shiftText && (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border border-[#C0272D] text-[#C0272D] whitespace-nowrap">
-                      {shiftText}
-                    </span>
-                  )}
                   {manager.active === 0 && (
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-200 text-gray-600">Inactive</span>
                   )}

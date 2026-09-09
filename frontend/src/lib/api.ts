@@ -105,8 +105,6 @@ export interface StaffManager {
   id: number;
   name: string;
   manager_type: 'account_manager' | 'ccm' | 'both';
-  shift: '1st' | '2nd' | '3rd' | null;
-  day_night: 'day' | 'night' | null;
   email: string | null;
   phone: string | null;
   active: number;
@@ -133,8 +131,6 @@ export interface ManagerRosterRow {
   name: string;
   manager_type: 'account_manager' | 'ccm' | 'both';
   role_category: string;
-  shift: '1st' | '2nd' | '3rd' | null;
-  day_night: 'day' | 'night' | null;
   email: string | null;
   phone: string | null;
   active: number;
@@ -462,7 +458,6 @@ export interface KeyFormDoc {
   holder_name: string;
   holder_type: 'employee' | 'ic';
   holder_role: string | null;
-  holder_shift: string | null;
   holder_email: string | null;
   clients_covered: number;
   total_keys: number;
@@ -788,8 +783,6 @@ export interface StaffMember {
   role_category: 'manager' | 'crew' | 'both';
   manager_type: 'account_manager' | 'ccm' | 'both' | null;
   role_label: string;
-  shift: '1st' | '2nd' | '3rd' | null;
-  day_night: 'day' | 'night' | null;
   email: string | null;
   phone: string | null;
   active: number;

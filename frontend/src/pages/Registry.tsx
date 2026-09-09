@@ -908,8 +908,6 @@ function CWEmployeesTable({
           <tr className="bg-[#1a1a1a] text-white text-xs">
             <th className="text-left px-4 py-3 font-medium whitespace-nowrap cursor-pointer select-none" onClick={() => sort('name')}>Name{arrow('name')}</th>
             <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Role</th>
-            <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Shift</th>
-            <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Day/Night</th>
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Keys Held</th>
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none" onClick={() => sort('total_keys_held')}>Total Keys Held{arrow('total_keys_held')}</th>
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none" onClick={() => sort('accounts_assigned')}>Accounts Assigned{arrow('accounts_assigned')}</th>
@@ -919,12 +917,11 @@ function CWEmployeesTable({
         </thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={9} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+            <tr><td colSpan={7} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
           ) : sorted.length === 0 ? (
-            <tr><td colSpan={9} className="px-4 py-8 text-center text-cw-muted">No employees found</td></tr>
+            <tr><td colSpan={7} className="px-4 py-8 text-center text-cw-muted">No employees found</td></tr>
           ) : sorted.map((s, i) => {
             const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]';
-            const shiftText = [s.shift ? `${s.shift} shift` : null, s.day_night ? s.day_night[0].toUpperCase() + s.day_night.slice(1) : null].filter(Boolean).join(' · ');
             return (
               <tr
                 key={s.id}
@@ -948,12 +945,6 @@ function CWEmployeesTable({
                   )}
                 </td>
                 <td className="px-3 py-3"><StaffRoleBadges role_category={s.role_category} manager_type={s.manager_type} /></td>
-                <td className="px-3 py-3 whitespace-nowrap">
-                  {shiftText
-                    ? <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border border-[#C0272D] text-[#C0272D]">{shiftText}</span>
-                    : <span className="text-gray-300">—</span>}
-                </td>
-                <td className="px-3 py-3 text-center text-xs text-gray-600">{s.day_night ? s.day_night[0].toUpperCase() + s.day_night.slice(1) : '—'}</td>
                 <td className="px-3 py-3 text-center"><KeysHeldCell s={s} /></td>
                 <td className="px-3 py-3 text-center">
                   {s.total_keys_held

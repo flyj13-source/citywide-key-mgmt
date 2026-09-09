@@ -32,8 +32,6 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
-const SHIFT_OPTIONS = ['1st', '2nd', '3rd'];
-const DAY_NIGHT_OPTIONS = ['day', 'night'];
 const TYPE_OPTIONS = [
   { value: 'account_manager', label: 'Account Manager' },
   { value: 'ccm', label: 'Contract Compliance Manager' },
@@ -45,8 +43,6 @@ function EditModal({ staff, onClose, onSaved }: { staff: StaffDetailType; onClos
   const [form, setForm] = useState({
     name: staff.name,
     manager_type: staff.manager_type ?? '',
-    shift: staff.shift ?? '',
-    day_night: staff.day_night ?? '',
     email: staff.email ?? '',
     phone: staff.phone ?? '',
     active: staff.active === 1,
@@ -61,8 +57,6 @@ function EditModal({ staff, onClose, onSaved }: { staff: StaffDetailType; onClos
     try {
       const payload: any = {
         name: form.name.trim(),
-        shift: form.shift || null,
-        day_night: form.day_night || null,
         email: form.email.trim() || null,
         phone: form.phone.trim() || null,
         active: form.active ? 1 : 0,
@@ -97,22 +91,6 @@ function EditModal({ staff, onClose, onSaved }: { staff: StaffDetailType; onClos
             </div>
           </div>
         )}
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Shift</label>
-            <select className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.shift} onChange={(e) => f('shift', e.target.value)}>
-              <option value="">—</option>
-              {SHIFT_OPTIONS.map((s) => <option key={s} value={s}>{s} shift</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Day or Night</label>
-            <select className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.day_night} onChange={(e) => f('day_night', e.target.value)}>
-              <option value="">—</option>
-              {DAY_NIGHT_OPTIONS.map((d) => <option key={d} value={d}>{d[0].toUpperCase() + d.slice(1)}</option>)}
-            </select>
-          </div>
-        </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Email</label>
           <input className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={form.email} onChange={(e) => f('email', e.target.value)} placeholder="name@citywideboston.com" />
@@ -185,7 +163,6 @@ export default function StaffDetail() {
     );
   }
 
-  const shiftText = [staff.shift ? `${staff.shift} shift` : null, staff.day_night ? staff.day_night[0].toUpperCase() + staff.day_night.slice(1) : null].filter(Boolean).join(' · ');
   const managerHoldings = staff.holdings.filter((h: any) => h.source === 'manager');
   const crewHoldings = staff.holdings.filter((h: any) => h.source === 'crew');
 
@@ -206,7 +183,6 @@ export default function StaffDetail() {
               </div>
               <RoleBadges role_category={staff.role_category} manager_type={staff.manager_type} />
               <div className="flex items-center gap-3 flex-wrap text-sm text-gray-600">
-                {shiftText && <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border border-[#C0272D] text-[#C0272D]">{shiftText}</span>}
                 {staff.email && <span>✉ {staff.email}</span>}
                 {staff.phone && <span>☎ {staff.phone}</span>}
               </div>

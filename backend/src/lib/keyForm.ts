@@ -108,30 +108,28 @@ export function linesFromEvent(
   }));
 }
 
-/** Who is this person on the roster? Drives the role/shift on the header. */
+/** Who is this person on the roster? Drives the role on the form header. */
 export function holderProfile(holderName: string, holderType?: string | null): {
-  role: string; shift: string | null; email: string | null; phone: string | null; id: number | null;
+  role: string; email: string | null; phone: string | null; id: number | null;
 } {
   if (holderType === 'ic') {
     const raw = db.prepare(
       "SELECT id, ic_primary_contact, ic_email FROM accounts WHERE (record_type='ic' OR record_type IS NULL) AND LOWER(TRIM(ic_company_name)) = LOWER(TRIM(?)) LIMIT 1"
     ).get(holderName) as any;
     const r = raw ? Object.assign({}, raw) : null;
-    return { role: 'Independent Contractor', shift: null, email: r?.ic_email ?? null, phone: null, id: r?.id ?? null };
+    return { role: 'Independent Contractor', email: r?.ic_email ?? null, phone: null, id: r?.id ?? null };
   }
   const raw = db.prepare(
-    'SELECT id, manager_type, role_category, shift, day_night, email, phone FROM staff_managers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1'
+    'SELECT id, manager_type, role_category, email, phone FROM staff_managers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1'
   ).get(holderName) as any;
-  if (!raw) return { role: 'City Wide Staff', shift: null, email: null, phone: null, id: null };
+  if (!raw) return { role: 'City Wide Staff', email: null, phone: null, id: null };
   const r = Object.assign({}, raw);
   const role = r.role_category === 'crew' ? 'Crew'
     : r.manager_type === 'both' ? 'AM + CCM'
     : r.manager_type === 'ccm' ? 'CCM'
     : r.manager_type === 'account_manager' ? 'AM'
     : 'City Wide Staff';
-  const shift = [r.shift ? `${r.shift} shift` : null, r.day_night ? r.day_night : null]
-    .filter(Boolean).join(' · ') || null;
-  return { role, shift, email: r.email ?? null, phone: r.phone ?? null, id: r.id ?? null };
+  return { role, email: r.email ?? null, phone: r.phone ?? null, id: r.id ?? null };
 }
 
 export interface CreateFormInput {
@@ -167,14 +165,14 @@ export function createKeyForm(input: CreateFormInput): any {
 
   const r = db.prepare(`
     INSERT INTO key_form_docs
-      (event_type, holder_name, holder_type, holder_role, holder_shift, holder_id,
+      (event_type, holder_name, holder_type, holder_role, holder_id,
        holder_email, holder_phone, scope_json, clients_covered, total_keys,
        status, token, token_expires_at, generated_by, source_kind, source_ref,
        counterparty_name, no_email)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.eventType, input.holderName, input.holderType ?? 'employee',
-    profile.role, profile.shift, input.holderId ?? profile.id,
+    profile.role, input.holderId ?? profile.id,
     email, profile.phone, JSON.stringify(scope), lines.length, totalKeys,
     token, expires, input.generatedBy,
     input.sourceKind ?? null, input.sourceRef ?? null,
@@ -218,7 +216,6 @@ export function serializeForm(row: any): any {
     holder_name: row.holder_name,
     holder_type: row.holder_type,
     holder_role: row.holder_role,
-    holder_shift: row.holder_shift,
     holder_email: row.holder_email,
     clients_covered: row.clients_covered,
     total_keys: row.total_keys,

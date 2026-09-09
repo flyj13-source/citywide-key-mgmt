@@ -30,8 +30,6 @@ export interface EmployeeExportRow {
 export interface EmployeeExportModel {
   name: string;
   role_label: string;
-  shift: string | null;
-  day_night: string | null;
   email: string | null;
   phone: string | null;
   summary: { clients: number; totalKeys: number } & Breakdown;
@@ -73,8 +71,6 @@ export function buildEmployeeModel(d: any): EmployeeExportModel {
   return {
     name: d.name,
     role_label: d.role_label,
-    shift: d.shift ?? null,
-    day_night: d.day_night ?? null,
     email: d.email ?? null,
     phone: d.phone ?? null,
     summary: {
@@ -92,9 +88,6 @@ export function buildEmployeeModel(d: any): EmployeeExportModel {
 
 const contactLine = (m: EmployeeExportModel): string =>
   [m.email, m.phone].filter(Boolean).join('  ·  ') || '—';
-const shiftLine = (m: EmployeeExportModel): string =>
-  [m.shift ? `${m.shift} shift` : null, m.day_night ? m.day_night[0].toUpperCase() + m.day_night.slice(1) : null]
-    .filter(Boolean).join('  ·  ') || '—';
 
 // ── Excel (.xlsx) ────────────────────────────────────────────────────────────
 export async function buildEmployeeWorkbook(m: EmployeeExportModel): Promise<Buffer> {
@@ -117,12 +110,13 @@ export async function buildEmployeeWorkbook(m: EmployeeExportModel): Promise<Buf
 
   label(3, 'Employee', m.name);
   label(4, 'Role', m.role_label);
-  label(5, 'Shift', shiftLine(m));
-  label(6, 'Contact', contactLine(m));
+  label(5, 'Contact', contactLine(m));
 
-  label(8, 'Total Clients Managed', m.summary.clients);
-  label(9, 'Total Keys Held', m.summary.totalKeys);
-  label(10, 'Keys by Type', [
+  // Rows reflowed after Shift was removed — the blank separator row stays,
+  // so the block does not gain a hole where the field used to be.
+  label(7, 'Total Clients Managed', m.summary.clients);
+  label(8, 'Total Keys Held', m.summary.totalKeys);
+  label(9, 'Keys by Type', [
     `${m.summary.metal} Metal`,
     `${m.summary.card} Key Card`,
     `${m.summary.fob} Key Fob`,
@@ -130,7 +124,7 @@ export async function buildEmployeeWorkbook(m: EmployeeExportModel): Promise<Buf
     ...(m.summary.other ? [`${m.summary.other} Other`] : []),
   ].join('  ·  '));
 
-  const headerRowNum = 12;
+  const headerRowNum = 11;
   const columns = [
     { header: 'Client Name', width: 34 },
     { header: 'BC Client #', width: 15 },
@@ -238,7 +232,6 @@ export async function buildEmployeePdf(m: EmployeeExportModel): Promise<Buffer> 
     y -= 15;
   };
   infoLine('Role', m.role_label || '—');
-  infoLine('Shift', shiftLine(m));
   infoLine('Contact', contactLine(m));
 
   // Summary band

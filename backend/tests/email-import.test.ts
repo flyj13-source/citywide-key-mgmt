@@ -142,7 +142,7 @@ describe('STAFF IMPORT — unmatched names become new roster rows', () => {
       { name: 'New Hire', email: 'new@cw.test', role_category: 'crew', manager_type: 'crew' },
     ]);
     expect(db.prepare('SELECT * FROM staff_managers').get()).toMatchObject({
-      name: 'New Hire', role_category: 'crew', shift: null, day_night: null, active: 1,
+      name: 'New Hire', role_category: 'crew', active: 1,
     });
   });
 

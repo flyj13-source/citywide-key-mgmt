@@ -192,8 +192,6 @@ function serialize(row: any, detail = false) {
     role_category: r.role_category ?? 'manager',
     manager_type: surfaceManagerType(r.manager_type, r.role_category ?? 'manager'),
     role_label: roleLabel(r.manager_type, r.role_category ?? 'manager'),
-    shift: r.shift ?? null,
-    day_night: r.day_night ?? null,
     email: r.email ?? null,
     phone: r.phone ?? null,
     active: r.active === null || r.active === undefined ? 1 : Number(r.active),
@@ -292,18 +290,11 @@ router.get('/:id/export', requireAuth, async (req: AuthRequest, res: Response) =
 // ── PATCH /api/staff/:id — edit (incl. soft-deactivate) ──────────────────────
 // Reuses the roster-edit contract. Never hard-deletes. Audited.
 const VALID_TYPES = ['account_manager', 'ccm', 'both'];
-const VALID_SHIFTS = ['1st', '2nd', '3rd'];
-const VALID_DAY_NIGHT = ['day', 'night'];
 const cleanText = (v: any): string | null => {
   if (v === undefined || v === null) return null;
   const s = String(v).trim();
   return s === '' ? null : s;
 };
-const cleanEnum = (v: any, allowed: string[]): string | null => {
-  if (v === undefined || v === null || v === '') return null;
-  return allowed.includes(v) ? v : null;
-};
-
 router.patch('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   const existing = db.prepare('SELECT * FROM staff_managers WHERE id = ?').get(req.params.id) as any;
   if (!existing) return res.status(404).json({ error: 'Staff member not found' });
@@ -325,14 +316,6 @@ router.patch('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     }
     updates.push('manager_type = ?'); params.push(req.body.manager_type); changed.manager_type = req.body.manager_type;
   }
-  if ('shift' in req.body) {
-    const shift = cleanEnum(req.body.shift, VALID_SHIFTS);
-    updates.push('shift = ?'); params.push(shift); changed.shift = shift;
-  }
-  if ('day_night' in req.body) {
-    const dn = cleanEnum(req.body.day_night, VALID_DAY_NIGHT);
-    updates.push('day_night = ?'); params.push(dn); changed.day_night = dn;
-  }
   if ('email' in req.body) {
     const email = cleanText(req.body.email);
     updates.push('email = ?'); params.push(email); changed.email = email;
@@ -346,7 +329,19 @@ router.patch('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     updates.push('active = ?'); params.push(active); changed.active = active;
   }
 
-  if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
+  // Retired fields. A stale tab or an old integration may still send these;
+  // they are recognised and ignored rather than rejected, so a request naming
+  // only them is a no-op instead of an error about a field nobody can see.
+  const RETIRED = ['shift', 'day_night'];
+  const ignored = RETIRED.filter((k) => k in req.body);
+
+  if (!updates.length) {
+    if (ignored.length) {
+      const row = db.prepare('SELECT * FROM staff_managers WHERE id = ?').get(req.params.id);
+      return res.json({ staff: serialize(row), ignored });
+    }
+    return res.status(400).json({ error: 'No valid fields to update' });
+  }
 
   params.push(req.params.id);
   db.prepare(`UPDATE staff_managers SET ${updates.join(', ')} WHERE id = ?`).run(...params);

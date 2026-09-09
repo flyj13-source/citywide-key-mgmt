@@ -217,16 +217,12 @@ function cwEmployeesSheet(): SheetSpec {
   const columns: Column[] = [
     { header: 'Name', key: 'name', width: 24 },
     { header: 'Role', key: 'role_label', width: 24 },
-    { header: 'Shift', key: 'shift_text', width: 14 },
-    { header: 'Day/Night', key: 'day_night', width: 11 },
     { header: 'Keys Held', key: 'keys_text', width: 32 },
     { header: 'Total Keys Held', key: 'total_keys_held', width: 15 },
     { header: 'Accounts Assigned', key: 'accounts_assigned', width: 17 },
     { header: 'Active', key: 'active', width: 8 },
   ];
   const rows = staffRoster({ includeInactive: true }).map((s: any) => {
-    const shift_text = [s.shift ? `${s.shift} shift` : null, s.day_night ? s.day_night[0].toUpperCase() + s.day_night.slice(1) : null]
-      .filter(Boolean).join(' · ');
     const keys_text = [
       s.keys_metal ? `${s.keys_metal} metal` : null,
       s.keys_card ? `${s.keys_card} card` : null,
@@ -237,8 +233,6 @@ function cwEmployeesSheet(): SheetSpec {
     return {
       name: s.name,
       role_label: s.role_label,
-      shift_text,
-      day_night: s.day_night ? s.day_night[0].toUpperCase() + s.day_night.slice(1) : '',
       keys_text,
       total_keys_held: s.total_keys_held,
       accounts_assigned: s.accounts_assigned,

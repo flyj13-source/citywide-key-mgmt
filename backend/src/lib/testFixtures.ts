@@ -49,8 +49,8 @@ export function seedTestFixtures(): FixtureIds {
   } else {
     const r = db.prepare(`
       INSERT INTO staff_managers
-        (name, manager_type, role_category, shift, day_night, email, active, is_test)
-      VALUES (?, 'both', 'manager', '1st', 'day', ?, 1, 1)
+        (name, manager_type, role_category, email, active, is_test)
+      VALUES (?, 'both', 'manager', ?, 1, 1)
     `).run(TEST_MANAGER_NAME, TEST_EMAIL);
     mgr = { id: Number(r.lastInsertRowid) };
     created.push('staff');

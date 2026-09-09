@@ -163,7 +163,6 @@ function ViewModal({ form, onClose }: { form: KeyFormDoc; onClose: () => void })
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
           <div><span className="text-cw-muted">Role:</span> {form.holder_role || '—'}</div>
-          <div><span className="text-cw-muted">Shift:</span> {form.holder_shift || '—'}</div>
           <div><span className="text-cw-muted">Contact:</span> {form.holder_email || <span className="text-[#C0272D]">no email on file</span>}</div>
           <div><span className="text-cw-muted">Event:</span> {form.event_label}</div>
           <div><span className="text-cw-muted">Generated:</span> {fmt(form.generated_at)}</div>
@@ -472,7 +471,7 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
                 <td className="px-3 py-3 font-mono text-xs">{f.form_no}</td>
                 <td className="px-3 py-3">
                   <div className="font-medium text-[#1a1a1a] whitespace-nowrap">{f.holder_name}</div>
-                  <div className="text-[11px] text-cw-muted">{f.holder_role}{f.holder_shift ? ` · ${f.holder_shift}` : ''}</div>
+                  <div className="text-[11px] text-cw-muted">{f.holder_role}</div>
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap">{f.event_label}</td>
                 <td className="px-3 py-3 text-center">{f.clients_covered}</td>

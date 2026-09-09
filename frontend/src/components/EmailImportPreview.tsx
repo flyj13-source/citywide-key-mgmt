@@ -185,7 +185,7 @@ export default function EmailImportPreview({
                   items={preview.ambiguous.map((a) => `${a.name}  (ids ${a.ids.join(', ')})`)} />
             <List title="Emails to be filled in"
                   items={preview.matchedUpdated.map((m) => `${m.name} → ${m.email}`)} />
-            <List title="New roster rows to create (shift left blank for you to fill)"
+            <List title="New roster rows to create"
                   items={preview.created.map((c) => `${c.name} <${c.email}>  ${c.role_category}`)} />
             <List title="Already had an email — keeping the existing value"
                   items={preview.matchedAlreadyHadEmail.map((m) => `${m.name}: keeping ${m.existing}`)} />

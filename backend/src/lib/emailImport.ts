@@ -290,8 +290,8 @@ export function importStaffEmails(
 
   const updateEmail = db.prepare('UPDATE staff_managers SET email = ? WHERE id = ?');
   const insertStaff = db.prepare(`
-    INSERT INTO staff_managers (name, manager_type, role_category, shift, day_night, email, active)
-    VALUES (?, ?, ?, NULL, NULL, ?, 1)
+    INSERT INTO staff_managers (name, manager_type, role_category, email, active)
+    VALUES (?, ?, ?, ?, 1)
   `);
 
   for (const r of rows) {
@@ -322,8 +322,7 @@ export function importStaffEmails(
       continue;
     }
 
-    // No roster record at all — create one for Cara to finish (shift/day_night
-    // stay NULL deliberately).
+    // No roster record at all — create one from the import.
     const role = managerRoleFor(db, r.name);
     if (!opts.dryRun) {
       insertStaff.run(r.name, role.manager_type, role.role_category, r.email || null);

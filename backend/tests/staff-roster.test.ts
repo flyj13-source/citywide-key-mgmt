@@ -197,9 +197,19 @@ describe('UNIFIED STAFF API', () => {
     const list = await auth(request(app).get('/api/staff?include_inactive=1'));
     const ftId = list.body.find((s: any) => s.name === 'Field Tech').id;
 
+    // Posting the retired fields is accepted and ignored, never an error: a
+    // stale tab must not get a 400 about a field nobody can see any more.
     const patch = await auth(request(app).patch(`/api/staff/${ftId}`)).send({ shift: '2nd', day_night: 'night' });
     expect(patch.status).toBe(200);
-    expect(patch.body.staff.shift).toBe('2nd');
+    expect(patch.body.ignored).toEqual(['shift', 'day_night']);
+    expect(patch.body.staff).not.toHaveProperty('shift');
+    expect(patch.body.staff).not.toHaveProperty('day_night');
+
+    // A real edit — the ignored-field patch above deliberately writes nothing,
+    // so it is not the thing that should produce an audit entry.
+    const edit = await auth(request(app).patch(`/api/staff/${ftId}`)).send({ phone: '617-555-0142' });
+    expect(edit.status).toBe(200);
+    expect(edit.body.staff.phone).toBe('617-555-0142');
 
     const bad = await auth(request(app).patch(`/api/staff/${ftId}`)).send({ manager_type: 'ccm' });
     expect(bad.status).toBe(400);

@@ -64,13 +64,10 @@ export default function Dashboard() {
     }).finally(() => setLoading(false));
   }, []);
 
-  // Manager counts by type + shift (active managers only) for the Managers card.
+  // Manager counts by type (active managers only) for the Managers card.
   const mgrCounts = {
     ams: staffManagers.filter((m) => m.manager_type === 'account_manager' || m.manager_type === 'both').length,
     ccms: staffManagers.filter((m) => m.manager_type === 'ccm' || m.manager_type === 'both').length,
-    shift1: staffManagers.filter((m) => m.shift === '1st').length,
-    shift2: staffManagers.filter((m) => m.shift === '2nd').length,
-    shift3: staffManagers.filter((m) => m.shift === '3rd').length,
     total: staffManagers.length,
   };
 
@@ -163,7 +160,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Managers roster summary — counts by type + shift, click through to
+        {/* Managers roster summary — counts by type, click through to
             the roster tab inside the Key Registry. */}
         <Link to="/registry?tab=account-managers" className="card p-5 block hover:border-[#C0272D] transition-colors">
           <div className="flex items-center justify-between mb-3">
@@ -178,9 +175,7 @@ export default function Dashboard() {
               <span className="text-gray-300">·</span>
               <span><span className="font-bold text-[#1a1a1a]">{mgrCounts.ccms}</span> <span className="text-cw-muted">CCMs</span></span>
               <span className="text-gray-300">·</span>
-              <span><span className="font-bold text-[#1a1a1a]">{mgrCounts.shift1}</span> <span className="text-cw-muted">1st shift</span></span>
-              <span><span className="font-bold text-[#1a1a1a]">{mgrCounts.shift2}</span> <span className="text-cw-muted">2nd</span></span>
-              <span><span className="font-bold text-[#1a1a1a]">{mgrCounts.shift3}</span> <span className="text-cw-muted">3rd</span></span>
+              <span><span className="font-bold text-[#1a1a1a]">{mgrCounts.total}</span> <span className="text-cw-muted">on the roster</span></span>
             </div>
           )}
         </Link>

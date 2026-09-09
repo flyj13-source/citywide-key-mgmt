@@ -152,16 +152,19 @@ describe('STAFF-MANAGERS API', () => {
   });
 
   it('creates, updates, and soft-deactivates (never hard-deletes)', async () => {
+    // shift / day_night are sent deliberately: an old client or a stale form
+    // may still post them, and that must be ignored rather than error.
     const create = await auth(request(app).post('/api/staff-managers')).send({
       name: 'New Person', manager_type: 'account_manager', shift: '2nd', day_night: 'day', email: 'np@x.com',
     });
     expect(create.status).toBe(201);
     const id = create.body.manager.id;
-    expect(create.body.manager.shift).toBe('2nd');
+    expect(create.body.manager).not.toHaveProperty('shift');
+    expect(create.body.manager).not.toHaveProperty('day_night');
 
     const patch = await auth(request(app).patch(`/api/staff-managers/${id}`)).send({ shift: '3rd', active: false });
     expect(patch.status).toBe(200);
-    expect(patch.body.manager.shift).toBe('3rd');
+    expect(patch.body.manager).not.toHaveProperty('shift');
     expect(patch.body.manager.active).toBe(0);
 
     // Soft-deactivated → gone from default list, present with include_inactive.

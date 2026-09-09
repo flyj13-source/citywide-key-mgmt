@@ -10,8 +10,6 @@ const TYPE_OPTIONS: { value: StaffManager['manager_type']; label: string }[] = [
   { value: 'ccm', label: 'Contract Compliance Manager' },
   { value: 'both', label: 'Both' },
 ];
-const SHIFT_OPTIONS = ['1st', '2nd', '3rd'] as const;
-const DAY_NIGHT_OPTIONS = ['day', 'night'] as const;
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return <div className="text-[10px] font-bold uppercase tracking-widest text-[#1a1a1a] border-b border-gray-200 pb-1 mb-3">{children}</div>;
@@ -32,8 +30,6 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 interface FormState {
   name: string;
   manager_type: StaffManager['manager_type'] | '';
-  shift: string;
-  day_night: string;
   email: string;
   phone: string;
   active: boolean;
@@ -50,8 +46,6 @@ export default function ManagerModal({
   const [form, setForm] = useState<FormState>(() => ({
     name: initial?.name ?? '',
     manager_type: initial?.manager_type ?? '',
-    shift: initial?.shift ?? '',
-    day_night: initial?.day_night ?? '',
     email: initial?.email ?? '',
     phone: initial?.phone ?? '',
     active: initial ? initial.active === 1 : true,
@@ -71,8 +65,6 @@ export default function ManagerModal({
       const payload = {
         name: form.name.trim(),
         manager_type: form.manager_type as StaffManager['manager_type'],
-        shift: (form.shift || null) as any,
-        day_night: (form.day_night || null) as any,
         email: form.email.trim() || null,
         phone: form.phone.trim() || null,
         active: form.active ? 1 : 0,
@@ -122,34 +114,6 @@ export default function ManagerModal({
                   </label>
                 ))}
               </div>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <SectionLabel>Schedule</SectionLabel>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Shift</label>
-              <select
-                className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
-                value={form.shift}
-                onChange={(e) => f('shift', e.target.value)}
-              >
-                <option value="">—</option>
-                {SHIFT_OPTIONS.map((s) => <option key={s} value={s}>{s} shift</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Day or Night</label>
-              <select
-                className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
-                value={form.day_night}
-                onChange={(e) => f('day_night', e.target.value)}
-              >
-                <option value="">—</option>
-                {DAY_NIGHT_OPTIONS.map((d) => <option key={d} value={d}>{d[0].toUpperCase() + d.slice(1)}</option>)}
-              </select>
             </div>
           </div>
         </div>

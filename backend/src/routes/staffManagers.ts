@@ -15,8 +15,6 @@ const router = Router();
 type ManagerType = 'account_manager' | 'ccm' | 'both';
 
 const VALID_TYPES: ManagerType[] = ['account_manager', 'ccm', 'both'];
-const VALID_SHIFTS = ['1st', '2nd', '3rd'];
-const VALID_DAY_NIGHT = ['day', 'night'];
 
 // Shared client-book filter: real client rows only, matching the roster tabs.
 const CLIENT_FILTER = `
@@ -83,8 +81,6 @@ function serialize(m: any) {
     id: row.id,
     name: row.name,
     manager_type: row.manager_type,
-    shift: row.shift ?? null,
-    day_night: row.day_night ?? null,
     email: row.email ?? null,
     phone: row.phone ?? null,
     active: row.active === null || row.active === undefined ? 1 : Number(row.active),
@@ -173,8 +169,6 @@ router.get('/roster', requireAuth, (req: AuthRequest, res: Response) => {
       name: p.name,
       manager_type: p.manager_type,
       role_category: p.role_category ?? 'manager',
-      shift: p.shift ?? null,
-      day_night: p.day_night ?? null,
       email: p.email ?? null,
       phone: p.phone ?? null,
       active: p.active === 0 ? 0 : 1,
@@ -294,8 +288,6 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
   if (!name) return res.status(400).json({ error: 'Name is required' });
   if (!manager_type) return res.status(400).json({ error: "manager_type must be one of 'account_manager', 'ccm', 'both'" });
 
-  const shift = cleanEnum(req.body.shift, VALID_SHIFTS);
-  const day_night = cleanEnum(req.body.day_night, VALID_DAY_NIGHT);
   const email = cleanText(req.body.email);
   const phone = cleanText(req.body.phone);
   const active = req.body.active === 0 || req.body.active === false || req.body.active === '0' ? 0 : 1;
@@ -303,12 +295,12 @@ router.post('/', requireAuth, (req: AuthRequest, res: Response) => {
     ? Number(req.body.login_manager_id) : null;
 
   const result = db.prepare(
-    `INSERT INTO staff_managers (name, manager_type, role_category, shift, day_night, email, phone, active, login_manager_id)
-     VALUES (?, ?, 'manager', ?, ?, ?, ?, ?, ?)`
-  ).run(name, manager_type, shift, day_night, email, phone, active, login_manager_id);
+    `INSERT INTO staff_managers (name, manager_type, role_category, email, phone, active, login_manager_id)
+     VALUES (?, ?, 'manager', ?, ?, ?, ?)`
+  ).run(name, manager_type, email, phone, active, login_manager_id);
 
   const id = Number(result.lastInsertRowid);
-  logAudit(req, 'staff_manager_created', name, null, { id, manager_type, shift, day_night });
+  logAudit(req, 'staff_manager_created', name, null, { id, manager_type });
 
   const created = db.prepare('SELECT * FROM staff_managers WHERE id = ?').get(id);
   res.status(201).json({ manager: serialize(created) });
@@ -334,14 +326,6 @@ router.patch('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     if (!t) return res.status(400).json({ error: "manager_type must be one of 'account_manager', 'ccm', 'both'" });
     updates.push('manager_type = ?'); params.push(t); changed.manager_type = t;
   }
-  if ('shift' in req.body) {
-    const shift = cleanEnum(req.body.shift, VALID_SHIFTS);
-    updates.push('shift = ?'); params.push(shift); changed.shift = shift;
-  }
-  if ('day_night' in req.body) {
-    const dn = cleanEnum(req.body.day_night, VALID_DAY_NIGHT);
-    updates.push('day_night = ?'); params.push(dn); changed.day_night = dn;
-  }
   if ('email' in req.body) {
     const email = cleanText(req.body.email);
     updates.push('email = ?'); params.push(email); changed.email = email;
@@ -360,7 +344,19 @@ router.patch('/:id', requireAuth, (req: AuthRequest, res: Response) => {
     updates.push('login_manager_id = ?'); params.push(lid); changed.login_manager_id = lid;
   }
 
-  if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
+  // Retired fields. A stale tab or an old integration may still send these;
+  // they are recognised and ignored rather than rejected, so a request naming
+  // only them is a no-op instead of an error about a field nobody can see.
+  const RETIRED = ['shift', 'day_night'];
+  const ignored = RETIRED.filter((k) => k in req.body);
+
+  if (!updates.length) {
+    if (ignored.length) {
+      const row = db.prepare('SELECT * FROM staff_managers WHERE id = ?').get(req.params.id);
+      return res.json({ manager: serialize(row), ignored });
+    }
+    return res.status(400).json({ error: 'No valid fields to update' });
+  }
 
   params.push(req.params.id);
   db.prepare(`UPDATE staff_managers SET ${updates.join(', ')} WHERE id = ?`).run(...params);

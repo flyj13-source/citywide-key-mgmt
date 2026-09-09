@@ -19,7 +19,7 @@ export interface BackfillResult {
  * PASS 1 — MANAGERS: one row per DISTINCT name in the client rows'
  *   account_manager / ccm_manager TEXT values. manager_type is inferred
  *   ('both' if the name is in both columns, else 'account_manager' / 'ccm');
- *   role_category = 'manager'. shift / day_night left NULL for Cara to fill in.
+ *   role_category = 'manager'.
  *
  * PASS 2 — CREW: field staff who exist only as free-text names on check-outs.
  *   Distinct names are collected from key_assignments.assignee and, for
@@ -78,7 +78,7 @@ export function backfillStaffManagers(): BackfillResult {
 
   // ── PASS 1: managers ───────────────────────────────────────────────────────
   const insertManager = db.prepare(
-    "INSERT INTO staff_managers (name, manager_type, role_category, shift, day_night) VALUES (?, ?, 'manager', NULL, NULL)"
+    "INSERT INTO staff_managers (name, manager_type, role_category) VALUES (?, ?, 'manager')"
   );
   const byType = { account_manager: 0, ccm: 0, both: 0 };
   let created = 0;
@@ -115,7 +115,7 @@ export function backfillStaffManagers(): BackfillResult {
   }
 
   const insertCrew = db.prepare(
-    "INSERT INTO staff_managers (name, manager_type, role_category, shift, day_night) VALUES (?, 'crew', 'crew', NULL, NULL)"
+    "INSERT INTO staff_managers (name, manager_type, role_category) VALUES (?, 'crew', 'crew')"
   );
   const promoteToBoth = db.prepare("UPDATE staff_managers SET role_category = 'both' WHERE id = ?");
 

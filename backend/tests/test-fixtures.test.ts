@@ -84,7 +84,6 @@ describe('§1 THE THREE FIXTURES', () => {
     ).get() as any);
     expect(staff).toMatchObject({
       manager_type: 'both', role_category: 'manager',
-      shift: '1st', day_night: 'day',
       email: 'tye.jordan@cinchit.com', is_test: 1, active: 1,
     });
   });
@@ -325,7 +324,7 @@ describe('§4 THE FULL LOOP RUNS AGAINST THE FIXTURES', () => {
     });
     // The roster identity lands on the form header.
     expect(out.body.key_form.holder_role).toBe('AM + CCM');
-    expect(out.body.key_form.holder_shift).toContain('1st');
+    expect(out.body.key_form).not.toHaveProperty('holder_shift');
 
     const back = await auth(request(app).post('/api/assignments/checkin'))
       .send({ id: out.body.id, condition_on_return: 'good' });

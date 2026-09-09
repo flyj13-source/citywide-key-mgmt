@@ -63,7 +63,7 @@ describe('ROSTER-DRIVEN MANAGER TABS', () => {
 
     // Attributes that only exist on the roster record come through.
     expect(byName['Aggie AM']).toMatchObject({
-      manager_type: 'account_manager', shift: '1st', day_night: 'day',
+      manager_type: 'account_manager',
       email: 'aggie@cw.test', active: 1,
     });
     // Inactive people are still listed (the Active column has to mean something).
@@ -123,7 +123,10 @@ describe('ROSTER-DRIVEN MANAGER TABS', () => {
     const names = res.body.managers.map((m: any) => m.name).sort();
     expect(names).toEqual(['Bea Both', 'Cleo CCM']);
     const cleo = res.body.managers.find((m: any) => m.name === 'Cleo CCM');
-    expect(cleo).toMatchObject({ shift: '3rd', day_night: 'night', email: null, personal_metal: 2 });
+    expect(cleo).toMatchObject({ email: null, personal_metal: 2 });
+    // Stored on the row by the seed above, and deliberately not surfaced.
+    expect(cleo).not.toHaveProperty('shift');
+    expect(cleo).not.toHaveProperty('day_night');
   });
 
   it('detail carries per-client role and keys held there BY TYPE', async () => {

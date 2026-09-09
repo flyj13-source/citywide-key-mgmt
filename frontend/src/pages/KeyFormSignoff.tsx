@@ -104,7 +104,7 @@ export default function KeyFormSignoff() {
         <div className="px-5 py-3 bg-cw-black flex items-center justify-between">
           <h2 className="text-white font-semibold text-sm">Keys held</h2>
           <span className="text-white/60 text-xs">
-            {data.holder_role}{data.holder_shift ? ` · ${data.holder_shift}` : ''} · generated {fmt(data.generated_at)}
+            {data.holder_role} · generated {fmt(data.generated_at)}
           </span>
         </div>
         <div className="overflow-x-auto">

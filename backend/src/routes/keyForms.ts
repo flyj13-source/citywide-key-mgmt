@@ -271,7 +271,6 @@ router.get('/token/:token', (req: Request, res: Response) => {
     event_label: FORM_EVENT_LABEL[row.event_type as FormEventType] ?? row.event_type,
     holder: row.holder_name,
     holder_role: row.holder_role,
-    holder_shift: row.holder_shift,
     holder_email: row.holder_email,
     clients: scope.lines,
     event_note: scope.event_note,

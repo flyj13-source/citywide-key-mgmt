@@ -135,7 +135,8 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
     });
     // The header carries the roster identity.
     expect(res.body.key_form.holder_role).toBe('AM');
-    expect(res.body.key_form.holder_shift).toContain('1st');
+    // The roster row still stores '1st'; the form neither reads nor exposes it.
+    expect(res.body.key_form).not.toHaveProperty('holder_shift');
   });
 
   it('check-in produces one', async () => {

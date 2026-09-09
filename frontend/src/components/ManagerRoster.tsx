@@ -15,23 +15,18 @@ const TYPE_LABEL: Record<string, string> = {
 /** CW-red left border marks the "Personally Holds" group as primary. */
 const RED_BORDER = 'border-l-2 border-[#C0272D]';
 
-export const SHIFT_CHIPS = [
+// The shift and day/night chips are gone; these two were never shift filters,
+// so the row keeps its purpose with a name that is now accurate.
+export const ROSTER_CHIPS = [
   { key: 'all', label: 'All' },
-  { key: '1st', label: '1st' },
-  { key: '2nd', label: '2nd' },
-  { key: '3rd', label: '3rd' },
-  { key: 'day', label: 'Day' },
-  { key: 'night', label: 'Night' },
   { key: 'active', label: 'Active only' },
 ] as const;
-export type RosterChip = typeof SHIFT_CHIPS[number]['key'];
+export type RosterChip = typeof ROSTER_CHIPS[number]['key'];
 
 export function matchesChip(m: ManagerRosterRow, chip: RosterChip): boolean {
   switch (chip) {
-    case 'all': return true;
-    case '1st': case '2nd': case '3rd': return m.shift === chip;
-    case 'day': case 'night': return m.day_night === chip;
     case 'active': return m.active === 1;
+    case 'all':
     default: return true;
   }
 }
@@ -40,17 +35,6 @@ function TypeBadge({ type }: { type: string }) {
   return (
     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[#1a1a1a] text-white whitespace-nowrap">
       {TYPE_LABEL[type] ?? type}
-    </span>
-  );
-}
-
-/* Shift only — day/night has its own column, so folding both in here would
-   print the same fact twice on every row. */
-function ShiftPill({ shift }: { shift: string | null }) {
-  if (!shift) return <span className="text-gray-300">—</span>;
-  return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border border-[#C0272D] text-[#C0272D] whitespace-nowrap">
-      {shift} shift
     </span>
   );
 }
@@ -127,7 +111,7 @@ export function ManagerRosterTable({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex border-b border-cw-border gap-5">
-          {SHIFT_CHIPS.map((c) => (
+          {ROSTER_CHIPS.map((c) => (
             <button
               key={c.key}
               onClick={() => onChip(c.key)}
@@ -154,8 +138,6 @@ export function ManagerRosterTable({
             <tr className="bg-[#1a1a1a] text-white text-[11px]">
               <th rowSpan={2} className="text-left px-4 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('name')}>Name{arrow('name')}</th>
               <th rowSpan={2} className="text-left px-3 py-3 font-medium whitespace-nowrap align-bottom">Type</th>
-              <th rowSpan={2} className="text-left px-3 py-3 font-medium whitespace-nowrap align-bottom">Shift</th>
-              <th rowSpan={2} className="text-center px-3 py-3 font-medium whitespace-nowrap align-bottom">Day/Night</th>
               <th rowSpan={2} className="text-center px-3 py-3 font-medium whitespace-nowrap cursor-pointer select-none align-bottom" onClick={() => sort('clients_managed')}>Clients Managed{arrow('clients_managed')}</th>
               <th colSpan={5} className={`text-center px-3 py-2 font-bold uppercase tracking-wide whitespace-nowrap ${RED_BORDER}`}>Personally Holds</th>
               <th rowSpan={2} className="text-center px-3 py-3 font-medium uppercase tracking-wide whitespace-nowrap text-white/50 border-l border-white/20 align-bottom cursor-pointer select-none" onClick={() => sort('total_client_keys')}>Total Managed Inventory{arrow('total_client_keys')}</th>
@@ -173,9 +155,9 @@ export function ManagerRosterTable({
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
             ) : sorted.length === 0 ? (
-              <tr><td colSpan={13} className="px-4 py-8 text-center text-cw-muted">No {label.toLowerCase()}s match this filter</td></tr>
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-cw-muted">No {label.toLowerCase()}s match this filter</td></tr>
             ) : sorted.map((m, i) => (
               <tr
                 key={m.id}
@@ -199,10 +181,6 @@ export function ManagerRosterTable({
                   )}
                 </td>
                 <td className="px-3 py-3"><TypeBadge type={m.manager_type} /></td>
-                <td className="px-3 py-3"><ShiftPill shift={m.shift} /></td>
-                <td className="px-3 py-3 text-center text-xs text-gray-600">
-                  {m.day_night ? m.day_night[0].toUpperCase() + m.day_night.slice(1) : '—'}
-                </td>
                 <td className="px-3 py-3 text-center"><Count value={m.clients_managed} /></td>
                 {PERSONAL_COLS.map((c, idx) => (
                   <td key={c.key} className={`px-3 py-3 text-center ${idx === 0 ? RED_BORDER : ''}`}>

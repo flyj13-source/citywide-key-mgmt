@@ -72,7 +72,6 @@ export async function generateKeyFormPdf(row: any): Promise<string> {
   const rows: [string, string][] = [
     ['Holder', row.holder_name],
     ['Role', row.holder_role || '—'],
-    ...(row.holder_shift ? ([['Shift', row.holder_shift]] as [string, string][]) : []),
     ['Contact', row.holder_email || 'No email on file'],
     ...(row.holder_phone ? ([['Phone', row.holder_phone]] as [string, string][]) : []),
     ['Event', eventLabel],
