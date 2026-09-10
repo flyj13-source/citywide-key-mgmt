@@ -184,6 +184,80 @@ export async function deliverKeyForm(
 }
 
 // ── POST /api/key-forms/:id/send — send or resend ────────────────────────────
+// ── POST /api/key-forms/:id/regenerate ───────────────────────────────────────
+// Produce a fresh form for the same holder at the CURRENT position, and mark
+// the original superseded.
+//
+// The original is never deleted or edited. It may already have been emailed or
+// signed, and a document somebody attested to is evidence — the fix for a
+// stale one is a new one that says so, linked in both directions, not a quiet
+// rewrite of the old.
+router.post('/:id(\\d+)/regenerate', requireAuth, async (req: AuthRequest, res: Response) => {
+  const id = Number(req.params.id);
+  const old = getKeyForm(id);
+  if (!old) return res.status(404).json({ error: 'Form not found' });
+
+  // A signature is the strongest record there is. Superseding the document it
+  // attaches to would destroy it, so this refuses rather than deciding for you.
+  if (old.signed_at || old.status === 'signed') {
+    return res.status(409).json({
+      error: 'This form is signed. Generate a new form for the holder instead — '
+        + 'superseding a signed document would replace the evidence of that signature.',
+      code: 'FORM_SIGNED',
+    });
+  }
+  if (old.status === 'superseded' || old.superseded_by) {
+    return res.status(409).json({
+      error: `Already superseded by form #${old.superseded_by}.`,
+      code: 'ALREADY_SUPERSEDED',
+    });
+  }
+  if (old.status === 'voided') {
+    return res.status(409).json({ error: 'This form is voided.', code: 'FORM_VOIDED' });
+  }
+
+  const actor = req.manager?.name ?? 'System';
+  // Fresh, from the database — never from the old form's stored scope.
+  const fresh = createKeyForm({
+    eventType: old.event_type as FormEventType,
+    holderName: old.holder_name,
+    holderType: (old.holder_type as 'employee' | 'ic') ?? 'employee',
+    holderEmail: old.holder_email ?? null,
+    holderId: old.holder_id ?? null,
+    eventNote: old.event_type === 'audit' ? null : `Regenerated from ${old.form_no}`,
+    generatedBy: actor,
+    sourceKind: old.source_kind ?? null,
+    sourceRef: old.source_ref ?? null,
+    counterpartyName: old.counterparty_name ?? null,
+    supersedes: id,
+  });
+  await refreshPdf(fresh.id);
+
+  db.prepare(`
+    UPDATE key_form_docs
+       SET status_before_void = COALESCE(status_before_void, status),
+           status = 'superseded', superseded_by = ?, superseded_at = ?
+     WHERE id = ?
+  `).run(fresh.id, new Date().toISOString(), id);
+
+  const after = getKeyForm(fresh.id);
+  logAudit(req, 'key_form_regenerated', null, null, {
+    superseded_form_id: id, superseded_form_no: old.form_no,
+    new_form_id: fresh.id, new_form_no: fresh.form_no,
+    holder: old.holder_name,
+    // The numbers that changed are the whole reason to regenerate.
+    was_total_keys: old.total_keys, now_total_keys: after.total_keys,
+    was_clients: old.clients_covered, now_clients: after.clients_covered,
+    was_data_version: old.data_version ?? null, now_data_version: after.data_version ?? null,
+    by: actor,
+  });
+
+  res.status(201).json({
+    form: serializeForm(after),
+    superseded: serializeForm(getKeyForm(id)),
+  });
+});
+
 router.post('/:id(\\d+)/send', requireAuth, async (req: AuthRequest, res: Response) => {
   const id = Number(req.params.id);
   if (!getKeyForm(id)) return res.status(404).json({ error: 'Form not found' });

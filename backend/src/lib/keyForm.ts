@@ -15,7 +15,11 @@ export type FormStatus =
   | 'draft' | 'sent' | 'signed' | 'unsigned'
   // Corrections. 'acknowledged_unsigned' is deliberately NOT 'signed': the
   // audit trail must never claim a signature that does not exist.
-  | 'voided' | 'acknowledged_unsigned';
+  | 'voided' | 'acknowledged_unsigned'
+  // Replaced by a newer form. The row STAYS — it may already have been sent or
+  // signed, and deleting the document somebody attested to would be worse than
+  // any staleness it contains.
+  | 'superseded';
 
 export const FORM_EVENT_LABEL: Record<FormEventType, string> = {
   checkin: 'Check-in',
@@ -36,6 +40,25 @@ export interface FormLine {
   dispenser: number;
   office: number;
   subtotal: number;
+  /**
+   * Where the numbers came from, kept SEPARATE rather than silently merged.
+   *
+   * A person's keys live in two independent places in this schema and nothing
+   * keeps them in step:
+   *   assigned    — the holder-grid cells on the client row (am_metal, ccm_*,
+   *                 contractor_*): the standing attribution of who is
+   *                 responsible for what at that site.
+   *   checked_out — open key_assignments: keys transactionally issued to them.
+   *
+   * The form shows the sum, because both are keys in that person's possession.
+   * But it also shows the split, so a key counted twice — attributed on the
+   * grid AND checked out — is visible on the document instead of quietly
+   * inflating a total somebody is about to sign.
+   */
+  assigned: number;
+  checked_out: number;
+  /** Which roles put them on this row: 'AM', 'CCM', 'IC', or a combination. */
+  via?: string | null;
 }
 
 export interface FormScope {
@@ -61,12 +84,111 @@ function tally(lines: KeyLine[]): Pick<FormLine, 'metal' | 'card' | 'fob' | 'dis
   return out;
 }
 
+/** A blank row for one client, ready to accumulate into. */
+function blankLine(account_id: number | null, client: string, bc: string | null): FormLine {
+  return {
+    account_id, client, bc_client_number: bc,
+    metal: 0, card: 0, fob: 0, dispenser: 0, office: 0,
+    subtotal: 0, assigned: 0, checked_out: 0, via: null,
+  };
+}
+
+const num = (v: any): number => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+};
+
 /**
- * CURRENT STATE: every client where this person holds keys right now, read
- * from open custody records. This is what makes a Key Form an audit document
- * rather than a receipt — it answers "what do they have?", not "what moved?".
+ * CURRENT STATE — every key this person holds right now, queried fresh.
+ *
+ * This is what makes a Key Form an audit document rather than a receipt: it
+ * answers "what do they have?", not "what just moved?". So it is computed from
+ * the database at the moment of generation and NEVER from anything the caller
+ * hands in — a total supplied by a frontend is a total nobody recomputed.
+ *
+ * TWO SOURCES, because a person's keys live in two independent places:
+ *
+ *   1. THE HOLDER GRID on each client row. am_metal/am_card/… when they are
+ *      that client's Account Manager, ccm_* when they are its CCM,
+ *      contractor_* when they are its IC. This is the standing attribution the
+ *      registry and the roster tabs report, and it was previously invisible to
+ *      Key Forms entirely — an AM responsible for three keys got a form saying
+ *      they held none.
+ *
+ *   2. OPEN CUSTODY RECORDS — keys transactionally checked out to them and not
+ *      yet returned.
+ *
+ * Archived clients are excluded from both: a site that is no longer live must
+ * not inflate what someone is said to be holding on a document they sign.
+ * Voided records are excluded too — a voided record is not custody.
  */
-export function snapshotHolder(holderName: string): FormLine[] {
+export function snapshotHolder(holderName: string, holderType?: string | null): FormLine[] {
+  const name = String(holderName ?? '').trim();
+  if (!name) return [];
+
+  const byClient = new Map<string, FormLine>();
+  const lineFor = (id: number | null, client: string, bc: string | null): FormLine => {
+    const key = String(id ?? client);
+    let line = byClient.get(key);
+    if (!line) { line = blankLine(id, client, bc); byClient.set(key, line); }
+    return line;
+  };
+  const addVia = (line: FormLine, role: string) => {
+    const parts = new Set((line.via ?? '').split(' + ').filter(Boolean));
+    parts.add(role);
+    line.via = [...parts].join(' + ');
+  };
+
+  // ── 1. The holder grid ─────────────────────────────────────────────────────
+  // One query per role rather than a single OR: a person can be BOTH the AM
+  // and the CCM of the same client, and each role carries its own cells.
+  const gridRoles: { role: string; where: string; prefix: string; params: (n: string) => any[] }[] = [
+    { role: 'AM', where: 'TRIM(account_manager) = TRIM(?)', prefix: 'am', params: (n) => [n] },
+    { role: 'CCM', where: 'TRIM(ccm_manager) = TRIM(?)', prefix: 'ccm', params: (n) => [n] },
+  ];
+  // An IC holds keys as the contractor on the sites that name it — matched on
+  // the company name, and on the vendor number where the roster carries one,
+  // because the name on a client row is free text and drifts.
+  if (holderType === 'ic') {
+    const vendorRaw = db.prepare(
+      "SELECT bc_vendor_number FROM accounts WHERE (record_type='ic' OR record_type IS NULL) " +
+      'AND LOWER(TRIM(ic_company_name)) = LOWER(TRIM(?)) LIMIT 1'
+    ).get(name) as any;
+    const vendor = vendorRaw ? cleanText(Object.assign({}, vendorRaw).bc_vendor_number) : null;
+    gridRoles.push({
+      role: 'IC',
+      where: vendor
+        ? '(LOWER(TRIM(COALESCE(ic_name, \'\'))) = LOWER(TRIM(?)) OR TRIM(COALESCE(bc_vendor_number, \'\')) = TRIM(?))'
+        : 'LOWER(TRIM(COALESCE(ic_name, \'\'))) = LOWER(TRIM(?))',
+      prefix: 'contractor',
+      params: (n) => (vendor ? [n, vendor] : [n]),
+    });
+  }
+
+  for (const g of gridRoles) {
+    const rows = (db.prepare(`
+      SELECT id, ic_company_name, bc_client_number,
+             ${g.prefix}_metal AS m, ${g.prefix}_card AS c,
+             ${g.prefix}_fob AS f, ${g.prefix}_dispenser AS d
+        FROM accounts
+       WHERE record_type = 'customer'
+         AND COALESCE(archived, 0) = 0
+         AND ${g.where}
+       ORDER BY ic_company_name ASC
+    `).all(...g.params(name)) as any[]).map((r) => Object.assign({}, r));
+
+    for (const r of rows) {
+      const m = num(r.m); const c = num(r.c); const f = num(r.f); const d = num(r.d);
+      const sub = m + c + f + d;
+      if (sub === 0) continue;   // named on the row but holding nothing there
+      const line = lineFor(r.id ?? null, r.ic_company_name, r.bc_client_number ?? null);
+      line.metal += m; line.card += c; line.fob += f; line.dispenser += d;
+      line.subtotal += sub; line.assigned += sub;
+      addVia(line, g.role);
+    }
+  }
+
+  // ── 2. Open custody records ────────────────────────────────────────────────
   const rows = (db.prepare(`
     SELECT a.id AS assignment_id, a.account_id, a.account_name, a.keys_json, a.keys_held, a.key_type,
            acc.bc_client_number
@@ -74,42 +196,66 @@ export function snapshotHolder(holderName: string): FormLine[] {
       LEFT JOIN accounts acc ON acc.id = a.account_id
      WHERE a.status = 'checked_out'
        AND LOWER(TRIM(a.assignee)) = LOWER(TRIM(?))
+       -- An archived site is not a live holding, and a voided record never was
+       -- custody at all.
+       AND COALESCE(acc.archived, 0) = 0
      ORDER BY a.account_name ASC
-  `).all(holderName) as any[]).map((r) => Object.assign({}, r));
+  `).all(name) as any[]).map((r) => Object.assign({}, r));
 
-  // One line per CLIENT, merging multiple open records at the same site.
-  const byClient = new Map<string, FormLine>();
   for (const r of rows) {
-    const key = String(r.account_id ?? r.account_name);
-    const lines = readKeyLines(r);
-    const t = tally(lines);
-    const existing = byClient.get(key);
-    if (existing) {
-      existing.metal += t.metal; existing.card += t.card; existing.fob += t.fob;
-      existing.dispenser += t.dispenser; existing.office += t.office;
-      existing.subtotal += t.subtotal;
-    } else {
-      byClient.set(key, {
-        account_id: r.account_id ?? null,
-        client: r.account_name,
-        bc_client_number: r.bc_client_number ?? null,
-        ...t,
-      });
-    }
+    const t = tally(readKeyLines(r));
+    if (t.subtotal === 0) continue;
+    const line = lineFor(r.account_id ?? null, r.account_name, r.bc_client_number ?? null);
+    line.metal += t.metal; line.card += t.card; line.fob += t.fob;
+    line.dispenser += t.dispenser; line.office += t.office;
+    line.subtotal += t.subtotal; line.checked_out += t.subtotal;
+    addVia(line, 'Checked out');
   }
-  return [...byClient.values()];
+
+  return [...byClient.values()].sort((a, b) => a.client.localeCompare(b.client));
+}
+
+/**
+ * A data-version marker for a holder position.
+ *
+ * Deliberately a CONTENT HASH of the snapshot rather than a timestamp. Neither
+ * key_assignments nor accounts carries an updated_at, and accounts.created_at
+ * does not move when the holder grid is edited — so a timestamp would be a
+ * marker that fails to change precisely when the data does, which is worse
+ * than no marker at all.
+ *
+ * A hash has the property the marker is for: two forms carrying the same
+ * data_version describe the same holdings, and any difference in the position
+ * produces a different marker.
+ */
+export function dataVersionFor(lines: FormLine[]): string {
+  const canonical = lines
+    .map((l) => [
+      l.account_id ?? l.client, l.metal, l.card, l.fob, l.dispenser, l.office,
+      l.assigned, l.checked_out,
+    ].join(':'))
+    .sort()
+    .join('|');
+  return `v1:${crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 16)}`;
 }
 
 /** The keys a single event moved, as form lines. Used for transfer forms. */
 export function linesFromEvent(
   entries: { account_id: number | null; client: string; bc_client_number?: string | null; keys: KeyLine[] }[]
 ): FormLine[] {
-  return entries.map((e) => ({
-    account_id: e.account_id ?? null,
-    client: e.client,
-    bc_client_number: e.bc_client_number ?? null,
-    ...tally(e.keys),
-  }));
+  return entries.map((e) => {
+    const t = tally(e.keys);
+    return {
+      account_id: e.account_id ?? null,
+      client: e.client,
+      bc_client_number: e.bc_client_number ?? null,
+      ...t,
+      // Event lines describe keys that MOVED, not a standing attribution.
+      assigned: 0,
+      checked_out: t.subtotal,
+      via: 'Moved by this event',
+    };
+  });
 }
 
 /** Who is this person on the roster? Drives the role on the form header. */
@@ -149,6 +295,8 @@ export interface CreateFormInput {
   sourceKind?: string | null;
   sourceRef?: string | null;
   counterpartyName?: string | null;
+  /** Set when this form replaces an earlier one. */
+  supersedes?: number | null;
 }
 
 /**
@@ -159,7 +307,10 @@ export interface CreateFormInput {
 export function createKeyForm(input: CreateFormInput): any {
   const profile = holderProfile(input.holderName, input.holderType);
   const email = cleanText(input.holderEmail) ?? profile.email;
-  const lines = input.lines ?? snapshotHolder(input.holderName);
+  // Recomputed here, always. `lines` is only ever supplied for event forms
+  // that describe what MOVED — never as a holder position from a caller.
+  const lines = input.lines ?? snapshotHolder(input.holderName, input.holderType);
+  const dataVersion = dataVersionFor(lines);
   const scope: FormScope = { lines, event_note: input.eventNote ?? null };
   const totalKeys = lines.reduce((n, l) => n + l.subtotal, 0);
 
@@ -172,8 +323,8 @@ export function createKeyForm(input: CreateFormInput): any {
       (event_type, holder_name, holder_type, holder_role, holder_id,
        holder_email, holder_phone, scope_json, clients_covered, total_keys,
        status, token, token_expires_at, generated_by, source_kind, source_ref,
-       counterparty_name, no_email)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
+       counterparty_name, no_email, data_version, supersedes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.eventType, input.holderName, input.holderType ?? 'employee',
     profile.role, input.holderId ?? profile.id,
@@ -181,6 +332,7 @@ export function createKeyForm(input: CreateFormInput): any {
     token, expires, input.generatedBy,
     input.sourceKind ?? null, input.sourceRef ?? null,
     input.counterpartyName ?? null, hasEmail ? 0 : 1,
+    dataVersion, input.supersedes ?? null,
   );
   const id = Number(r.lastInsertRowid);
   // Human-readable identifier, assigned after insert so it matches the row id.
@@ -233,6 +385,12 @@ export function serializeForm(row: any): any {
     acknowledge_reason: row.acknowledge_reason ?? null,
     generated_at: row.created_at,
     generated_by: row.generated_by,
+    // Which position this form states — the marker that makes a stale document
+    // provable rather than arguable.
+    data_version: row.data_version ?? null,
+    supersedes: row.supersedes ?? null,
+    superseded_by: row.superseded_by ?? null,
+    superseded_at: row.superseded_at ?? null,
     sent_to: sentTo,
     last_sent_at: row.last_sent_at,
     send_count: row.send_count ?? 0,

@@ -12,7 +12,7 @@ import { getManager } from '../lib/auth';
 import {
   getKeyFormDocs, generateKeyFormDocs, sendKeyFormDoc, bulkSendKeyFormDocs, retryFailedKeyForms,
   bulkCorrectKeyForms,
-  downloadKeyFormDocPdf, getHolders,
+  downloadKeyFormDocPdf, regenerateKeyForm, getHolders,
   type KeyFormDoc, type HolderOption,
 } from '../lib/api';
 
@@ -50,6 +50,16 @@ function StatusPill({ status, noEmail }: { status: string; noEmail: boolean }) {
         className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#eeeeec] text-[#6b6b68] border border-[#d5d5d1] line-through"
       >
         Voided
+      </span>
+    );
+  }
+  if (status === 'superseded') {
+    return (
+      <span
+        title="Replaced by a newer form generated from current data. Kept, because it may already have been sent."
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#eeeeec] text-[#6b6b68] border border-[#d5d5d1]"
+      >
+        Superseded
       </span>
     );
   }
@@ -325,6 +335,7 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [showGenerate, setShowGenerate] = useState(false);
   const [viewing, setViewing] = useState<KeyFormDoc | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
   const [sending, setSending] = useState<{ ids: number[]; label: string } | null>(null);
 
   useEffect(() => {
@@ -360,6 +371,25 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
   const allOnPage = forms.length > 0 && forms.every((f) => selected.has(f.id));
 
   const afterSend = (msg: string) => { notify(msg); setSelected(new Set()); load(); };
+
+  const regenerate = async (f: KeyFormDoc) => {
+    setBusyId(f.id);
+    try {
+      const r = await regenerateKeyForm(f.id);
+      const moved = r.form.total_keys !== f.total_keys;
+      notify(
+        `${r.form.form_no} generated from current data — ${r.form.total_keys} key`
+        + `${r.form.total_keys === 1 ? '' : 's'}`
+        + (moved ? ` (was ${f.total_keys} on ${f.form_no})` : ` (unchanged from ${f.form_no})`)
+        + `. ${f.form_no} is kept, marked superseded.`,
+      );
+      load();
+    } catch (e: any) {
+      notify(e?.message || 'Could not regenerate this form');
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   return (
     <div className="space-y-3">
@@ -557,6 +587,19 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
                     >
                       {f.send_count > 0 ? 'Resend' : 'Send'}
                     </button>
+                    {/* A form states a position. When that position has moved
+                        on, the fix is a NEW form that says so — never a quiet
+                        rewrite of one somebody may already have been sent. */}
+                    {f.status !== 'signed' && f.status !== 'superseded' && f.status !== 'voided' && (
+                      <button
+                        onClick={() => regenerate(f)}
+                        disabled={busyId === f.id}
+                        title="Generate a fresh form at the holder's current position. This one is kept, marked superseded."
+                        className="text-xs border border-[#1a1a1a] text-[#1a1a1a] rounded px-2 py-1 hover:border-[#C0272D] hover:text-[#C0272D] disabled:opacity-50 transition-colors"
+                      >
+                        {busyId === f.id ? '…' : 'Regenerate'}
+                      </button>
+                    )}
                     <button onClick={() => downloadKeyFormDocPdf(f.id, f.form_no)} className="text-xs text-[#C0272D] hover:underline">PDF</button>
                   </div>
                 </td>

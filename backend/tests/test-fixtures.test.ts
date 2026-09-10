@@ -705,8 +705,11 @@ describe('§4 THE FULL LOOP RUNS AGAINST THE FIXTURES', () => {
       keys: [{ type: 'metal', qty: 1 }, { type: 'card', qty: 1 }],
     });
     expect(out.status).toBe(201);
+    // total_keys is the holder's WHOLE position, not just what this event
+    // moved: AM One's standing grid attribution (3 keys across clients A and
+    // B) plus the 2 just checked out.
     expect(out.body.key_form).toMatchObject({
-      event_type: 'checkout', holder_name: AM1, total_keys: 2,
+      event_type: 'checkout', holder_name: AM1, total_keys: 5,
     });
     // The roster identity lands on the form header — and it is now specific.
     expect(out.body.key_form.holder_role).toBe('AM');

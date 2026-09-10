@@ -331,6 +331,17 @@ for (const [col, def] of [
   ['acknowledged_at', 'TEXT'],
   ['acknowledged_by', 'TEXT'],
   ['acknowledge_reason', 'TEXT'],
+  // ── Staleness, made visible ────────────────────────────────────────────
+  // A form states a position. These say WHICH position: when it was made, and
+  // the newest record it was made from. Two forms carrying the same
+  // data_version must describe the same holdings — if they ever disagree, the
+  // marker is what proves it rather than leaving it to be argued about.
+  ['data_version', 'TEXT'],
+  // Regeneration keeps the old document — it may already have been signed or
+  // sent — and links the pair in both directions.
+  ['supersedes', 'INTEGER'],
+  ['superseded_by', 'INTEGER'],
+  ['superseded_at', 'TEXT'],
 ] as [string, string][]) {
   if (!formCols.includes(col)) db.exec(`ALTER TABLE key_form_docs ADD COLUMN ${col} ${def}`);
 }

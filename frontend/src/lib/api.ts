@@ -639,6 +639,9 @@ export const setCustodyDefaults = (due_days: number) =>
 export type FormEventType = 'checkin' | 'checkout' | 'transfer' | 'reassignment' | 'audit';
 export type FormStatus =
   | 'draft' | 'sent' | 'signed' | 'unsigned'
+  // Replaced by a newer form. Kept, never deleted — it may already have been
+  // sent, and the document somebody was shown is itself a record.
+  | 'superseded'
   | 'voided' | 'acknowledged_unsigned';
 
 export interface KeyFormLine {
@@ -680,6 +683,11 @@ export interface KeyFormDoc {
   counterparty_name: string | null;
   clients: KeyFormLine[];
   event_note: string | null;
+  /** Which holder position this form states — a hash of the snapshot. */
+  data_version?: string | null;
+  supersedes?: number | null;
+  superseded_by?: number | null;
+  superseded_at?: string | null;
 }
 
 export const getKeyFormDocs = (params: Record<string, string>) =>
@@ -710,6 +718,12 @@ export const sendKeyFormDoc = (id: number, to?: string | null) =>
 export const bulkSendKeyFormDocs = (ids: number[], to?: string | null) =>
   req<{ sent: number; failed: number; results: { id: number; ok: boolean; error?: string | null }[] }>(
     '/key-forms/bulk-send', { method: 'POST', body: JSON.stringify({ ids, to: to || null }) },
+  );
+
+/** A fresh form at the CURRENT position; the old one is kept, superseded. */
+export const regenerateKeyForm = (id: number) =>
+  req<{ form: KeyFormDoc; superseded: KeyFormDoc }>(
+    `/key-forms/${id}/regenerate`, { method: 'POST', body: '{}' },
   );
 
 export const downloadKeyFormDocPdf = async (id: number, formNo: string) => {
