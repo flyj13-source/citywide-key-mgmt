@@ -1,7 +1,7 @@
 #!/usr/bin/env ts-node
 /**
- * Wipe every trace of test activity and re-seed the three fixtures clean, so
- * the same end-to-end test can be run again and again.
+ * Wipe every trace of test activity and re-seed the fixtures clean, so the same
+ * end-to-end test can be run again and again.
  *
  *   npm run test-data:reset
  *   npm run test-data:seed    (seed only — never deletes)
@@ -12,7 +12,10 @@
 import db from '../src/lib/db';
 import {
   seedTestFixtures, resetTestData, testAccountIds,
-  TEST_CLIENT_NAME, TEST_IC_NAME, TEST_MANAGER_NAME, TEST_EMAIL,
+  TEST_CLIENT_A_NAME, TEST_CLIENT_B_NAME, TEST_CLIENT_C_NAME,
+  TEST_IC_NAME, TEST_EMAIL, TEST_AM_ONE, TEST_AM_TWO, TEST_CCM_ONE, TEST_CCM_TWO,
+  TEST_NO_EMAIL_STAFF_NAME, EXPECTED_FIXTURE_COUNT,
+  type FixtureIds,
 } from '../src/lib/testFixtures';
 
 const seedOnly = process.argv.includes('--seed-only');
@@ -25,15 +28,33 @@ const realCustomers = () => Object.assign({}, db.prepare(
 const before = realCustomers();
 
 line();
+/** The whole set, one line each, so a missing record is visible at a glance. */
+const report = (f: FixtureIds, indent = '  ') => {
+  const row = (label: string, id: number, name: string, contact = '') =>
+    line(`${indent}${label.padEnd(8)} #${String(id).padEnd(5)} ${name}${contact}`);
+  row('client A', f.clients.a, TEST_CLIENT_A_NAME);
+  row('client B', f.clients.b, TEST_CLIENT_B_NAME);
+  row('client C', f.clients.c, TEST_CLIENT_C_NAME);
+  row('ic', f.ic, TEST_IC_NAME);
+  row('AM 1', f.staff.amOne, TEST_AM_ONE, `  <${TEST_EMAIL}>`);
+  row('AM 2', f.staff.amTwo, TEST_AM_TWO, `  <${TEST_EMAIL}>`);
+  row('CCM 1', f.staff.ccmOne, TEST_CCM_ONE, `  <${TEST_EMAIL}>`);
+  row('CCM 2', f.staff.ccmTwo, TEST_CCM_TWO, `  <${TEST_EMAIL}>`);
+  row('crew', f.staff.noEmail, TEST_NO_EMAIL_STAFF_NAME, '  <no email — on purpose>');
+  if (f.migrated.length) {
+    line();
+    line(`${indent}migrated:`);
+    for (const m of f.migrated) line(`${indent}  · ${m}`);
+  }
+};
+
 if (seedOnly) {
   const f = seedTestFixtures();
   line('═══ TEST FIXTURES SEEDED ═══');
-  line(`  created : ${f.created.length ? f.created.join(', ') : 'nothing — all three already existed'}`);
+  line(`  created : ${f.created.length ? f.created.join(', ') : `nothing — all ${EXPECTED_FIXTURE_COUNT} already existed`}`);
   line(`  existing: ${f.existing.length ? f.existing.join(', ') : 'none'}`);
   line();
-  line(`  client  #${f.client}  ${TEST_CLIENT_NAME}`);
-  line(`  ic      #${f.ic}      ${TEST_IC_NAME}`);
-  line(`  staff   #${f.manager}  ${TEST_MANAGER_NAME}  <${TEST_EMAIL}>`);
+  report(f);
 } else {
   const r = resetTestData();
   line('═══ TEST DATA RESET ═══');
@@ -42,9 +63,7 @@ if (seedOnly) {
   line(`  audit rows deleted  : ${r.audit}`);
   line();
   line('  fixtures re-seeded:');
-  line(`    client  #${r.fixtures.client}  ${TEST_CLIENT_NAME}`);
-  line(`    ic      #${r.fixtures.ic}      ${TEST_IC_NAME}`);
-  line(`    staff   #${r.fixtures.manager}  ${TEST_MANAGER_NAME}  <${TEST_EMAIL}>`);
+  report(r.fixtures, '    ');
 }
 
 const after = realCustomers();

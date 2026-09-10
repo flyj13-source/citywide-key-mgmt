@@ -4,8 +4,9 @@ import db, { DATABASE_FILE } from '../lib/db';
 import { buildInfo } from '../lib/buildInfo';
 import { backfillStaffManagers } from '../lib/backfillStaffManagers';
 import {
-  TEST_CLIENT_NAME, TEST_CLIENT_BC, TEST_IC_NAME, TEST_VENDOR_NO,
-  TEST_MANAGER_NAME, TEST_NO_EMAIL_STAFF_NAME, TEST_EMAIL,
+  TEST_CLIENT_A_BC, TEST_CLIENT_B_BC, TEST_CLIENT_C_BC,
+  TEST_IC_NAME, TEST_VENDOR_NO, TEST_STAFF_NAMES, TEST_EMAIL,
+  LEGACY_TEST_MANAGER_NAME, EXPECTED_FIXTURE_COUNT, EXPECTED_FIXTURE_NAMES,
 } from '../lib/testFixtures';
 import { logAudit } from '../lib/audit';
 
@@ -106,7 +107,7 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   `);
 
   // ── Test fixtures ──────────────────────────────────────────────────────────
-  // Whether the four ZZ TEST records actually exist ON THIS DATABASE, which is
+  // Whether the ZZ TEST records actually exist ON THIS DATABASE, which is
   // otherwise unanswerable from outside: the seed runs at boot, so "the code
   // shipped" and "the rows are there" are different questions.
   const fixtureRow = (sql: string, ...p: any[]) => {
@@ -118,29 +119,46 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   const smHasIsTest = columnsOf('staff_managers').includes('is_test');
   const acctHasIsTest = accountCols.includes('is_test');
 
-  const fxClient = fixtureRow(
+  const clientRow = (bc: string) => fixtureRow(
     "SELECT id, ic_company_name AS name, COALESCE(is_test,0) AS is_test, account_manager, ccm_manager, " +
     "ic_name, bc_vendor_number, lockbox_code, " +
-    "COALESCE(am_metal,0)+COALESCE(am_card,0)+COALESCE(ccm_metal,0)+COALESCE(contractor_metal,0)+" +
-    "COALESCE(contractor_fob,0)+COALESCE(office_fob,0)+COALESCE(office_dispenser,0) AS grid_total " +
-    "FROM accounts WHERE bc_client_number = ? AND record_type = 'customer'", TEST_CLIENT_BC);
+    "COALESCE(am_metal,0)+COALESCE(am_card,0)+COALESCE(am_fob,0)+COALESCE(am_dispenser,0)+" +
+    "COALESCE(ccm_metal,0)+COALESCE(ccm_card,0)+COALESCE(ccm_fob,0)+COALESCE(ccm_dispenser,0)+" +
+    "COALESCE(contractor_metal,0)+COALESCE(contractor_card,0)+COALESCE(contractor_fob,0)+COALESCE(contractor_dispenser,0)+" +
+    "COALESCE(office_metal,0)+COALESCE(office_card,0)+COALESCE(office_fob,0)+COALESCE(office_dispenser,0) AS grid_total " +
+    "FROM accounts WHERE bc_client_number = ? AND record_type = 'customer'", bc);
+
+  const fxClients = {
+    a: clientRow(TEST_CLIENT_A_BC),
+    b: clientRow(TEST_CLIENT_B_BC),
+    c: clientRow(TEST_CLIENT_C_BC),
+  };
   const fxIc = fixtureRow(
     "SELECT id, ic_company_name AS name, COALESCE(is_test,0) AS is_test, ic_email, ic_primary_contact " +
     "FROM accounts WHERE bc_vendor_number = ? AND (record_type='ic' OR record_type IS NULL)", TEST_VENDOR_NO);
-  const fxStaff = smHasIsTest
-    ? fixtureRow("SELECT id, name, COALESCE(is_test,0) AS is_test, email, manager_type, role_category, active " +
-                 'FROM staff_managers WHERE name = ?', TEST_MANAGER_NAME)
-    : null;
-  const fxNoEmail = smHasIsTest
-    ? fixtureRow("SELECT id, name, COALESCE(is_test,0) AS is_test, email, role_category, active " +
-                 'FROM staff_managers WHERE name = ?', TEST_NO_EMAIL_STAFF_NAME)
+
+  // Keyed by name so a missing fixture reads as an explicit null rather than a
+  // shorter array somebody has to count.
+  const fxStaff: Record<string, any> = {};
+  for (const n of TEST_STAFF_NAMES) {
+    fxStaff[n] = smHasIsTest
+      ? fixtureRow(
+        'SELECT id, name, COALESCE(is_test,0) AS is_test, email, manager_type, role_category, active ' +
+        'FROM staff_managers WHERE name = ?', n)
+      : null;
+  }
+
+  // The pre-split fixture. Still on the roster means the migration has not run
+  // on this database yet — which is the first thing to check when the AM tab
+  // shows a manager nobody recognises.
+  const legacyManager = smHasIsTest
+    ? fixtureRow('SELECT id, name, COALESCE(is_test,0) AS is_test, active FROM staff_managers WHERE name = ?',
+      LEGACY_TEST_MANAGER_NAME)
     : null;
 
-  const expectedNames = {
-    client: TEST_CLIENT_NAME, ic: TEST_IC_NAME,
-    staff: TEST_MANAGER_NAME, no_email_staff: TEST_NO_EMAIL_STAFF_NAME,
-  };
-  const present = [fxClient, fxIc, fxStaff, fxNoEmail].filter((r) => r && r.is_test === 1).length;
+  const fixtureRows = [...Object.values(fxClients), fxIc, ...Object.values(fxStaff)];
+  const present = fixtureRows.filter((r) => r && r.is_test === 1).length;
+
 
   res.json({
     build: {
@@ -157,14 +175,21 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
       tables: scalar("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table'"),
     },
     test_fixtures: {
-      // The whole point: 4 means the seed ran and the rows are here.
-      expected: 4,
+      // The whole point: a full count means the seed ran and the rows are here.
+      expected: EXPECTED_FIXTURE_COUNT,
       present,
-      complete: present === 4,
+      complete: present === EXPECTED_FIXTURE_COUNT,
       is_test_column: { accounts: acctHasIsTest, staff_managers: smHasIsTest },
-      expected_names: expectedNames,
+      expected_names: EXPECTED_FIXTURE_NAMES,
       expected_contact: TEST_EMAIL,
-      records: { client: fxClient, ic: fxIc, staff: fxStaff, no_email_staff: fxNoEmail },
+      records: { clients: fxClients, ic: fxIc, staff: fxStaff },
+      legacy_manager: legacyManager,
+      // The AM One / AM Two split is only useful if the client book is split
+      // 2/1 — a reassignment with nothing to move proves nothing.
+      am_client_split: Object.fromEntries(
+        TEST_STAFF_NAMES.map((n) => [n, Object.values(fxClients)
+          .filter((c) => c && c.account_manager === n).length]),
+      ),
       // How many rows are flagged in total — a fixture that got duplicated or
       // a real row wrongly flagged both show up here.
       flagged_totals: {

@@ -24,6 +24,22 @@ const CLIENT_FILTER = `
   AND (bc_client_number IS NULL OR bc_client_number NOT LIKE '999%')
 `;
 
+// The same book for a FIXTURE person. A test manager's clients are the test
+// clients, so their totals are non-trivial and a reassignment between them can
+// be watched moving. The two filters are mutually exclusive by construction:
+// no real manager can pick up fixture keys and no fixture manager can pick up
+// real ones, whichever way a caller asks the question.
+const TEST_CLIENT_FILTER = `
+  record_type = 'customer'
+  AND COALESCE(archived, 0) = 0
+  AND COALESCE(is_test, 0) = 1
+`;
+
+/** Which book this person's numbers come from — decided by the ROW, not the query. */
+const bookFilter = (isTest: boolean) => (isTest ? TEST_CLIENT_FILTER : CLIENT_FILTER);
+
+const wantsTest = (q: any) => q.include_test === '1' || q.include_test === 'true';
+
 /**
  * Metrics for one roster person, computed against the live client rows and
  * scoped by their manager_type:
@@ -33,7 +49,7 @@ const CLIENT_FILTER = `
  *   total_managed_inventory— every key at those clients (site Key-Inventory row
  *                            totals), counted once per client
  */
-function managerMetrics(name: string, type: ManagerType) {
+function managerMetrics(name: string, type: ManagerType, isTest = false) {
   const includeAm = type === 'account_manager' || type === 'both';
   const includeCcm = type === 'ccm' || type === 'both';
 
@@ -64,7 +80,7 @@ function managerMetrics(name: string, type: ManagerType) {
         COALESCE(metal_keys,0) + COALESCE(key_cards,0) + COALESCE(has_fob,0) + COALESCE(dispenser_keys,0)
       ), 0) AS total_managed_inventory
     FROM accounts
-    WHERE ${CLIENT_FILTER} AND ${match}
+    WHERE ${bookFilter(isTest)} AND ${match}
   `).get(...heldParams, ...params));
 
   return {
@@ -76,11 +92,13 @@ function managerMetrics(name: string, type: ManagerType) {
 
 function serialize(m: any) {
   const row = Object.assign({}, m);
-  const metrics = managerMetrics(row.name, row.manager_type as ManagerType);
+  const isTest = Number(row.is_test) === 1;
+  const metrics = managerMetrics(row.name, row.manager_type as ManagerType, isTest);
   return {
     id: row.id,
     name: row.name,
     manager_type: row.manager_type,
+    is_test: isTest ? 1 : 0,
     email: row.email ?? null,
     phone: row.phone ?? null,
     active: row.active === null || row.active === undefined ? 1 : Number(row.active),
@@ -111,10 +129,13 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   // /api/staff roster, not this manager-scoped one. Legacy rows with a NULL
   // role_category are managers (they predate the crew split).
   const activeClause = includeInactive ? '1=1' : 'COALESCE(active, 1) = 1';
+  // Fixtures stay out unless asked for, so a forgetful caller can never inflate
+  // a real roster count.
+  const testClause = wantsTest(req.query) ? '1=1' : 'COALESCE(is_test, 0) = 0';
   const rows = db.prepare(
     `SELECT * FROM staff_managers
      WHERE ${activeClause}
-       AND COALESCE(is_test, 0) = 0
+       AND ${testClause}
        AND (role_category IS NULL OR role_category IN ('manager', 'both'))
      ORDER BY name ASC`
   ).all();
@@ -137,16 +158,20 @@ router.get('/roster', requireAuth, (req: AuthRequest, res: Response) => {
   const nameCol = role === 'am' ? 'account_manager' : 'ccm_manager';
   const wantedType = role === 'am' ? 'account_manager' : 'ccm';
 
+  const includeTest = wantsTest(req.query);
   const people = (db.prepare(
     `SELECT * FROM staff_managers
       WHERE COALESCE(role_category, 'manager') IN ('manager', 'both')
-        AND COALESCE(is_test, 0) = 0
+        AND ${includeTest ? '1=1' : 'COALESCE(is_test, 0) = 0'}
         AND (manager_type = ? OR manager_type = 'both')
       ORDER BY name ASC`
   ).all(wantedType) as any[]).map((r) => Object.assign({}, r));
 
   // One aggregate query per person, over the clients they hold in THIS role.
-  const agg = db.prepare(`
+  // Two prepared statements, not one with a flag: the book a person's numbers
+  // come from is a property of the PERSON, and mixing the two would let a real
+  // manager's totals pick up fixture keys.
+  const aggSql = (filter: string) => `
     SELECT
       COUNT(*)                                  AS clients_managed,
       COALESCE(SUM(${role}_metal), 0)           AS personal_metal,
@@ -159,16 +184,20 @@ router.get('/roster', requireAuth, (req: AuthRequest, res: Response) => {
         COALESCE(has_fob,0) + COALESCE(dispenser_keys,0)
       ), 0)                                     AS total_client_keys
     FROM accounts
-    WHERE ${CLIENT_FILTER} AND ${nameCol} = ?
-  `);
+    WHERE ${filter} AND ${nameCol} = ?
+  `;
+  const agg = db.prepare(aggSql(CLIENT_FILTER));
+  const aggTest = db.prepare(aggSql(TEST_CLIENT_FILTER));
 
   const managers = people.map((p) => {
-    const a = Object.assign({}, agg.get(p.name) as any);
+    const isTest = Number(p.is_test) === 1;
+    const a = Object.assign({}, (isTest ? aggTest : agg).get(p.name) as any);
     return {
       id: p.id,
       name: p.name,
       manager_type: p.manager_type,
       role_category: p.role_category ?? 'manager',
+      is_test: isTest ? 1 : 0,
       email: p.email ?? null,
       phone: p.phone ?? null,
       active: p.active === 0 ? 0 : 1,

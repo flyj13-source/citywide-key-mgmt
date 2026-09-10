@@ -7,19 +7,25 @@ import { seedTestFixtures } from './testFixtures';
 // Runs at every server startup. Idempotent — only writes when rows are missing.
 // This is the ONLY place seeding happens in production; seed.ts is local-dev-only.
 /**
- * The three test fixtures. Seeded on EVERY boot because it is idempotent and
- * because there is no other way to get them onto the deployed database — the
- * app runs on a managed host with no shell, so an npm script cannot reach it.
+ * The test fixtures. Seeded on EVERY boot because it is idempotent and because
+ * there is no other way to get them onto the deployed database — the app runs
+ * on a managed host with no shell, so an npm script cannot reach it.
  * They are excluded from every count, aggregate and export.
  */
 function seedFixtures(): void {
   try {
     const f = seedTestFixtures();
+    const where = `clients #${f.clients.a}/#${f.clients.b}/#${f.clients.c}, ic #${f.ic}, `
+      + `am #${f.staff.amOne}/#${f.staff.amTwo}, ccm #${f.staff.ccmOne}/#${f.staff.ccmTwo}, `
+      + `no-email #${f.staff.noEmail}`;
     if (f.created.length) {
-      console.log(`✓ [seed] Test fixtures created: ${f.created.join(', ')} (client #${f.client}, ic #${f.ic}, staff #${f.manager})`);
+      console.log(`✓ [seed] Test fixtures created: ${f.created.join(', ')} (${where})`);
     } else {
-      console.log(`✓ [seed] Test fixtures already present (client #${f.client}, ic #${f.ic}, staff #${f.manager})`);
+      console.log(`✓ [seed] Test fixtures already present (${where})`);
     }
+    // Loud on purpose: a migration only ever runs once, and it is the line you
+    // want in the boot log when a roster suddenly looks different.
+    for (const m of f.migrated) console.log(`✓ [seed] Test fixture migration: ${m}`);
   } catch (e) {
     // A fixture failure must never stop the app from booting.
     console.error('[seed] Test fixtures could not be seeded:', (e as Error).message);

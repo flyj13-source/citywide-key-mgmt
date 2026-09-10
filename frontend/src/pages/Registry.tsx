@@ -1116,7 +1116,7 @@ export default function Registry() {
     am: 0, ccm: 0,
     // How many EXTRA rows the "show test records" chip puts on screen. Kept
     // separate so the real totals above are never quietly inflated.
-    testCustomer: 0, testIc: 0, testStaff: 0,
+    testCustomer: 0, testIc: 0, testStaff: 0, testAm: 0, testCcm: 0,
   });
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
@@ -1269,13 +1269,13 @@ export default function Registry() {
   const loadRoster = useCallback(async () => {
     setRosterLoading(true);
     try {
-      const data = await getManagerRoster(tab === 'ccm' ? 'ccm' : 'am');
+      const data = await getManagerRoster(tab === 'ccm' ? 'ccm' : 'am', showTest);
       setRoster(data.managers);
       setRosterUnmatched(data.unmatched);
     } finally {
       setRosterLoading(false);
     }
-  }, [tab]);
+  }, [tab, showTest]);
 
   // CW Employees — the full roster (incl. inactive so the Active column is
   // meaningful); category + search are applied client-side over the small list.
@@ -1336,7 +1336,7 @@ export default function Registry() {
   const refreshCounts = useCallback(async () => {
     const [
       icData, custData, officeData, allData, archData, staffData, outData, inData,
-      amRoster, ccmRoster, custTest, icTest, staffTest,
+      amRoster, ccmRoster, amRosterTest, ccmRosterTest, custTest, icTest, staffTest,
     ] = await Promise.all([
       getAccounts({ limit: '1', type: 'ic' }),
       getAccounts({ limit: '1', type: 'customer' }),
@@ -1348,6 +1348,8 @@ export default function Registry() {
       getAssignments({ limit: '1', status: 'returned' }).catch(() => ({ total: 0, assignments: [] })),
       getManagerRoster('am').catch(() => ({ managers: [] as any[] })),
       getManagerRoster('ccm').catch(() => ({ managers: [] as any[] })),
+      getManagerRoster('am', true).catch(() => ({ managers: [] as any[] })),
+      getManagerRoster('ccm', true).catch(() => ({ managers: [] as any[] })),
       // Same queries WITH the fixtures, so the difference is the fixture count.
       getAccounts({ limit: '1', type: 'customer', include_test: '1' }).catch(() => ({ total: 0 } as any)),
       getAccounts({ limit: '1', type: 'ic', include_test: '1' }).catch(() => ({ total: 0 } as any)),
@@ -1363,6 +1365,8 @@ export default function Registry() {
       testCustomer: Math.max(0, custTest.total - custData.total),
       testIc: Math.max(0, icTest.total - icData.total),
       testStaff: Math.max(0, staffTest.length - staffData.length),
+      testAm: Math.max(0, amRosterTest.managers.length - amRoster.managers.length),
+      testCcm: Math.max(0, ccmRosterTest.managers.length - ccmRoster.managers.length),
     });
   }, []);
 
@@ -1392,8 +1396,8 @@ export default function Registry() {
     // number is never overwritten — it is the one every report quotes.
     { key: 'customer', label: `Customers (${counts.customer}${showTest && counts.testCustomer ? ` +${counts.testCustomer} test` : ''})` },
     { key: 'ic', label: `IC Vendors (${counts.ic}${showTest && counts.testIc ? ` +${counts.testIc} test` : ''})` },
-    { key: 'am', label: `Account Managers (${counts.am})` },
-    { key: 'ccm', label: `Contract Compliance Mgrs (${counts.ccm})` },
+    { key: 'am', label: `Account Managers (${counts.am}${showTest && counts.testAm ? ` +${counts.testAm} test` : ''})` },
+    { key: 'ccm', label: `Contract Compliance Mgrs (${counts.ccm}${showTest && counts.testCcm ? ` +${counts.testCcm} test` : ''})` },
     { key: 'office', label: `Office (${counts.office})` },
     { key: 'cwemployees', label: `CW Employees (${counts.staff}${showTest && counts.testStaff ? ` +${counts.testStaff} test` : ''})` },
     { key: 'checkedout', label: `Checked Out (${counts.checkedOut})` },

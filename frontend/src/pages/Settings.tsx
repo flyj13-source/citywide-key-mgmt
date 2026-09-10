@@ -502,11 +502,13 @@ export default function Settings() {
             </div>
             <div className="px-5 py-4 space-y-4">
               <p className="text-sm text-cw-muted">
-                Four <span className="font-semibold text-[#1a1a1a]">ZZ TEST</span> records — a client, a staff
-                member, a contractor, and a staff member with no email for testing the missing-address flag.
+                Nine <span className="font-semibold text-[#1a1a1a]">ZZ TEST</span> records — three clients, one
+                contractor, two account managers, two contract compliance managers, and one crew member with no
+                email for testing the missing-address flag. Clients A and B belong to AM One and client C to
+                AM Two, so a reassignment has something real to move.
                 They are excluded from every count, aggregate and export, and carry a{' '}
-                <span className="inline-flex items-center rounded-full border border-gray-500 text-gray-600 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide">Test</span>{' '}
-                pill in the registry.
+                <span className="inline-flex items-center rounded-full border border-[#b8860b] bg-[#fdf3d7] text-[#7a5a00] px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide">Test</span>{' '}
+                pill wherever they appear.
               </p>
 
               <div className="flex flex-wrap items-center gap-3">
@@ -533,7 +535,8 @@ export default function Settings() {
                 <div className="rounded border-2 border-[#C0272D] bg-[#fbeaea] px-4 py-3 space-y-2">
                   <div className="text-sm font-semibold text-[#C0272D]">
                     This deletes every key assignment, key form and audit row belonging to the ZZ TEST
-                    records, then re-seeds the four fixtures.
+                    records, then re-seeds all nine fixtures — including their AM and CCM links, so a
+                    reassignment test starts from the same 2/1 split every time.
                   </div>
                   <label className="block text-sm text-[#1a1a1a]">
                     Type <span className="font-mono font-bold">RESET</span> to confirm:
@@ -593,10 +596,20 @@ export default function Settings() {
                     </div>
                   )}
                   <div>
-                    Fixtures: client #{tdResult.fixtures.client} · IC #{tdResult.fixtures.ic} ·
-                    {' '}staff #{tdResult.fixtures.manager} · no-email staff #{tdResult.fixtures.noEmailStaff}
+                    Clients #{tdResult.fixtures.clients.a} · #{tdResult.fixtures.clients.b} ·
+                    {' '}#{tdResult.fixtures.clients.c} · IC #{tdResult.fixtures.ic}
+                  </div>
+                  <div>
+                    AM #{tdResult.fixtures.staff.amOne} · #{tdResult.fixtures.staff.amTwo} ·
+                    {' '}CCM #{tdResult.fixtures.staff.ccmOne} · #{tdResult.fixtures.staff.ccmTwo} ·
+                    {' '}no-email crew #{tdResult.fixtures.staff.noEmail}
                     {tdResult.fixtures.created.length > 0 && <> · created: {tdResult.fixtures.created.join(', ')}</>}
                   </div>
+                  {tdResult.fixtures.migrated?.length > 0 && (
+                    <div className="text-[12px]">
+                      Migrated: {tdResult.fixtures.migrated.join('; ')}
+                    </div>
+                  )}
                   <div>
                     Real customers: {tdResult.real_customers.before} → {tdResult.real_customers.after}
                     {tdResult.real_customers.unchanged ? ' (unchanged)' : ' — THIS SHOULD NOT HAVE CHANGED'}

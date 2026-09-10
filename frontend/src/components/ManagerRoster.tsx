@@ -158,15 +158,31 @@ export function ManagerRosterTable({
               <tr><td colSpan={11} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
             ) : sorted.length === 0 ? (
               <tr><td colSpan={11} className="px-4 py-8 text-center text-cw-muted">No {label.toLowerCase()}s match this filter</td></tr>
-            ) : sorted.map((m, i) => (
+            ) : sorted.map((m, i) => {
+              // A fixture reads as apparatus, not staff — the same amber wash
+              // and TEST pill the registry uses, so the convention is one thing
+              // to learn rather than three.
+              const isTest = m.is_test === 1;
+              const rowBg = isTest
+                ? (i % 2 === 0 ? 'bg-[#fefaed]' : 'bg-[#fbf4e0]')
+                : (i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]');
+              return (
               <tr
                 key={m.id}
-                className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'} ${m.active === 0 ? 'opacity-60' : ''}`}
+                className={`cursor-pointer border-b border-gray-100 hover:bg-[#f0f0ee] transition-colors ${rowBg} ${m.active === 0 ? 'opacity-60' : ''}`}
                 onClick={() => onView(m)}
                 title="Open this manager's detail"
               >
                 <td className="px-4 py-3 font-medium text-[#1a1a1a] whitespace-nowrap">
                   {m.name}
+                  {isTest && (
+                    <span
+                      title="Test fixture — excluded from every real count, aggregate and export"
+                      className="ml-2 inline-flex items-center rounded-full border border-[#b8860b] bg-[#fdf3d7] text-[#7a5a00] px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide align-middle"
+                    >
+                      Test
+                    </span>
+                  )}
                   {/* Email drives signature forms and notifications — flag it here
                       so the gap is visible before it blocks a handover. */}
                   {!m.email && (
@@ -199,7 +215,7 @@ export function ManagerRosterTable({
                     : <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-200 text-gray-600">Inactive</span>}
                 </td>
                 <td
-                  className={`px-3 py-3 text-right whitespace-nowrap sticky right-0 shadow-[-6px_0_6px_-6px_rgba(0,0,0,0.18)] ${i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'}`}
+                  className={`px-3 py-3 text-right whitespace-nowrap sticky right-0 shadow-[-6px_0_6px_-6px_rgba(0,0,0,0.18)] ${rowBg}`}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="inline-flex items-center gap-2">
@@ -211,7 +227,8 @@ export function ManagerRosterTable({
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

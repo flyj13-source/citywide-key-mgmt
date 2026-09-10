@@ -142,15 +142,17 @@ export interface ManagerRosterRow {
   total_held: number;
   total_client_keys: number;
   on_roster: true;
+  /** 1 for a ZZ TEST fixture. Its totals come from the fixture client book. */
+  is_test?: number;
 }
 export interface UnmatchedManager {
   person: string;
   clients_managed: number;
   total_held: number;
 }
-export const getManagerRoster = (role: 'am' | 'ccm') =>
+export const getManagerRoster = (role: 'am' | 'ccm', includeTest = false) =>
   req<{ role: 'am' | 'ccm'; managers: ManagerRosterRow[]; unmatched: UnmatchedManager[] }>(
-    `/staff-managers/roster?role=${role}`
+    `/staff-managers/roster?role=${role}${includeTest ? '&include_test=1' : ''}`
   );
 
 export const getAccountManagers = () =>
@@ -425,8 +427,13 @@ export interface TestDataResult {
   ok: boolean;
   deleted?: { assignments: number; forms: number; audit: number };
   fixtures: {
-    client: number; ic: number; manager: number; noEmailStaff: number;
-    created: string[]; existing: string[];
+    clients: { a: number; b: number; c: number };
+    ic: number;
+    staff: { amOne: number; amTwo: number; ccmOne: number; ccmTwo: number; noEmail: number };
+    created: string[];
+    existing: string[];
+    /** Rewrites applied to an older fixture shape — normally empty. */
+    migrated: string[];
   };
   real_customers: { before: number; after: number; unchanged: boolean };
   error?: string;
