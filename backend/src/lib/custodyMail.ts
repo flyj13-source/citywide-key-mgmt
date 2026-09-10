@@ -138,6 +138,14 @@ export interface MailResult {
   recipients: string[];
   error?: string;
   skipped?: boolean;
+  /**
+   * DELIBERATELY not sent — the recipient is signing on the device right now,
+   * so chasing them by email would be noise. Distinct from `skipped`, which
+   * also covers "there was no address" and "no mail provider is configured":
+   * those are problems, and this is not. Reporting them the same way would
+   * tell someone their mail is fine when it is not, or broken when it is.
+   */
+  suppressed?: boolean;
   /** How many send attempts were made (0 when skipped before trying). */
   attempts: number;
   /** The provider's message ID, present only on an accepted send. This is the

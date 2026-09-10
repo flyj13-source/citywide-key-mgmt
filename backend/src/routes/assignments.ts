@@ -17,6 +17,9 @@ import { createKeyForm, serializeForm, getKeyForm, type FormEventType } from '..
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { NOT_TEST_ASSIGNMENT } from '../lib/testFixtures';
 import {
+  openRecordsFor, allocateReturn, describeAllocation, returnContext, type OpenRecord,
+} from '../lib/returns';
+import {
   checkReason, voidAssignment, acknowledgeAssignment, correctionCounts, MIN_REASON_LENGTH,
   SIGNATURE_OUTSTANDING,
 } from '../lib/corrections';
@@ -270,6 +273,21 @@ router.get('/checkin-context', requireAuth, (req: AuthRequest, res: Response) =>
     condition: 'good',
     can_quick_checkin: !!only,
   });
+});
+
+// ── GET /api/assignments/return-context?account_id=N&holder=… ───────────────
+// What the Check In modal needs once the client and the person are chosen, so
+// it can fill itself in and say ONE quiet line about where the keys came from.
+//
+// This replaces an "Open check-out" dropdown that made Cara pick a transaction
+// she had no way to identify — and which, on the common path, was empty. The
+// answer is derivable from the two facts she already entered, so it is derived.
+router.get('/return-context', requireAuth, (req: AuthRequest, res: Response) => {
+  const accountId = Number(req.query.account_id);
+  const holder = String(req.query.holder ?? '').trim();
+  if (!accountId) return res.status(400).json({ error: 'account_id is required' });
+  if (!holder) return res.status(400).json({ error: 'holder is required' });
+  res.json(returnContext(accountId, holder));
 });
 
 // ── GET /api/assignments/recent-holders ─────────────────────────────────────
@@ -548,7 +566,7 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
   // carries the same facts plus the signature, so sending both would ask the
   // holder to sign something they just signed.
   const mail: MailResult = signInPerson
-    ? { ok: true, recipients: [], skipped: true, attempts: 0 }
+    ? { ok: true, recipients: [], skipped: true, suppressed: true, attempts: 0 }
     : await sendCheckoutNotice({
         holder, holderEmail: holder_email, holderType: holder_type,
         client: account_name, bcNumber: bcNumberFor(account), keys: lines,
@@ -701,6 +719,169 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
   });
 }
 
+/**
+ * A return spanning MORE THAN ONE open check-out.
+ *
+ * The person handing keys back knows the client and their own name; they do
+ * not know that the four keys in their hand came out on three transactions,
+ * and there is no reason they should. The returned keys are allocated across
+ * the open records oldest-first (see lib/returns): records covered in full
+ * close, at most one is split, the rest are left alone, and anything the open
+ * records cannot account for is reconciled into its own closed row.
+ *
+ * One 'returned' row is written per record actually touched, so the Checked In
+ * tab and the audit trail both show exactly what came back against what.
+ */
+async function multiRecordCheckin(req: AuthRequest, res: Response, records: OpenRecord[]) {
+  const body = req.body || {};
+  const actor = req.manager?.name ?? 'System';
+  const first = records[0].row;
+  const holder = first.assignee as string;
+  const accountId = first.account_id as number;
+  const accountName = first.account_name as string;
+
+  // No `keys` means "everything they have out" — the whole union.
+  const parsed = Array.isArray(body.keys) && body.keys.length
+    ? parseKeyLines(body.keys)
+    : { lines: records.flatMap((r) => r.keys), error: undefined as string | undefined };
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  if (!parsed.lines.length) return res.status(400).json({ error: 'Select at least one key' });
+
+  const alloc = allocateReturn(records, parsed.lines);
+  const condition = cleanText(body.condition_on_return) || 'good';
+  const extraNotes = cleanText(body.notes);
+  const returned_at = new Date().toISOString();
+  const onBehalf = body.on_behalf != null
+    ? !!body.on_behalf
+    : actor.trim().toLowerCase() !== String(holder).trim().toLowerCase();
+
+  const appendNote = (existing: string | null, add: string | null): string | null =>
+    add ? (existing ? `${existing} | ${add}` : add) : (existing ?? null);
+
+  const returnedIds: number[] = [];
+  const returnedLines: KeyLine[] = [];
+
+  // Whole records first.
+  for (const rec of alloc.close) {
+    db.prepare(`
+      UPDATE key_assignments
+         SET status='returned', returned_at=?, condition_on_return=?, checkin_recorded_by=?, notes=?
+       WHERE id=?
+    `).run(returned_at, condition, actor, appendNote(rec.row.notes ?? null, extraNotes), rec.id);
+    returnedIds.push(rec.id);
+    returnedLines.push(...rec.keys);
+  }
+
+  // Then the one partially-covered record, split so the remainder stays out.
+  if (alloc.split) {
+    const { record, returning, remaining } = alloc.split;
+    db.prepare('UPDATE key_assignments SET keys_json=?, keys_held=?, key_type=? WHERE id=?')
+      .run(JSON.stringify(remaining), summarizeKeys(remaining), remaining[0].type, record.id);
+    const inserted = db.prepare(`
+      INSERT INTO key_assignments
+        (account_id, account_name, assignee, assignee_email, key_type, keys_held, keys_json,
+         holder_type, holder_id, recorded_by, checkin_recorded_by, checked_out_at, due_at,
+         returned_at, condition_on_return, notes, status,
+         signed_at, signature_data, signature_hash, pdf_path)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'returned', ?, ?, ?, ?)
+    `).run(
+      record.row.account_id, record.row.account_name, record.row.assignee, record.row.assignee_email,
+      returning[0].type, summarizeKeys(returning), JSON.stringify(returning),
+      record.row.holder_type, record.row.holder_id, record.row.recorded_by, actor,
+      record.row.checked_out_at, record.row.due_at, returned_at, condition,
+      appendNote(record.row.notes ?? null, extraNotes ? `Partial return: ${extraNotes}` : 'Partial return'),
+      record.row.signed_at, record.row.signature_data, record.row.signature_hash, record.row.pdf_path,
+    );
+    returnedIds.push(Number(inserted.lastInsertRowid));
+    returnedLines.push(...returning);
+  }
+
+  // Anything the open records could not account for still happened. Recorded
+  // as its own reconciling row rather than refused or silently dropped.
+  if (alloc.unmatched.length) {
+    const extra = db.prepare(`
+      INSERT INTO key_assignments
+        (account_id, account_name, assignee, assignee_email, key_type, keys_held, keys_json,
+         holder_type, holder_id, recorded_by, checkin_recorded_by, checked_out_at, returned_at,
+         condition_on_return, notes, status, signature_status, origin)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'returned', 'not_required', 'reconciled')
+    `).run(
+      accountId, accountName, holder, first.assignee_email ?? null,
+      alloc.unmatched[0].type, summarizeKeys(alloc.unmatched), JSON.stringify(alloc.unmatched),
+      first.holder_type ?? 'employee', first.holder_id ?? null, actor, actor,
+      returned_at, returned_at, condition,
+      appendNote(null, extraNotes),
+    );
+    returnedIds.push(Number(extra.lastInsertRowid));
+    returnedLines.push(...alloc.unmatched);
+  }
+
+  // The signature covers the whole return, so it is minted against the newest
+  // returned row — the one the sign-off form is generated from.
+  const signRecordId = returnedIds[returnedIds.length - 1];
+  const { token: checkinToken, expires: checkinExpires } = mintToken();
+  db.prepare('UPDATE key_assignments SET checkin_signoff_token=?, checkin_signoff_expires_at=?, return_reason=COALESCE(return_reason, ?) WHERE id=?')
+    .run(checkinToken, checkinExpires, 'returned', signRecordId);
+  const signoffLink = signoffLinkFor(checkinToken);
+
+  logAudit(req, 'key_checked_in', accountName, accountId, {
+    holder, holder_type: first.holder_type ?? null, actor, on_behalf: onBehalf,
+    summary: custodySummary(actor, 'checkin', holder, onBehalf),
+    keys: returnedLines, total_keys: totalQty(returnedLines), condition,
+    // The whole point of the audit line: which records this one return touched.
+    spanned_records: records.map((r) => r.id),
+    closed_records: alloc.close.map((r) => r.id),
+    split_record: alloc.split ? alloc.split.record.id : null,
+    left_open: alloc.untouched.map((r) => r.id),
+    reconciled_keys: alloc.unmatched.length ? alloc.unmatched : undefined,
+    returned_record_ids: returnedIds,
+    resolution: describeAllocation(alloc),
+    partial: !!alloc.split || alloc.untouched.length > 0,
+    signature_requested: true,
+  });
+
+  const signInPerson = body.sign_mode === 'in_person';
+  const mail: MailResult = signInPerson
+    ? { ok: true, recipients: [], skipped: true, suppressed: true, attempts: 0 }
+    : await sendCheckinNotice({
+      holder, holderEmail: first.assignee_email ?? null,
+      holderType: (first.holder_type as 'employee' | 'ic') ?? null,
+      client: accountName, bcNumber: bcNumberForAssignment(first),
+      keys: returnedLines, returnedAt: returned_at, condition, recordedBy: actor, onBehalf,
+      signoffLink,
+    });
+  if (!signInPerson) logMail(req, mail, 'checkin', accountName, accountId, holder);
+
+  const keyForm = await generateEventForm(req, {
+    eventType: 'checkin', holderName: holder,
+    holderType: (first.holder_type as 'employee' | 'ic') ?? 'employee',
+    holderEmail: first.assignee_email ?? null, holderId: first.holder_id ?? null,
+    eventNote: `Returned at ${accountName}: ${summarizeKeys(returnedLines)}`,
+    sourceKind: 'assignment', sourceRef: String(signRecordId),
+  });
+
+  const stillOut = [
+    ...(alloc.split ? alloc.split.remaining : []),
+    ...alloc.untouched.flatMap((r) => r.keys),
+  ];
+  const row = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(signRecordId);
+  return res.json({
+    success: true,
+    partial: stillOut.length > 0,
+    still_out: stillOut,
+    spanned_records: records.length,
+    closed_records: alloc.close.map((r) => r.id),
+    reconciled: alloc.unmatched.length > 0,
+    assignment: serializeAssignment(row),
+    key_form: keyForm,
+    signoff_link: signoffLink,
+    email: {
+      ok: mail.ok, recipients: mail.recipients, error: mail.error,
+      skipped: !!mail.skipped, cara: caraAddress(),
+    },
+  });
+}
+
 router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => {
   const { id, condition_on_return, notes } = req.body || {};
 
@@ -719,13 +900,14 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
     const acctId = req.body?.account_id != null && req.body.account_id !== ''
       ? Number(req.body.account_id) : null;
     if (holderName && acctId) {
-      const openRaw = db.prepare(`
-        SELECT id FROM key_assignments
-         WHERE status = 'checked_out' AND account_id = ?
-           AND LOWER(TRIM(assignee)) = LOWER(TRIM(?))
-         ORDER BY id LIMIT 1
-      `).get(acctId, holderName) as any;
-      if (openRaw) resolvedId = Object.assign({}, openRaw).id;
+      const records = openRecordsFor(acctId, holderName);
+      // More than one open record is NOT a question for the person at the
+      // counter. The keys are fungible within a type, so the return is
+      // allocated across the records oldest-first and whichever ones it
+      // satisfies are closed. Asking "which check-out was this?" is asking
+      // someone to reconstruct bookkeeping they never saw.
+      if (records.length > 1) return multiRecordCheckin(req, res, records);
+      if (records.length === 1) resolvedId = records[0].id;
     }
     if (resolvedId == null || resolvedId === '') return reconcileCheckin(req, res);
   }
@@ -826,7 +1008,7 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
   // right now, the "please sign" email would chase a signature already given.
   const signInPerson = req.body?.sign_mode === 'in_person';
   const mail: MailResult = signInPerson
-    ? { ok: true, recipients: [], skipped: true, attempts: 0 }
+    ? { ok: true, recipients: [], skipped: true, suppressed: true, attempts: 0 }
     : await sendCheckinNotice({
         holder, holderEmail: assignment.assignee_email ?? null,
         holderType: (assignment.holder_type as 'employee' | 'ic') ?? null,
@@ -1021,6 +1203,78 @@ router.get('/transferable', requireAuth, (req: AuthRequest, res: Response) => {
     keys,
     total_keys: totalQty(keys),
     assignments: rows.map(serializeAssignment),
+  });
+});
+
+// ── GET /api/assignments/holders-with-custody ────────────────────────────────
+// Everyone currently holding keys ANYWHERE, with the clients they hold them
+// at. This is what lets Transfer start from the person rather than the place:
+// the person handing keys over is standing there, and which of their sites the
+// keys belong to is something the record already knows.
+//
+// Only people with something out can transfer anything, so this list is short
+// by construction — it is the open-custody set, not the roster.
+router.get('/holders-with-custody', requireAuth, (req: AuthRequest, res: Response) => {
+  const includeTest = req.query.include_test === '1' || req.query.include_test === 'true';
+  const rows = (db.prepare(
+    `SELECT * FROM key_assignments
+      WHERE status = 'checked_out' ${includeTest ? '' : `AND ${NOT_TEST_ASSIGNMENT}`}
+      ORDER BY COALESCE(checked_out_at, '') ASC, id ASC`
+  ).all() as any[]).map((r) => Object.assign({}, r));
+
+  interface Site { account_id: number; account_name: string; keys: Map<string, KeyLine>; since: string | null; records: number }
+  const byHolder = new Map<string, {
+    holder: string; holder_type: 'employee' | 'ic' | null; holder_email: string | null;
+    holder_id: number | null; sites: Map<number, Site>;
+  }>();
+
+  for (const row of rows) {
+    const key = String(row.assignee ?? '').trim().toLowerCase();
+    if (!key || row.account_id == null) continue;
+    let entry = byHolder.get(key);
+    if (!entry) {
+      entry = {
+        holder: row.assignee,
+        holder_type: (row.holder_type as 'employee' | 'ic') ?? null,
+        holder_email: row.assignee_email ?? null,
+        holder_id: row.holder_id ?? null,
+        sites: new Map(),
+      };
+      byHolder.set(key, entry);
+    }
+    if (!entry.holder_email && row.assignee_email) entry.holder_email = row.assignee_email;
+    let site = entry.sites.get(row.account_id);
+    if (!site) {
+      site = {
+        account_id: row.account_id, account_name: row.account_name,
+        keys: new Map(), since: row.checked_out_at ?? null, records: 0,
+      };
+      entry.sites.set(row.account_id, site);
+    }
+    site.records += 1;
+    for (const line of readKeyLines(row)) {
+      const cur = site.keys.get(line.type);
+      if (cur) cur.qty += line.qty;
+      else site.keys.set(line.type, { ...line });
+    }
+  }
+
+  res.json({
+    holders: [...byHolder.values()].map((h) => {
+      const sites = [...h.sites.values()].map((s) => {
+        const keys = [...s.keys.values()];
+        return {
+          account_id: s.account_id, account_name: s.account_name,
+          keys, total_keys: totalQty(keys), since: s.since, records: s.records,
+        };
+      }).sort((a, b) => a.account_name.localeCompare(b.account_name));
+      return {
+        holder: h.holder, holder_type: h.holder_type, holder_email: h.holder_email,
+        holder_id: h.holder_id, sites,
+        total_keys: sites.reduce((n, s) => n + s.total_keys, 0),
+        client_count: sites.length,
+      };
+    }).sort((a, b) => a.holder.localeCompare(b.holder)),
   });
 });
 
@@ -1332,7 +1586,7 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   // Both halves are notified, and both signature forms go out, before this
   // responds — so the UI can report the true outcome of each send.
   const fromMail = !movesKeys
-    ? ({ ok: true, recipients: [], attempts: 0, skipped: true } as MailResult)
+    ? ({ ok: true, recipients: [], attempts: 0, skipped: true, suppressed: true } as MailResult)
     : await sendCheckinNotice({
     holder: from_holder, holderEmail: from_holder_email, holderType: from_holder_type,
     client: account_name, bcNumber, keys: lines, returnedAt: now, condition: 'good',
@@ -1341,15 +1595,22 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   });
   if (movesKeys) logMail(req, fromMail, 'checkin', account_name, account_id, from_holder);
 
-  const toMail = !movesKeys
-    ? ({ ok: true, recipients: [], attempts: 0, skipped: true } as MailResult)
+  // The person RECEIVING the keys is the one standing there, so "sign here
+  // now" suppresses their email exactly as it does on a check-out — chasing a
+  // signature that is about to be given on the device is noise. The person
+  // handing them over is emailed either way: they are, by definition, the half
+  // of the handover who may already have walked off.
+  const signInPerson = body.sign_mode === 'in_person' && !!to_holder_email;
+
+  const toMail = !movesKeys || signInPerson
+    ? ({ ok: true, recipients: [], attempts: 0, skipped: true, suppressed: true } as MailResult)
     : await sendCheckoutNotice({
     holder: to_holder, holderEmail: to_holder_email, holderType: to_holder_type,
     client: account_name, bcNumber, keys: lines, checkedOutAt: now, dueAt: due_at,
     recordedBy: actor, onBehalf: actor.trim().toLowerCase() !== to_holder.trim().toLowerCase(),
     signoffLink: toLink, transferFrom: from_holder,
   });
-  if (movesKeys) logMail(req, toMail, 'checkout', account_name, account_id, to_holder);
+  if (movesKeys && !signInPerson) logMail(req, toMail, 'checkout', account_name, account_id, to_holder);
 
   // ── Paired Key Forms ──────────────────────────────────────────────────────
   // Both parties get a form stating what they hold AFTER the transfer, each
@@ -1391,8 +1652,10 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
     total_keys: totalQty(lines),
     signatures: transferSignatureState(transferId),
     email: {
-      from: { ok: fromMail.ok, recipients: fromMail.recipients, error: fromMail.error },
-      to: { ok: toMail.ok, recipients: toMail.recipients, error: toMail.error },
+      // `skipped` is not cosmetic: a send suppressed because the person is
+      // signing on the device would otherwise render as "sent to nobody".
+      from: { ok: fromMail.ok, recipients: fromMail.recipients, error: fromMail.error, skipped: !!fromMail.skipped, suppressed: !!fromMail.suppressed },
+      to: { ok: toMail.ok, recipients: toMail.recipients, error: toMail.error, skipped: !!toMail.skipped, suppressed: !!toMail.suppressed },
       cara: caraAddress(),
     },
   });

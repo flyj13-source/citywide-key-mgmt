@@ -260,6 +260,8 @@ export interface MailOutcome {
   /** Deliberately not sent — the holder is signing on this device right now.
    *  Distinct from a send that was tried and failed. */
   skipped?: boolean;
+  /** Deliberately not sent — the recipient is signing on the device. */
+  suppressed?: boolean;
 }
 
 export interface HolderOption {
@@ -327,6 +329,45 @@ export const getKeyAvailability = (accountId: number) =>
   req<{ account: { id: number; name: string; record_type: string }; types: KeyAvailability[] }>(
     `/assignments/availability?account_id=${accountId}`
   );
+// What is on file for a client + person, resolved server-side so the Check In
+// modal never has to show a record picker.
+export interface ReturnContext {
+  open_count: number;
+  keys: { type: KeyTypeKey; label: string; qty: number }[];
+  /** Earliest open check-out, for the one quiet context line. */
+  since: string | null;
+  record_ids: number[];
+  holder_email: string | null;
+  holder_type: 'employee' | 'ic' | null;
+}
+// Everyone currently holding keys anywhere, with the clients they hold them
+// at. Lets Transfer start from the PERSON — the one standing there — instead
+// of asking which site the keys in their hand belong to.
+export interface CustodySite {
+  account_id: number;
+  account_name: string;
+  keys: { type: KeyTypeKey; label: string; qty: number }[];
+  total_keys: number;
+  since: string | null;
+  records: number;
+}
+export interface HolderWithCustody {
+  holder: string;
+  holder_type: 'employee' | 'ic' | null;
+  holder_email: string | null;
+  holder_id: number | null;
+  sites: CustodySite[];
+  total_keys: number;
+  client_count: number;
+}
+export const getHoldersWithCustody = (includeTest = false) =>
+  req<{ holders: HolderWithCustody[] }>(
+    `/assignments/holders-with-custody${includeTest ? '?include_test=1' : ''}`,
+  );
+
+export const getReturnContext = (accountId: number, holder: string) =>
+  req<ReturnContext>(`/assignments/return-context?account_id=${accountId}&holder=${encodeURIComponent(holder)}`);
+
 export const getHolders = () =>
   req<{ employees: HolderOption[]; ics: HolderOption[] }>('/assignments/holders');
 export const checkout = (data: {
@@ -455,6 +496,74 @@ export interface TestEmailResult {
   sent_at?: string;
 }
 export const getEmailConfig = () => req<EmailConfig>('/settings/email');
+
+// ── Data quality (READ ONLY) ────────────────────────────────────────────────
+// Candidate duplicate pairs and records with no address. Nothing in this
+// section writes: there is deliberately no merge, archive or edit call here,
+// because real account data has to be verified before anything is merged.
+export interface DuplicateSide {
+  id: number;
+  name: string;
+  email: string | null;
+  role: string;
+  number: string | null;
+  active: number;
+  is_test: number;
+  clients_linked: number;
+  keys_held: number;
+  active_custody: number;
+  created_at: string | null;
+}
+export interface DuplicatePair {
+  kind: 'staff_name' | 'staff_email' | 'ic_vendor_number' | 'ic_name' | 'customer_number';
+  population: 'staff' | 'ic' | 'customer';
+  reason: string;
+  confidence: 'exact' | 'near';
+  a: DuplicateSide;
+  b: DuplicateSide;
+}
+export interface NoEmailRecord {
+  id: number;
+  name: string;
+  role: string;
+  population: 'staff' | 'ic' | 'customer';
+  active: number;
+  is_test: number;
+  clients_linked: number;
+  keys_held: number;
+  active_custody: number;
+  created_at: string | null;
+}
+export interface DataQualitySummary {
+  pairs: number;
+  exact: number;
+  near: number;
+  by_population: { staff: number; ic: number; customer: number };
+  no_email: number;
+  staff_total: number;
+  ic_total: number;
+}
+export const getDuplicates = (population?: string, includeTest = false) =>
+  req<{ pairs: DuplicatePair[]; total: number; summary: DataQualitySummary; read_only: true }>(
+    `/data-quality/duplicates?${population ? `population=${population}&` : ''}include_test=${includeTest ? 1 : 0}`,
+  );
+export const getMissingEmail = (includeTest = false) =>
+  req<{ records: NoEmailRecord[]; total: number; of_total: number; read_only: true }>(
+    `/data-quality/missing-email?include_test=${includeTest ? 1 : 0}`,
+  );
+export const getDataQualitySummary = () => req<DataQualitySummary>('/data-quality/summary');
+/** The review workbook. Two sheets: the candidate pairs and the missing addresses. */
+export const downloadDataQualityWorkbook = async (includeTest = false) => {
+  const res = await reqRaw(`/data-quality/export?include_test=${includeTest ? 1 : 0}`);
+  if (!res.ok) throw new Error('Export failed');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `possible-duplicates-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 export interface TestDataResult {
@@ -759,6 +868,8 @@ export const transferKeys = (data: {
   keys: { type: KeyTypeKey; qty: number }[];
   due_at?: string | null;
   notes?: string | null;
+  /** 'in_person' suppresses the RECEIVER's email — they sign on the device. */
+  sign_mode?: 'in_person' | 'email';
 }) => req<TransferResult & {
   mode: TransferMode;
   account_moved: { role: 'am' | 'ccm'; from: string | null; to: string } | null;

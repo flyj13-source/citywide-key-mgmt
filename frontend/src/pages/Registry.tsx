@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, memo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
+import DataQuality from '../components/DataQuality';
 import ImportModal from '../components/ImportModal';
 import { getManager } from '../lib/auth';
 import YesNo from '../components/YesNo';
@@ -30,7 +31,9 @@ import { getCorrectionCounts, voidAssignment, acknowledgeAssignment, bulkCorrect
   type CorrectionCounts } from '../lib/api';
 import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getManagerRoster, archiveAccount, restoreAccount, purgeAccount, getStaff, exportEmployee, exportRegistry, getAssignments, confirmHandover, getSignatureGaps, bulkArchiveAccounts,
   type Assignment, type SignatureGaps, type ManagerRosterRow, type UnmatchedManager,
-  type StaffManager } from '../lib/api';
+  type StaffManager,
+  getDataQualitySummary,
+} from '../lib/api';
 
 type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'checkedout' | 'checkedin' | 'keyforms' | 'all' | 'archived';
 
@@ -1133,6 +1136,10 @@ export default function Registry() {
   // exercise them. They are unmistakable — charcoal TEST pill, tinted row —
   // so showing them costs nothing, and the counts still exclude them.
   const [showTest, setShowTest] = useState(true);
+  // Read-only data-quality review. Deliberately a VIEW, not an action: it can
+  // only ever tell you what looks wrong, never change it.
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  const [dqCount, setDqCount] = useState(0);
   const [showExport, setShowExport] = useState(false);
   // Set by "Export selected" — narrows the export to exactly the ticked rows.
   const [exportIds, setExportIds] = useState<number[] | null>(null);
@@ -1371,6 +1378,13 @@ export default function Registry() {
   }, []);
 
   useEffect(() => { refreshCounts(); }, [refreshCounts]);
+
+  // Just the number for the button — the view itself loads on open.
+  useEffect(() => {
+    getDataQualitySummary()
+      .then((d) => setDqCount(d.pairs))
+      .catch(() => setDqCount(0));
+  }, []);
 
   const onRowClick = useCallback((id: number) => navigate(`/registry/${id}`), [navigate]);
 
@@ -1723,6 +1737,13 @@ export default function Registry() {
                 label="Export"
                 onClick={() => setShowExport(true)}
                 title="Export the current view"
+              />
+              <ActionButton
+                weight="tertiary"
+                icon={<IconReport />}
+                label={`Possible Duplicates${dqCount ? ` (${dqCount})` : ''}`}
+                onClick={() => setShowDuplicates(true)}
+                title="Read-only review of near-identical records and missing addresses — nothing here changes data"
               />
               {(canDelete || isAdmin) && (
                 <ActionButton
@@ -2229,6 +2250,14 @@ export default function Registry() {
           onClose={() => setCheckInFor(null)}
           onDone={onCustodyChanged}
         />
+      )}
+
+      {showDuplicates && (
+        <Modal title="Possible Duplicates" onClose={() => setShowDuplicates(false)} width="max-w-5xl">
+          <div className="max-h-[75vh] overflow-y-auto pr-1">
+            <DataQuality />
+          </div>
+        </Modal>
       )}
 
       {/* Archive confirmation */}

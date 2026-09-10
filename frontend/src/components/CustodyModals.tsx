@@ -6,7 +6,8 @@ import SignaturePad, { type SignaturePadHandle } from './SignaturePad';
 import { getManager } from '../lib/auth';
 import {
   getKeyAvailability, getHolders, getRecentHolders, checkout, checkin, getAssignments, saveHolderEmail,
-  getCheckoutContext, getCheckinContext, signInPerson, resendSignoff,
+  getCheckoutContext, getCheckinContext, getReturnContext, signInPerson, resendSignoff,
+  type ReturnContext,
   type Assignment, type HolderOption, type KeyAvailability, type KeyTypeKey, type MailOutcome,
   type SignatureStatus,
 } from '../lib/api';
@@ -295,6 +296,11 @@ export function HolderPicker({
   const [loading, setLoading] = useState(false);
   const loaded = useRef(false);
 
+  // Is the chosen person actually on the roster we loaded? Name-matched,
+  // because that is the only field the two sources reliably share.
+  const onRoster = !!holder && [...options.employees, ...options.ics]
+    .some((o) => o.name.trim().toLowerCase() === holder.name.trim().toLowerCase());
+
   useEffect(() => {
     if (mode !== 'other' || loaded.current) return;
     loaded.current = true;
@@ -379,10 +385,14 @@ export function HolderPicker({
             emptyNote={placeholder}
           />
           {/* A holder named on a client row with no roster or vendor record
-              behind them is still a valid holder — just not one on this list. */}
-          {holder && holder.id == null && (
+              behind them is still a valid holder — just not one on this list.
+              Judged by whether the ROSTER actually has them, not by whether the
+              option carries an id: a person picked from the recent strip has a
+              null id whenever the assignment that put them there was recorded
+              without one, and they are on the roster all the same. */}
+          {holder && !onRoster && (
             <p className="text-[11px] text-cw-muted">
-              Selected: <span className="font-medium text-[#1a1a1a]">{holder.name}</span> — named on the client
+              Selected: <span className="font-medium text-[#1a1a1a]">{holder.name}</span> — named on a client
               row, with no roster record behind them.
             </p>
           )}
@@ -854,6 +864,16 @@ export function CheckOutModal({
 }
 
 // ── Check In modal ───────────────────────────────────────────────────────────
+// Four decisions, in the order a return actually happens: which client, who is
+// handing the keys back, which keys, and how it gets signed.
+//
+// There is deliberately NO "open check-out" selector. Which transaction the
+// keys came out on is bookkeeping the person at the counter never saw, and on
+// the common path — keys that predate this system — the dropdown was empty and
+// had to be ignored. The server works it out from the client and the holder:
+// one open record closes, several are consumed oldest-first, none means the
+// return is recorded and closed together. All three are normal, so none of
+// them gets a warning.
 
 export function CheckInModal({
   presetAccount, presetAssignmentId, onClose, onDone,
@@ -865,21 +885,20 @@ export function CheckInModal({
 }) {
   const me = getManager();
   const [account, setAccount] = useState<{ id: number; name: string } | null>(presetAccount);
-  const [open, setOpen] = useState<Assignment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string>(presetAssignmentId ? String(presetAssignmentId) : '');
+
+  // Who is returning — the same control as a check-out, always present.
+  const [mode, setMode] = useState<'self' | 'other'>('other');
+  const [holder, setHolder] = useState<HolderOption | null>(null);
+  const [email, setEmail] = useState('');
+
   const [picks, setPicks] = useState<Record<string, Pick>>({});
   const [condition, setCondition] = useState('good');
   const [notes, setNotes] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  // Check-in now collects its own signature (upstream), so a missing address
-  // costs the holder both their confirmation AND their return sign-off. The
-  // notification recipient is told either way.
-  const [notifyAnyway, setNotifyAnyway] = useState(false);
-  // Same default as a check-out: the person handing the keys back is here.
+  const [returnedAt, setReturnedAt] = useState(new Date().toISOString().slice(0, 10));
   const [signMode, setSignMode] = useState<'in_person' | 'email'>('in_person');
   const [showMore, setShowMore] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
   const [signing, setSigning] = useState<Assignment | null>(null);
   const [done, setDone] = useState<{
     mail: MailOutcome; partial: boolean; holder: string; link: string | null;
@@ -887,134 +906,112 @@ export function CheckInModal({
     signed?: boolean; pdfError?: string | null;
   } | null>(null);
 
-  // ── Manual entry ──────────────────────────────────────────────────────────
-  // Used when nothing is on record for this client. Same field set as a
-  // check-out, so the return is captured in full rather than refused.
-  const [manualMode, setManualMode] = useState<'self' | 'other'>('other');
-  const [manualHolder, setManualHolder] = useState<HolderOption | null>(null);
-  const [manualEmail, setManualEmail] = useState('');
-  const [manualPicks, setManualPicks] = useState<Record<string, Pick>>({});
-  const [manualAvail, setManualAvail] = useState<KeyAvailability[]>([]);
-  const [returnedAt, setReturnedAt] = useState(new Date().toISOString().slice(0, 10));
+  // What is on file for this client + person. Resolved silently; the only
+  // thing it ever puts on screen is one quiet line.
+  const [ctx, setCtx] = useState<ReturnContext | null>(null);
+  const [ctxLoading, setCtxLoading] = useState(false);
+  // Key types at the client, for a return with nothing on file.
+  const [siteKeys, setSiteKeys] = useState<KeyAvailability[]>([]);
 
-  // All open custody records; filtered to the chosen client below so a preset
-  // row narrows the list without hiding the rest of the registry.
+  const holderName = mode === 'self' ? (me?.name ?? '') : (holder?.name ?? '');
+  const holderType: 'employee' | 'ic' = mode === 'self' ? 'employee' : (holder?.type ?? 'employee');
+
+  // A row-launched check-in already knows both answers — seed them rather than
+  // making someone re-enter what they just clicked on.
   useEffect(() => {
-    setLoading(true);
+    if (!presetAssignmentId) return;
+    let cancelled = false;
     getAssignments({ status: 'checked_out', limit: '500' })
       .then((d) => {
-        setOpen(d.assignments);
-        // Re-apply the preselection once the options exist — a controlled
-        // <select> pointed at an id that has not loaded yet renders as blank.
-        if (presetAssignmentId && d.assignments.some((a) => a.id === presetAssignmentId)) {
-          setSelectedId(String(presetAssignmentId));
-        }
+        if (cancelled) return;
+        const a = d.assignments.find((x) => x.id === presetAssignmentId);
+        if (!a) return;
+        if (!presetAccount && a.account_id) setAccount({ id: a.account_id, name: a.account_name });
+        setMode('other');
+        setHolder({
+          id: a.holder_id ?? null, name: a.holder, email: a.holder_email ?? null,
+          type: (a.holder_type as 'employee' | 'ic') ?? 'employee',
+          detail: '', has_email: !!a.holder_email,
+        });
       })
-      .catch(() => setOpen([]))
-      .finally(() => setLoading(false));
-  }, [presetAssignmentId]);
-
-  const candidates = useMemo(
-    () => (account ? open.filter((a) => a.account_id === account.id) : open),
-    [open, account],
-  );
-  const selected = open.find((a) => String(a.id) === selectedId) ?? null;
-
-  // One open check-out at this client is not a choice — pick it. Two or more
-  // is a real decision, so leave it to the user rather than guessing.
-  useEffect(() => {
-    if (selectedId || candidates.length !== 1) return;
-    setSelectedId(String(candidates[0].id));
-  }, [candidates, selectedId]);
-
-  // Default to returning everything on the selected transaction — the common
-  // case is a full return; unchecking a line makes it partial. Depends on
-  // `open` as well as the id: with a row-preselected id the transaction is not
-  // in hand until the list finishes loading.
-  useEffect(() => { setNotifyAnyway(false); }, [selectedId]);
+      .catch(() => { /* the modal still works from an empty start */ });
+    return () => { cancelled = true; };
+  }, [presetAssignmentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!selected) { setPicks({}); return; }
-    const next: Record<string, Pick> = {};
-    for (const k of selected.keys) next[k.type] = { checked: true, qty: k.qty };
-    setPicks(next);
-  }, [selectedId, open]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (mode === 'self') setEmail(me?.email ?? '');
+    else setEmail(holder?.email ?? '');
+  }, [mode, holder, me?.email]);
+
+  // ── The inference (§2) ────────────────────────────────────────────────────
+  // Both facts in hand → ask the server what is open and pre-fill from it.
+  // One record, several, or none all take the same path here; the difference
+  // shows up only in how many keys come back pre-checked.
+  useEffect(() => {
+    if (!account || !holderName) { setCtx(null); setPicks({}); return; }
+    let cancelled = false;
+    setCtxLoading(true);
+    getReturnContext(account.id, holderName)
+      .then((c) => {
+        if (cancelled) return;
+        setCtx(c);
+        setPicks(Object.fromEntries(c.keys.map((k) => [k.type, { checked: true, qty: k.qty }])));
+      })
+      .catch(() => { if (!cancelled) { setCtx(null); setPicks({}); } })
+      .finally(() => { if (!cancelled) setCtxLoading(false); });
+    return () => { cancelled = true; };
+  }, [account, holderName]);
+
+  // With nothing on file the key list falls back to what the client holds, so
+  // the return can still be captured in full.
+  useEffect(() => {
+    if (!account) { setSiteKeys([]); return; }
+    getKeyAvailability(account.id)
+      .then((d) => setSiteKeys(d.types))
+      .catch(() => setSiteKeys([]));
+  }, [account]);
+
+  const hasPrior = !!ctx && ctx.open_count > 0;
+  const keyRows = hasPrior
+    ? ctx!.keys.map((k) => ({ type: k.type as KeyTypeKey, label: k.label, available: k.qty }))
+    : siteKeys.map((k) => ({ type: k.type, label: k.label, available: k.site_total }));
 
   const lines = selectedLines(picks);
-
-  // ── Manual entry derivations ──────────────────────────────────────────────
-  const manualHolderName = manualMode === 'self' ? (me?.name ?? '') : (manualHolder?.name ?? '');
-  const manualHolderType: 'employee' | 'ic' = manualMode === 'self' ? 'employee' : (manualHolder?.type ?? 'employee');
-  const manualLines = selectedLines(manualPicks);
-  // Manual entry only appears once the list has loaded and come back empty —
-  // otherwise it would flash on screen while the candidates are still arriving.
-  const manualEntry = !loading && candidates.length === 0;
-
-  useEffect(() => {
-    if (!manualEntry || !account) { setManualAvail([]); return; }
-    getKeyAvailability(account.id)
-      .then((d) => setManualAvail(d.types))
-      .catch(() => setManualAvail([]));
-    setManualPicks({});
-  }, [manualEntry, account]);
-
-  useEffect(() => {
-    setManualEmail(manualMode === 'self' ? (me?.email ?? '') : (manualHolder?.email ?? ''));
-  }, [manualMode, manualHolder, me?.email]);
   const totalReturning = lines.reduce((n, l) => n + l.qty, 0);
-  const totalOut = selected?.keys.reduce((n, k) => n + k.qty, 0) ?? 0;
-  const isPartial = !!selected && selected.keys.length > 0 && totalReturning < totalOut;
-  const canSubmit = saving ? false : (
-    selected
-      ? (selected.keys.length === 0 || lines.length > 0)
-        && (!!selected.holder_email || notifyAnyway)
-      // Manual entry needs a holder, a client and at least one key. No email
-      // gate: a return is a fact worth recording even if nobody can be told.
-      : manualEntry && !!manualHolderName && !!account && manualLines.length > 0
-  );
-  const submitCount = selected ? totalReturning : manualLines.reduce((n, l) => n + l.qty, 0);
+  const totalOut = hasPrior ? ctx!.keys.reduce((n, k) => n + k.qty, 0) : 0;
+  const isPartial = hasPrior && totalReturning < totalOut;
+
+  // A return is a fact worth recording even when nobody can be told about it,
+  // so there is no email gate here — only a note that the link cannot be sent.
+  const canSubmit = !saving && !!account && !!holderName && lines.length > 0;
 
   const submit = async () => {
+    if (!canSubmit || !account) return;
     setSaving(true); setError('');
     try {
-      // Two shapes, one endpoint. Against an open record we name it; with
-      // nothing on file we send the whole entry and the server reconciles it,
-      // creating and closing the record in one step. A check-in must never be
-      // a dead end just because the check-OUT was never captured.
-      // With no address there is no link to send, so the on-device pad is the
-      // only route to a signature on this return.
-      const returningEmail = selected ? selected.holder_email : manualEmail.trim();
-      const effectiveSignMode = returningEmail ? signMode : 'in_person';
-      const r = selected
-        ? await checkin({
-          id: selected.id,
-          keys: selected.keys.length ? lines : undefined,
-          condition_on_return: condition,
-          notes: notes.trim() || null,
-          on_behalf: (me?.name ?? '').trim().toLowerCase() !== selected.holder.trim().toLowerCase(),
-          sign_mode: effectiveSignMode,
-        })
-        : await checkin({
-          holder: manualHolderName,
-          holder_email: manualEmail.trim() || null,
-          holder_type: manualHolderType,
-          holder_id: manualHolder?.id ?? null,
-          account_id: account?.id,
-          keys: manualLines,
-          condition_on_return: condition,
-          returned_at: returnedAt || null,
-          notes: notes.trim() || null,
-          sign_mode: effectiveSignMode,
-        });
+      // Always the same shape: client, person, keys. The server decides what
+      // that closes — there is no record id for the UI to choose or get wrong.
+      const effectiveSignMode = email.trim() ? signMode : 'in_person';
+      const r = await checkin({
+        holder: holderName,
+        holder_email: email.trim() || null,
+        holder_type: holderType,
+        holder_id: holder?.id ?? null,
+        account_id: account.id,
+        keys: lines,
+        condition_on_return: condition,
+        returned_at: hasPrior ? undefined : (returnedAt || null),
+        notes: notes.trim() || null,
+        on_behalf: (me?.name ?? '').trim().toLowerCase() !== holderName.trim().toLowerCase(),
+        sign_mode: effectiveSignMode,
+      });
       onDone();
       if (effectiveSignMode === 'in_person' && r.assignment) {
         setSigning(r.assignment);
         return;
       }
       setDone({
-        mail: r.email, partial: r.partial,
-        holder: selected ? selected.holder : manualHolderName,
-        link: r.signoff_link,
+        mail: r.email, partial: r.partial, holder: holderName, link: r.signoff_link,
         reconciled: !!(r as any).reconciled,
         form: (r as any).key_form ?? null,
       });
@@ -1069,12 +1066,6 @@ export function CheckInModal({
               ? <>Partial return recorded for <span className="font-semibold">{done.holder}</span>. The remaining keys stay checked out.</>
               : <>All keys returned by <span className="font-semibold">{done.holder}</span>. The record moved to Checked In.</>}
           </div>
-          {done.reconciled && (
-            <div className="rounded border border-cw-border bg-[#f4f4f2] px-3 py-2 text-sm text-cw-text">
-              No check-out existed for these keys, so the record was created and closed together.
-              It is marked as a reconciling entry in the audit trail.
-            </div>
-          )}
           {done.form && (
             <div className="rounded border border-cw-border bg-white px-3 py-2 text-sm text-cw-text">
               Key Form <span className="font-mono font-semibold">{done.form.form_no}</span> generated —{' '}
@@ -1105,175 +1096,118 @@ export function CheckInModal({
   return (
     <Modal title="Check In Keys" onClose={onClose} width="max-w-lg">
       <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
+        {/* 1 — Client */}
         <div>
           <SectionLabel>Client</SectionLabel>
-          <AccountPicker value={account} onSelect={(v) => { setAccount(v); setSelectedId(''); }} />
+          <AccountPicker value={account} onSelect={setAccount} />
+        </div>
+
+        {/* 2 — Who is returning */}
+        <div>
+          <SectionLabel>Who is returning the keys</SectionLabel>
+          <HolderPicker
+            mode={mode} setMode={setMode}
+            holder={holder} setHolder={setHolder}
+            placeholder="— Select the person returning the keys —"
+          />
+          <div className="mt-3">
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Their email <span className="text-gray-400 font-normal">— receives the confirmation and sign-off link</span>
+            </label>
+            <input
+              type="email"
+              className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.com"
+            />
+          </div>
+        </div>
+
+        {/* 3 — Keys */}
+        <div>
+          <SectionLabel>Keys being returned</SectionLabel>
+          {!account ? (
+            <p className="text-sm text-cw-muted">Choose a client above to list its key types.</p>
+          ) : ctxLoading ? (
+            <p className="text-sm text-cw-muted">Checking what is on record…</p>
+          ) : (
+            <KeyPickerList
+              rows={keyRows}
+              picks={picks}
+              setPicks={setPicks}
+              availableLabel={hasPrior ? 'checked out' : 'on record at this client'}
+              emptyNote="No key inventory recorded for this client."
+            />
+          )}
+
+          {/* §3 — one quiet line when a prior check-out was found, and nothing
+              at all when there was not. The absence of a record is the normal
+              path now, and a warning about the normal path is just noise. */}
+          {hasPrior && ctx!.since && (
+            <p className="text-[11px] text-cw-muted mt-2">
+              Returning against check-out from {parseStamp(ctx!.since)?.toLocaleDateString(undefined, {
+                month: 'short', day: 'numeric', year: 'numeric',
+              }) ?? '—'}
+            </p>
+          )}
+          {isPartial && (
+            <p className="text-[11px] text-[#7a5a00] bg-[#fff8e6] border border-[#e8cf8a] rounded px-2 py-1.5 mt-2">
+              Partial return — {totalOut - totalReturning} key{totalOut - totalReturning === 1 ? '' : 's'} will stay checked out to {holderName}.
+            </p>
+          )}
         </div>
 
         <div>
-          <SectionLabel>Open check-out</SectionLabel>
-          <select
-            className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
-            value={selectedId}
-            onChange={(e) => setSelectedId(e.target.value)}
+          <button
+            type="button"
+            onClick={() => setShowMore((v) => !v)}
+            className="flex items-center gap-2 text-xs font-medium text-[#1a1a1a] hover:text-[#C0272D] transition-colors"
           >
-            <option value="">{loading ? 'Loading…' : `— Select a check-out (${candidates.length}) —`}</option>
-            {candidates.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.holder} — {a.account_name} — {a.keys_summary || 'keys'}{a.overdue ? '  ⚠ OVERDUE' : ''}
-              </option>
-            ))}
-          </select>
-          {/* Nothing on record is not an error — it is the common case for keys
-              that predate the system. Say so, and open the full entry form
-              below rather than refusing the return. */}
-          {manualEntry && (
-            <div className="mt-2 rounded border border-[#e8cf8a] bg-[#fff8e6] px-3 py-2.5 text-sm text-[#7a5a00]">
-              {account
-                ? <>No keys are on record at <strong>{account.name}</strong>.</>
-                : <>No keys are on record as checked out.</>}
-              {' '}Enter the return below — it will be recorded even though no check-out exists.
+            <span className={`inline-block transition-transform ${showMore ? 'rotate-90' : ''}`}>›</span>
+            More options
+            {!showMore && (
+              <span className="font-normal text-gray-400">
+                condition {condition === 'missing_copy' ? 'missing copy' : condition}
+                {notes.trim() ? ' · notes added' : ''}
+              </span>
+            )}
+          </button>
+          {showMore && (
+            <div className="space-y-3 mt-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Condition on return</label>
+                <select className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={condition} onChange={(e) => setCondition(e.target.value)}>
+                  <option value="good">Good</option>
+                  <option value="damaged">Damaged</option>
+                  <option value="missing_copy">Missing Copy</option>
+                </select>
+              </div>
+              {!hasPrior && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Date returned</label>
+                  <input
+                    type="date"
+                    className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
+                    value={returnedAt}
+                    onChange={(e) => setReturnedAt(e.target.value)}
+                  />
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+                <textarea className="input h-16 resize-none focus:ring-[#C0272D] focus:border-[#C0272D]" value={notes} onChange={(e) => setNotes(e.target.value)} />
+              </div>
             </div>
           )}
         </div>
 
-        {/* ── Manual entry: the same field set as a check-out ───────────────
-            Holder, client, keys, condition, date, notes. This is what makes a
-            check-in work with or without a prior record. */}
-        {manualEntry && (
-          <>
-            <div>
-              <SectionLabel>Who is returning the keys</SectionLabel>
-              <HolderPicker
-                mode={manualMode} setMode={setManualMode}
-                holder={manualHolder} setHolder={setManualHolder}
-                placeholder="— Select the person returning the keys —"
-              />
-              <div className="mt-3">
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Holder email <span className="text-gray-400 font-normal">— receives the confirmation</span>
-                </label>
-                <input
-                  type="email"
-                  className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
-                  value={manualEmail}
-                  onChange={(e) => setManualEmail(e.target.value)}
-                  placeholder="name@example.com"
-                />
-              </div>
-            </div>
-
-            <div>
-              <SectionLabel>Keys being returned</SectionLabel>
-              {!account ? (
-                <p className="text-sm text-cw-muted">Choose a client above to list its key types.</p>
-              ) : (
-                <KeyPickerList
-                  rows={manualAvail.map((k) => ({ type: k.type, label: k.label, available: k.site_total }))}
-                  picks={manualPicks}
-                  setPicks={setManualPicks}
-                  availableLabel="on record at this client"
-                  emptyNote="No key inventory recorded for this client."
-                />
-              )}
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Date returned</label>
-              <input
-                type="date"
-                className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
-                value={returnedAt}
-                onChange={(e) => setReturnedAt(e.target.value)}
-              />
-            </div>
-          </>
-        )}
-
-        {selected && (
-          <>
-            <div>
-              <SectionLabel>Keys being returned</SectionLabel>
-              <KeyPickerList
-                rows={selected.keys.map((k) => ({ type: k.type, label: k.label, available: k.qty }))}
-                picks={picks}
-                setPicks={setPicks}
-                availableLabel="checked out"
-                emptyNote="This is a legacy record with no key breakdown — checking it in returns the whole record."
-              />
-              {isPartial && (
-                <p className="text-[11px] text-[#7a5a00] bg-[#fff8e6] border border-[#e8cf8a] rounded px-2 py-1.5 mt-2">
-                  Partial return — {totalOut - totalReturning} key{totalOut - totalReturning === 1 ? '' : 's'} will stay checked out to {selected.holder}.
-                </p>
-              )}
-            </div>
-
-            {!selected.holder_email && (
-              <MissingEmailWarning
-                holder={selected.holder}
-                holderType={selected.holder_type ?? 'employee'}
-                holderId={selected.holder_id}
-                context="notification"
-                onEmailSaved={() => setNotifyAnyway(true)}
-                proceeding={notifyAnyway}
-                setProceeding={setNotifyAnyway}
-                reason={''}
-                setReason={() => {}}
-              />
-            )}
-
-            <div className="text-xs text-cw-muted">
-              Holder: <span className="font-semibold text-[#1a1a1a]">{selected.holder}</span>
-              {' · '}Out since {parseStamp(selected.checked_out_at)?.toLocaleDateString() ?? '—'}
-              {(me?.name ?? '').trim().toLowerCase() !== selected.holder.trim().toLowerCase() && (
-                <> · recorded by <span className="font-semibold text-[#1a1a1a]">{me?.name}</span> on their behalf</>
-              )}
-            </div>
-
-            {/* Condition already reads "Good" and notes are usually empty, so
-                both sit behind the fold with the current answer on the label. */}
-            <div>
-              <button
-                type="button"
-                onClick={() => setShowMore((v) => !v)}
-                className="flex items-center gap-2 text-xs font-medium text-[#1a1a1a] hover:text-[#C0272D] transition-colors"
-              >
-                <span className={`inline-block transition-transform ${showMore ? 'rotate-90' : ''}`}>›</span>
-                More options
-                {!showMore && (
-                  <span className="font-normal text-gray-400">
-                    condition {condition === 'missing_copy' ? 'missing copy' : condition}
-                    {notes.trim() ? ' · notes added' : ''}
-                  </span>
-                )}
-              </button>
-              {showMore && (
-                <div className="space-y-3 mt-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Condition on return</label>
-                    <select className="input focus:ring-[#C0272D] focus:border-[#C0272D]" value={condition} onChange={(e) => setCondition(e.target.value)}>
-                      <option value="good">Good</option>
-                      <option value="damaged">Damaged</option>
-                      <option value="missing_copy">Missing Copy</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
-                    <textarea className="input h-16 resize-none focus:ring-[#C0272D] focus:border-[#C0272D]" value={notes} onChange={(e) => setNotes(e.target.value)} />
-                  </div>
-                </div>
-              )}
-            </div>
-          </>
-        )}
-
         {error && <ErrorBanner>{error}</ErrorBanner>}
       </div>
 
+      {/* 4 — Signature, beside the button whose behaviour it changes. */}
       <div className="pt-4 border-t border-gray-200 mt-4 space-y-3">
-        {/* Same choice as a check-out, on the same footing and in the same
-            place: beside the button whose behaviour it changes. */}
-        {(selected?.holder_email || (!selected && manualEmail.trim())) && (
+        {email.trim() ? (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <span className="text-xs font-medium text-[#1a1a1a]">Signature</span>
             {([
@@ -1292,15 +1226,16 @@ export function CheckInModal({
               </label>
             ))}
           </div>
-        )}
+        ) : holderName ? (
+          <p className="text-[11px] text-cw-muted">
+            No email on file — sign here to capture a signature anyway.
+          </p>
+        ) : null}
         <div className="flex items-center gap-2">
           <button onClick={submit} disabled={!canSubmit} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-            {saving ? 'Checking in…' : `Check In${submitCount ? ` ${submitCount} Key${submitCount === 1 ? '' : 's'}` : ''}`}
+            {saving ? 'Checking in…' : `Check In${totalReturning ? ` ${totalReturning} Key${totalReturning === 1 ? '' : 's'}` : ''}`}
           </button>
           <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
-          <span className="text-[11px] text-gray-400 ml-auto">
-            {signMode === 'in_person' ? 'Opens the signature pad next.' : 'Emails the holder and Cara · sends a signature form.'}
-          </span>
         </div>
       </div>
     </Modal>

@@ -26,6 +26,7 @@ import signoffRouter from './routes/signoff';
 import keyFormsRouter from './routes/keyForms';
 import settingsRouter from './routes/settings';
 import diagRouter from './routes/diag';
+import dataQualityRouter from './routes/dataQuality';
 
 // Catch crashes before the health check has a chance to respond
 process.on('uncaughtException', (err) => {
@@ -99,6 +100,7 @@ app.use('/api/signoff', signoffRouter);
 app.use('/api/key-forms', keyFormsRouter);
 // Deployed-state diagnostics (JWT + admin only)
 app.use('/api/_diag', diagRouter);
+app.use('/api/data-quality', dataQualityRouter);
 
 // ── Tier 3 boot self-check ──────────────────────────────────────────────────
 // One grep-able line per start proving WHERE the DB lives and whether it is on
