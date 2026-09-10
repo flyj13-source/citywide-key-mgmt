@@ -191,7 +191,7 @@ describe('FULL TRANSFER + HANDOVER FLAG', () => {
     // SMTP is unconfigured in tests — the failure is reported, never silent.
     expect(res.body.email.ok).toBe(false);
     expect(res.body.email.recipients).toEqual([
-      'odvin@citywideboston.com', 'fallon@citywideboston.com', 'cara@citywideboston.com',
+      'odvin@citywideboston.com', 'fallon@citywideboston.com', 'cangeloni@gocitywide.com',
     ]);
 
     const pend = all('SELECT pending_handover, pending_handover_from, pending_handover_to FROM accounts WHERE id = ?', clientIds[0])[0];

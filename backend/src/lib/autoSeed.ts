@@ -3,6 +3,7 @@ import db from './db';
 import { encrypt } from './crypto';
 import { backfillStaffManagers } from './backfillStaffManagers';
 import { seedTestFixtures } from './testFixtures';
+import { applyMailboxUpdates, CARA_NEW_EMAIL } from './mailboxUpdates';
 
 // Runs at every server startup. Idempotent — only writes when rows are missing.
 // This is the ONLY place seeding happens in production; seed.ts is local-dev-only.
@@ -29,6 +30,31 @@ function seedFixtures(): void {
   } catch (e) {
     // A fixture failure must never stop the app from booting.
     console.error('[seed] Test fixtures could not be seeded:', (e as Error).message);
+  }
+}
+
+/**
+ * One-time address changes that can only reach the deployed database at boot.
+ * Guarded internally so a later correction in the UI is never overwritten.
+ */
+function applyMailboxChanges(): void {
+  try {
+    const r = applyMailboxUpdates();
+    if (!r.applied) return;
+    console.log(
+      `✓ [seed] Mailbox update applied: ${r.staff_rows_updated} roster row(s) → ${CARA_NEW_EMAIL}; `
+      + `custody notifications ${r.notify_before ?? '(unset)'} → ${r.notify_after}`
+    );
+    if (r.staff_matched.length === 0) {
+      // Worth shouting about: her roster row is named something else, so the
+      // holder-side half of the change did not happen.
+      console.warn(
+        `⚠ [seed] No staff_managers row named "Cara Angeloni" — her roster address was NOT changed. `
+        + 'Check the spelling on the roster.'
+      );
+    }
+  } catch (e) {
+    console.error('[seed] Mailbox update failed:', (e as Error).message);
   }
 }
 
@@ -80,6 +106,7 @@ export function autoSeedIfEmpty(): void {
   if (count > 0) {
     console.log(`✓ [seed] Accounts table has ${count} rows — skipping demo data`);
     seedStaffManagerRoster();
+    applyMailboxChanges();
     seedFixtures();
     return;
   }
@@ -145,6 +172,7 @@ export function autoSeedIfEmpty(): void {
   console.log(`✓ [seed] Inserted ${ics.length} IC vendors + ${customers.length} demo customers`);
 
   seedStaffManagerRoster();
+  applyMailboxChanges();
   seedFixtures();
 }
 

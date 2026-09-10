@@ -181,7 +181,8 @@ describe('MULTI-KEY CHECK-OUT', () => {
     expect(row.action).toBe('custody_email_failed');
     const meta = JSON.parse(row.metadata);
     expect(meta.kind).toBe('checkout');
-    expect(meta.recipients).toEqual(['jmartinez@example.test', 'cara@citywideboston.com']);
+    // Cara's copy now lands on the new mailbox; her LOGIN is unchanged.
+    expect(meta.recipients).toEqual(['jmartinez@example.test', 'cangeloni@gocitywide.com']);
     expect(meta.error).toBeTruthy();
   });
 
@@ -799,7 +800,7 @@ describe('CUSTODY NOTIFICATION SETTING', () => {
   it('reads the stored recipient and what the mailer will actually use', async () => {
     const res = await auth(request(app).get('/api/settings/custody-notification'));
     expect(res.status).toBe(200);
-    expect(res.body.effective).toContain('cara@citywideboston.com');
+    expect(res.body.effective).toContain('cangeloni@gocitywide.com');
   });
 
   it('accepts one or more addresses and audits the change', async () => {

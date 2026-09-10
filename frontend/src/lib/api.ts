@@ -368,6 +368,23 @@ export const getHoldersWithCustody = (includeTest = false) =>
 export const getReturnContext = (accountId: number, holder: string) =>
   req<ReturnContext>(`/assignments/return-context?account_id=${accountId}&holder=${encodeURIComponent(holder)}`);
 
+// The signed-in person's ROSTER record. The login table and the roster are two
+// records about one person and can hold different addresses — the login is how
+// they sign in, the roster is where their mail goes. Custody recorded for
+// "Myself" must use the roster one.
+export interface MyRosterRecord {
+  on_roster: boolean;
+  id?: number;
+  name: string | null;
+  /** The address to use — roster where there is one, login otherwise. */
+  email: string | null;
+  roster_email?: string | null;
+  login_email: string | null;
+  role_category?: string | null;
+  manager_type?: string | null;
+}
+export const getMyRosterRecord = () => req<MyRosterRecord>('/staff/me');
+
 export const getHolders = () =>
   req<{ employees: HolderOption[]; ics: HolderOption[] }>('/assignments/holders');
 export const checkout = (data: {

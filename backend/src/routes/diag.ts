@@ -9,6 +9,7 @@ import {
   LEGACY_TEST_MANAGER_NAME, EXPECTED_FIXTURE_COUNT, EXPECTED_FIXTURE_NAMES,
 } from '../lib/testFixtures';
 import { logAudit } from '../lib/audit';
+import { mailboxUpdateState } from '../lib/mailboxUpdates';
 
 const router = Router();
 
@@ -204,6 +205,10 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
       ),
       customers_including_test: scalar("SELECT COUNT(*) AS c FROM accounts WHERE record_type='customer'"),
     },
+    // Cara's mailbox move — checkable from outside, since the update can only
+    // run at boot and "the code shipped" is not "the rows changed".
+    mailbox: mailboxUpdateState(),
+
     holder_grid: {
       expected: gridCells.length,
       present: gridPresent.length,

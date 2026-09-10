@@ -247,6 +247,45 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
 });
 
 // ── GET /api/staff/:id — one staff member + holdings + accounts ──────────────
+// ── GET /api/staff/me — the signed-in person's ROSTER record ────────────────
+// The login table and the roster are two different records about one person,
+// and they can legitimately hold different addresses: the login is how she
+// signs in, the roster is where her mail goes. When she records custody for
+// HERSELF, the address that matters is the roster one — that is the whole
+// point of the roster carrying an address at all.
+//
+// Declared before /:id so "me" is not parsed as an id.
+router.get('/me', requireAuth, (req: AuthRequest, res: Response) => {
+  const name = String(req.manager?.name ?? '').trim();
+  const loginEmail = req.manager?.email ?? null;
+  if (!name) return res.json({ on_roster: false, name: null, email: loginEmail, login_email: loginEmail });
+
+  // By login link first — an explicit association beats a name match — then by
+  // name, which is how the two tables are related everywhere else.
+  const byLink = req.manager?.id != null
+    ? db.prepare('SELECT * FROM staff_managers WHERE login_manager_id = ? LIMIT 1').get(req.manager.id) as any
+    : null;
+  const raw = byLink ?? db.prepare(
+    'SELECT * FROM staff_managers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1'
+  ).get(name) as any;
+
+  if (!raw) return res.json({ on_roster: false, name, email: loginEmail, login_email: loginEmail });
+  const r = Object.assign({}, raw);
+  const rosterEmail = cleanText(r.email);
+  res.json({
+    on_roster: true,
+    id: r.id,
+    name: r.name,
+    // The address to use for this person. Falls back to the login only when
+    // the roster has none, so a blank roster row is never worse than before.
+    email: rosterEmail ?? loginEmail,
+    roster_email: rosterEmail,
+    login_email: loginEmail,
+    role_category: r.role_category ?? null,
+    manager_type: r.manager_type ?? null,
+  });
+});
+
 router.get('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   const row = db.prepare('SELECT * FROM staff_managers WHERE id = ?').get(req.params.id) as any;
   if (!row) return res.status(404).json({ error: 'Staff member not found' });

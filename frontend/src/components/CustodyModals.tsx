@@ -6,7 +6,7 @@ import SignaturePad, { type SignaturePadHandle } from './SignaturePad';
 import { getManager } from '../lib/auth';
 import {
   getKeyAvailability, getHolders, getRecentHolders, checkout, checkin, getAssignments, saveHolderEmail,
-  getCheckoutContext, getCheckinContext, getReturnContext, signInPerson, resendSignoff,
+  getCheckoutContext, getCheckinContext, getReturnContext, getMyRosterRecord, signInPerson, resendSignoff,
   type ReturnContext,
   type Assignment, type HolderOption, type KeyAvailability, type KeyTypeKey, type MailOutcome,
   type SignatureStatus,
@@ -518,6 +518,7 @@ export function CheckOutModal({
   onDone: () => void;
 }) {
   const me = getManager();
+  const myEmail = useMyEmail();
   const [account, setAccount] = useState<{ id: number; name: string } | null>(presetAccount);
   const [avail, setAvail] = useState<KeyAvailability[]>([]);
   const [availLoading, setAvailLoading] = useState(false);
@@ -586,13 +587,13 @@ export function CheckOutModal({
   }, [account]);
 
   useEffect(() => {
-    if (mode === 'self') setEmail(me?.email ?? '');
+    if (mode === 'self') setEmail(myEmail);
     else setEmail(holder?.email ?? '');
     // A new holder is a new decision — never carry a previous "proceed unsigned"
     // choice onto a different person.
     setProceedUnsigned(false);
     setNoEmailReason('');
-  }, [mode, holder, me?.email]);
+  }, [mode, holder, myEmail]);
 
   const holderName = mode === 'self' ? (me?.name ?? '') : (holder?.name ?? '');
   const holderType: 'employee' | 'ic' = mode === 'self' ? 'employee' : (holder?.type ?? 'employee');
@@ -863,6 +864,28 @@ export function CheckOutModal({
   );
 }
 
+/**
+ * The signed-in person's own mail address, taken from the ROSTER where they
+ * have a record there and from the login only as a fallback.
+ *
+ * These two can differ on purpose: a login is how somebody signs in, and
+ * changing it changes that. An address moved on the roster alone would
+ * otherwise never reach a "Myself" check-out, which is precisely the case the
+ * roster address exists to serve.
+ */
+function useMyEmail(): string {
+  const me = getManager();
+  const [email, setEmail] = useState(me?.email ?? '');
+  useEffect(() => {
+    let cancelled = false;
+    getMyRosterRecord()
+      .then((r) => { if (!cancelled && r.email) setEmail(r.email); })
+      .catch(() => { /* the login address is already in state */ });
+    return () => { cancelled = true; };
+  }, []);
+  return email;
+}
+
 // ── Check In modal ───────────────────────────────────────────────────────────
 // Four decisions, in the order a return actually happens: which client, who is
 // handing the keys back, which keys, and how it gets signed.
@@ -884,6 +907,7 @@ export function CheckInModal({
   onDone: () => void;
 }) {
   const me = getManager();
+  const myEmail = useMyEmail();
   const [account, setAccount] = useState<{ id: number; name: string } | null>(presetAccount);
 
   // Who is returning — the same control as a check-out, always present.
@@ -939,9 +963,9 @@ export function CheckInModal({
   }, [presetAssignmentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (mode === 'self') setEmail(me?.email ?? '');
+    if (mode === 'self') setEmail(myEmail);
     else setEmail(holder?.email ?? '');
-  }, [mode, holder, me?.email]);
+  }, [mode, holder, myEmail]);
 
   // ── The inference (§2) ────────────────────────────────────────────────────
   // Both facts in hand → ask the server what is open and pre-fill from it.

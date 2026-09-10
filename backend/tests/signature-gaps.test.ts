@@ -130,7 +130,7 @@ describe('UNSIGNED BY NECESSITY', () => {
   it('NOTIFIES CARA REGARDLESS — she is still the recipient with no holder email', () => {
     const row = one("SELECT * FROM audit_log WHERE action IN ('custody_email_sent','custody_email_failed') ORDER BY id DESC LIMIT 1");
     const meta = JSON.parse(row.metadata);
-    expect(meta.recipients).toEqual(['cara@citywideboston.com']);
+    expect(meta.recipients).toEqual(['cangeloni@gocitywide.com']);
   });
 
   it('IN-PERSON FALLBACK — a wet signature resolves it, recording the witness', async () => {
@@ -224,7 +224,7 @@ describe('SIGNED RECEIPT — three recipients', () => {
     expect(signRes.status).toBe(200);
     expect(signRes.body.email.recipients).toEqual([
       'wanda@citywideboston.com',      // 1. the signer
-      'cara@citywideboston.com',       // 2. Cara
+      'cangeloni@gocitywide.com',      // 2. Cara
       'odvin@citywideboston.com',      // 3. the other party
     ]);
     expect(all("SELECT * FROM audit_log WHERE action IN ('signed_receipt_sent','signed_receipt_failed')").length)
