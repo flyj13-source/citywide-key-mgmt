@@ -299,33 +299,74 @@ router.get('/holders', requireAuth, (req: AuthRequest, res: Response) => {
   const search = String(req.query.search || '').trim();
   const like = `%${search}%`;
 
+  // The roster group a person belongs to. Crew wins over manager_type: a crew
+  // row can carry a stale type from before the split, and what they DO is the
+  // thing the person picking needs to see.
+  const roleOf = (roleCategory: any, managerType: any): 'AM' | 'CCM' | 'AM + CCM' | 'Crew' => {
+    if (roleCategory === 'crew' || managerType === 'crew') return 'Crew';
+    if (managerType === 'both') return 'AM + CCM';
+    if (managerType === 'ccm') return 'CCM';
+    if (managerType === 'account_manager') return 'AM';
+    return 'Crew';
+  };
+
   const staff = (db.prepare(`
-    SELECT id, name, email, role_category, manager_type FROM staff_managers
+    SELECT id, name, email, role_category, manager_type, COALESCE(is_test, 0) AS is_test
+      FROM staff_managers
      WHERE COALESCE(active, 1) = 1 ${search ? 'AND (name LIKE ? OR email LIKE ?)' : ''}
      ORDER BY name ASC
   `).all(...(search ? [like, like] : [])) as any[]).map((r) => {
     const s = Object.assign({}, r);
     const email = cleanText(s.email);
+    const role = roleOf(s.role_category, s.manager_type);
     return {
+      // A stable identity for the option. The picker selects by this, never
+      // by id: a vendor and its named contact share one id, and matching on id
+      // alone would make the contact unselectable.
+      key: `employee:${s.id}`,
       id: s.id, name: s.name, email, type: 'employee' as const,
-      detail: s.role_category === 'crew' ? 'Crew' : 'Manager',
-      has_email: !!email,
+      role, detail: role,
+      has_email: !!email, is_test: Number(s.is_test) === 1 ? 1 : 0,
     };
   });
 
-  const ics = (db.prepare(`
-    SELECT id, ic_company_name, bc_vendor_number, ic_email FROM accounts
+  // ── IC vendors, and the named person at each ───────────────────────────────
+  // Keys are handed to a PERSON. Where a vendor record names its primary
+  // contact, that person is offered as their own option alongside the company:
+  // "AFC Cleaning" and "AFC Cleaning — Maria Santos" are different answers to
+  // "who took the keys", and only the second one is true when Maria took them.
+  // Both carry the vendor's address, because that is the address on file.
+  const ics: any[] = [];
+  const icRows = (db.prepare(`
+    SELECT id, ic_company_name, bc_vendor_number, ic_email, ic_primary_contact,
+           COALESCE(is_test, 0) AS is_test
+      FROM accounts
      WHERE (record_type = 'ic' OR record_type IS NULL) AND COALESCE(archived, 0) = 0
-       ${search ? 'AND (ic_company_name LIKE ? OR bc_vendor_number LIKE ?)' : ''}
+       ${search ? 'AND (ic_company_name LIKE ? OR bc_vendor_number LIKE ? OR ic_primary_contact LIKE ?)' : ''}
      ORDER BY ic_company_name ASC
-  `).all(...(search ? [like, like] : [])) as any[]).map((r) => {
-    const c = Object.assign({}, r);
+  `).all(...(search ? [like, like, like] : [])) as any[]).map((r) => Object.assign({}, r));
+
+  for (const c of icRows) {
     const email = cleanText(c.ic_email);
-    return {
+    const isTest = Number(c.is_test) === 1 ? 1 : 0;
+    ics.push({
+      key: `ic:${c.id}`,
       id: c.id, name: c.ic_company_name, email, type: 'ic' as const,
-      detail: c.bc_vendor_number || 'IC', has_email: !!email,
-    };
-  });
+      role: 'IC Vendor', detail: c.bc_vendor_number || 'IC',
+      has_email: !!email, is_test: isTest, contact: cleanText(c.ic_primary_contact),
+    });
+    const contact = cleanText(c.ic_primary_contact);
+    if (contact) {
+      ics.push({
+        // Same vendor id: the assignment still points at the vendor record,
+        // and only the name written on the form differs.
+        key: `ic:${c.id}:contact`,
+        id: c.id, name: `${c.ic_company_name} — ${contact}`, email, type: 'ic' as const,
+        role: 'IC Contact', detail: contact,
+        has_email: !!email, is_test: isTest, contact,
+      });
+    }
+  }
 
   res.json({ employees: staff, ics });
 });

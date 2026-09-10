@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Modal from './Modal';
+import AccountPicker from './AccountPicker';
+import HolderList, { sameHolder } from './HolderList';
 import SignaturePad, { type SignaturePadHandle } from './SignaturePad';
 import { getManager } from '../lib/auth';
 import {
-  getAccounts, getKeyAvailability, getHolders, getRecentHolders, checkout, checkin, getAssignments, saveHolderEmail,
+  getKeyAvailability, getHolders, getRecentHolders, checkout, checkin, getAssignments, saveHolderEmail,
   getCheckoutContext, getCheckinContext, signInPerson, resendSignoff,
   type Assignment, type HolderOption, type KeyAvailability, type KeyTypeKey, type MailOutcome,
   type SignatureStatus,
@@ -190,56 +192,11 @@ export function MissingEmailWarning({
   );
 }
 
-// A client picker that pre-fills from the selected registry row and otherwise
-// searches the whole registry server-side (the list is 578+ rows).
-export function ClientPicker({
-  value, onSelect,
-}: {
-  value: { id: number; name: string } | null;
-  onSelect: (v: { id: number; name: string } | null) => void;
-}) {
-  const [search, setSearch] = useState(value?.name ?? '');
-  const [results, setResults] = useState<any[]>([]);
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (value || !search.trim()) { setResults([]); return; }
-    const id = setTimeout(() => {
-      getAccounts({ search, type: 'all', limit: '20' })
-        .then((d) => { setResults(d.accounts); setOpen(true); })
-        .catch(() => setResults([]));
-    }, 250);
-    return () => clearTimeout(id);
-  }, [search, value]);
-
-  return (
-    <div className="relative">
-      <input
-        className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
-        placeholder="Search clients and IC vendors…"
-        value={search}
-        onChange={(e) => { setSearch(e.target.value); onSelect(null); }}
-      />
-      {open && !value && results.length > 0 && (
-        <div className="absolute z-30 w-full bg-white border border-cw-border rounded shadow-lg max-h-52 overflow-y-auto mt-1">
-          {results.map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              onClick={() => { onSelect({ id: a.id, name: a.ic_company_name }); setSearch(a.ic_company_name); setOpen(false); }}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2"
-            >
-              <span className="truncate">{a.ic_company_name}</span>
-              <span className="text-[10px] uppercase tracking-wide text-cw-muted shrink-0">
-                {a.record_type === 'customer' ? 'Customer' : 'IC'}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+// The account picker lives in AccountPicker.tsx so Check Out, Check In and
+// Transfer are literally the same control rather than three that drift apart.
+// The one that used to live here searched only after you typed and never
+// listed IC vendors as a group, so half the registry was unreachable from the
+// three screens where it matters most.
 
 // ── Multi-key checkbox list ──────────────────────────────────────────────────
 // Every key type available AT the client, each with a checkbox and a quantity.
@@ -351,17 +308,9 @@ export function HolderPicker({
       .catch(() => setRecent([]));
   }, [mode]);
 
-  const sameHolder = (a: HolderOption | null, b: HolderOption | null) =>
-    !!a && !!b && a.type === b.type && a.name === b.name;
-
   // The suggestion is not repeated in the recent strip — one row, one person.
   const recentShown = recent.filter((r) => !sameHolder(r, suggested ?? null)).slice(0, 5);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const match = (o: HolderOption) => !q || o.name.toLowerCase().includes(q) || (o.email || '').toLowerCase().includes(q);
-    return { employees: options.employees.filter(match), ics: options.ics.filter(match) };
-  }, [options, query]);
 
   return (
     <div className="space-y-3">
@@ -421,42 +370,22 @@ export function HolderPicker({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <select
-            className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
-            value={holder ? `${holder.type}:${holder.id ?? 'unlinked'}` : ''}
-            onChange={(e) => {
-              const [type, id] = e.target.value.split(':');
-              // Re-picking the unlinked entry keeps the holder it stands for;
-              // looking it up by id would find nothing and silently clear it.
-              if (id === 'unlinked') return;
-              const list = type === 'ic' ? options.ics : options.employees;
-              setHolder(list.find((o) => String(o.id) === id) ?? null);
-            }}
-            size={1}
-          >
-            <option value="">{loading ? 'Loading roster…' : placeholder}</option>
-            {/* A holder named on a client row can have no vendor or roster
-                record behind them. Still selectable — just not linkable. */}
-            {holder && holder.id == null && (
-              <option value={`${holder.type}:unlinked`}>{holder.name}</option>
-            )}
-            {filtered.employees.length > 0 && (
-              <optgroup label="City Wide Employees">
-                {filtered.employees.map((o) => (
-                  <option key={`employee:${o.id}`} value={`employee:${o.id}`}>
-                    {o.name}{o.detail ? ` — ${o.detail}` : ''}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {filtered.ics.length > 0 && (
-              <optgroup label="Independent Contractors">
-                {filtered.ics.map((o) => (
-                  <option key={`ic:${o.id}`} value={`ic:${o.id}`}>{o.name}</option>
-                ))}
-              </optgroup>
-            )}
-          </select>
+          <HolderList
+            options={options}
+            query={query}
+            value={holder}
+            onSelect={setHolder}
+            loading={loading}
+            emptyNote={placeholder}
+          />
+          {/* A holder named on a client row with no roster or vendor record
+              behind them is still a valid holder — just not one on this list. */}
+          {holder && holder.id == null && (
+            <p className="text-[11px] text-cw-muted">
+              Selected: <span className="font-medium text-[#1a1a1a]">{holder.name}</span> — named on the client
+              row, with no roster record behind them.
+            </p>
+          )}
           {holder && !holder.email && (
             <p className="text-[11px] text-[#7a5a00] bg-[#fff8e6] border border-[#e8cf8a] rounded px-2 py-1.5">
               No email on file for {holder.name} — enter one below so they receive the notification and sign-off link.
@@ -783,7 +712,7 @@ export function CheckOutModal({
       <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
         <div>
           <SectionLabel>Client</SectionLabel>
-          <ClientPicker value={account} onSelect={setAccount} />
+          <AccountPicker value={account} onSelect={setAccount} autoFocus />
           {presetAccount && account?.id === presetAccount.id && (
             <p className="text-[11px] text-gray-400 mt-1">Pre-filled from the row selected in the registry.</p>
           )}
@@ -1178,7 +1107,7 @@ export function CheckInModal({
       <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
         <div>
           <SectionLabel>Client</SectionLabel>
-          <ClientPicker value={account} onSelect={(v) => { setAccount(v); setSelectedId(''); }} />
+          <AccountPicker value={account} onSelect={(v) => { setAccount(v); setSelectedId(''); }} />
         </div>
 
         <div>

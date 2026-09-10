@@ -90,6 +90,94 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   res.json({ accounts: accounts.map((a) => Object.assign({}, a)), total, page: parseInt(page), limit: parseInt(limit) });
 });
 
+// ── GET /api/accounts/options — the picker feed ──────────────────────────────
+// Check Out / Check In / Transfer all need "every record in the system", and
+// at 578 rows the registry list endpoint is the wrong tool: it does SELECT *,
+// so a picker asking for everything would pull every column of every row —
+// including the encrypted access codes — across the wire to render a dropdown.
+//
+// This returns the four fields a picker actually draws, plus the two the smart
+// default needs to resolve the client's assigned IC. Search is SERVER-SIDE over
+// the name AND both numbers, so "AFC" and "0101410" both work, and the result
+// is capped: the UI never renders 578 options at once.
+//
+// Test fixtures are INCLUDED here, flagged. Everywhere else they are opt-in,
+// because everywhere else the number is a count somebody might quote. A picker
+// is not a count — it is a list of things you are allowed to act on, and the
+// fixtures exist precisely to be acted on. They arrive wearing a TEST pill.
+router.get('/options', requireAuth, (req: AuthRequest, res: Response) => {
+  const search = String(req.query.search ?? '').trim();
+  // Per GROUP, not overall: 40 customers and 40 ICs, so a search matching many
+  // customers can never push the IC vendors off the end of the list.
+  const perGroup = Math.min(Math.max(parseInt(String(req.query.limit ?? '40'), 10) || 40, 1), 200);
+  const like = `%${search}%`;
+
+  const searchSql = search
+    ? `AND (ic_company_name LIKE ? OR bc_client_number LIKE ? OR bc_vendor_number LIKE ?)`
+    : '';
+  const searchParams = search ? [like, like, like] : [];
+
+  const group = (typeSql: string) => {
+    const where = `${typeSql} AND COALESCE(archived, 0) = 0 ${searchSql}`;
+    const rows = (db.prepare(`
+      SELECT id, ic_company_name, bc_client_number, bc_vendor_number, record_type,
+             ic_name, COALESCE(is_test, 0) AS is_test
+        FROM accounts
+       WHERE ${where}
+       -- Fixtures last inside their group: apparatus should never be the first
+       -- thing under the cursor when someone is working on real records.
+       ORDER BY COALESCE(is_test, 0) ASC, ic_company_name ASC
+       LIMIT ?
+    `).all(...searchParams, perGroup) as any[]).map((raw) => {
+      const r = Object.assign({}, raw);
+      const isCustomer = r.record_type === 'customer';
+      return {
+        id: r.id as number,
+        name: r.ic_company_name as string,
+        // One field the UI prints beside the name, already resolved to the
+        // number that MEANS something for this record type.
+        number: (isCustomer ? r.bc_client_number : r.bc_vendor_number) ?? null,
+        record_type: isCustomer ? 'customer' : 'ic',
+        is_test: Number(r.is_test) === 1 ? 1 : 0,
+        // Lets the caller show "IC: …" without a second round trip.
+        ic_name: r.ic_name ?? null,
+      };
+    });
+    const total = Object.assign({}, db.prepare(
+      `SELECT COUNT(*) AS c FROM accounts WHERE ${where}`
+    ).get(...searchParams) as any).c as number;
+    return { rows, total };
+  };
+
+  // An explicit group filter, so a picker can offer "IC Vendors" as one click
+  // instead of asking someone to scroll past 40 customers to reach them. The
+  // skipped group still reports its true total, so the tab can show a count.
+  const want = String(req.query.type ?? 'all');
+  const countOnly = (typeSql: string) => ({
+    rows: [] as any[],
+    total: Object.assign({}, db.prepare(
+      `SELECT COUNT(*) AS c FROM accounts WHERE ${typeSql} AND COALESCE(archived,0)=0 ${searchSql}`
+    ).get(...searchParams) as any).c as number,
+  });
+
+  const CUSTOMER_SQL = "record_type = 'customer'";
+  const IC_SQL = "(record_type = 'ic' OR record_type IS NULL)";
+  const customers = want === 'ic' ? countOnly(CUSTOMER_SQL) : group(CUSTOMER_SQL);
+  const ics = want === 'customer' ? countOnly(IC_SQL) : group(IC_SQL);
+
+  res.json({
+    customers: customers.rows,
+    ics: ics.rows,
+    // How many exist versus how many were sent — the UI says "showing 40 of
+    // 577, keep typing" rather than pretending the list is complete.
+    totals: { customers: customers.total, ics: ics.total },
+    truncated: customers.rows.length < customers.total || ics.rows.length < ics.total,
+    limit: perGroup,
+    search,
+    type: want,
+  });
+});
+
 // ── GET /api/accounts/ids — every id matching the CURRENT filter ─────────────
 // Powers "Select all N matching". Returns ids plus only the fields the
 // selection toolbar needs to decide which bulk actions are legal — never the

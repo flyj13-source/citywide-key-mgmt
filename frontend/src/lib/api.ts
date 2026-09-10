@@ -271,7 +271,41 @@ export interface HolderOption {
   type: 'employee' | 'ic';
   detail: string;
   has_email: boolean;
+  /** Stable option identity. A vendor and its named contact share one id, so
+   *  selection is keyed on this, never on id alone. */
+  key?: string;
+  /** Roster group: AM · CCM · AM + CCM · Crew · IC Vendor · IC Contact. */
+  role?: string;
+  is_test?: number;
+  /** IC only: the named primary contact on the vendor record. */
+  contact?: string | null;
 }
+
+// ── Account picker feed ─────────────────────────────────────────────────────
+// Deliberately not the registry list endpoint: that does SELECT *, and a
+// dropdown does not need (or want) every column of 578 rows. Search runs
+// server-side over the name and BOTH numbers.
+export interface AccountOption {
+  id: number;
+  name: string;
+  /** Already resolved to the number that means something for this type. */
+  number: string | null;
+  record_type: 'customer' | 'ic';
+  is_test: number;
+  ic_name: string | null;
+}
+export const getAccountOptions = (search = '', type: 'all' | 'customer' | 'ic' = 'all', limit = 40) =>
+  req<{
+    customers: AccountOption[];
+    ics: AccountOption[];
+    /** True totals for BOTH groups, even the one filtered out — so a group
+     *  tab can show its count without a second request. */
+    totals: { customers: number; ics: number };
+    truncated: boolean;
+    limit: number;
+    search: string;
+    type: string;
+  }>(`/accounts/options?limit=${limit}&type=${type}${search ? `&search=${encodeURIComponent(search)}` : ''}`);
 
 // Explicit lifecycle so "a signature is coming" and "no signature will ever
 // arrive" are never rendered the same way.

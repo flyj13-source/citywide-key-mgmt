@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import Modal from './Modal';
+import AccountPicker from './AccountPicker';
+import HolderList, { sameHolder } from './HolderList';
 import {
-  getAccounts, getCurrentHolders, getTransferable, getHolders, transferKeys,
+  getCurrentHolders, getTransferable, getHolders, transferKeys, getCheckoutContext,
   type CurrentHolder, type HolderOption, type KeyLine, type KeyTypeKey, type TransferResult,
 } from '../lib/api';
 
@@ -21,55 +23,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function ErrorBanner({ children }: { children: React.ReactNode }) {
   return <p className="text-sm text-[#C0272D] bg-[#fbeaea] border border-[#f0c9cb] rounded px-3 py-2">{children}</p>;
-}
-
-function ClientPicker({
-  value, onSelect,
-}: {
-  value: { id: number; name: string } | null;
-  onSelect: (v: { id: number; name: string } | null) => void;
-}) {
-  const [search, setSearch] = useState(value?.name ?? '');
-  const [results, setResults] = useState<any[]>([]);
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (value || !search.trim()) { setResults([]); return; }
-    const id = setTimeout(() => {
-      getAccounts({ search, type: 'all', limit: '20' })
-        .then((d) => { setResults(d.accounts); setOpen(true); })
-        .catch(() => setResults([]));
-    }, 250);
-    return () => clearTimeout(id);
-  }, [search, value]);
-
-  return (
-    <div className="relative">
-      <input
-        className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
-        placeholder="Search clients and IC vendors…"
-        value={search}
-        onChange={(e) => { setSearch(e.target.value); onSelect(null); }}
-      />
-      {open && !value && results.length > 0 && (
-        <div className="absolute z-30 w-full bg-white border border-cw-border rounded shadow-lg max-h-52 overflow-y-auto mt-1">
-          {results.map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              onClick={() => { onSelect({ id: a.id, name: a.ic_company_name }); setSearch(a.ic_company_name); setOpen(false); }}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2"
-            >
-              <span className="truncate">{a.ic_company_name}</span>
-              <span className="text-[10px] uppercase tracking-wide text-cw-muted shrink-0">
-                {a.record_type === 'customer' ? 'Customer' : 'IC'}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 interface Pick { checked: boolean; qty: number }
@@ -118,6 +71,32 @@ export default function TransferModal({
   const [error, setError] = useState('');
   const [done, setDone] = useState<TransferResult | null>(null);
 
+  // ── Smart default (§3) ────────────────────────────────────────────────────
+  // Once a client is chosen, the person normally holding its keys — the
+  // assigned IC, or the AM where there is none — is pre-selected as the
+  // RECIPIENT. It is the common case, and it stays one click to override.
+  // Never pre-selected as the person handing over: who currently HAS the keys
+  // is a fact on record, not something to guess at.
+  const [suggested, setSuggested] = useState<(HolderOption & { reason?: string }) | null>(null);
+  useEffect(() => {
+    if (!account) { setSuggested(null); return; }
+    let cancelled = false;
+    getCheckoutContext(account.id)
+      .then((ctx) => {
+        if (cancelled) return;
+        const sh = ctx.suggested_holder;
+        if (!sh) { setSuggested(null); return; }
+        const h: HolderOption & { reason?: string } = {
+          id: sh.id, name: sh.name, email: sh.email, type: sh.type,
+          detail: sh.reason, has_email: sh.has_email, reason: sh.reason,
+        };
+        setSuggested(h);
+        setToHolder((cur) => cur ?? h);
+      })
+      .catch(() => { if (!cancelled) setSuggested(null); });
+    return () => { cancelled = true; };
+  }, [account]);
+
   // Who currently holds keys AT this client — only they have anything to give.
   useEffect(() => {
     if (!account) { setHolders([]); setFromHolder(''); return; }
@@ -151,13 +130,14 @@ export default function TransferModal({
 
   useEffect(() => { setToEmail(toHolder?.email ?? ''); }, [toHolder]);
 
-  const filteredRoster = useMemo(() => {
-    const q = toQuery.trim().toLowerCase();
-    const match = (o: HolderOption) =>
-      (!q || o.name.toLowerCase().includes(q) || (o.email || '').toLowerCase().includes(q))
-      && o.name.trim().toLowerCase() !== fromHolder.trim().toLowerCase();
-    return { employees: roster.employees.filter(match), ics: roster.ics.filter(match) };
-  }, [roster, toQuery, fromHolder]);
+  // A suggestion that turns out to be the person handing over is not a
+  // transfer — drop it rather than leaving an impossible pair selected.
+  useEffect(() => {
+    if (toHolder && fromHolder && toHolder.name.trim().toLowerCase() === fromHolder.trim().toLowerCase()) {
+      setToHolder(null);
+    }
+  }, [fromHolder, toHolder]);
+
 
   const lines = Object.entries(picks)
     .filter(([, p]) => p.checked && p.qty > 0)
@@ -167,6 +147,7 @@ export default function TransferModal({
   // An accounts-only move needs no keys — requiring them would block the very
   // case where the metal has not moved yet.
   const canSubmit = !!account && !!fromHolder && !!toHolder && !saving
+    && toHolder.name.trim().toLowerCase() !== fromHolder.trim().toLowerCase()
     && (!movesKeys || lines.length > 0);
 
   const setPick = (type: string, patch: Partial<Pick>) =>
@@ -287,7 +268,7 @@ export default function TransferModal({
 
         <div>
           <SectionLabel>Client</SectionLabel>
-          <ClientPicker value={account} onSelect={(v) => { setAccount(v); setFromHolder(''); }} />
+          <AccountPicker value={account} onSelect={(v) => { setAccount(v); setFromHolder(''); }} autoFocus />
         </div>
 
         <div>
@@ -374,33 +355,31 @@ export default function TransferModal({
               value={toQuery}
               onChange={(e) => setToQuery(e.target.value)}
             />
-            <select
-              className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
-              value={toHolder ? `${toHolder.type}:${toHolder.id}` : ''}
-              onChange={(e) => {
-                const [type, id] = e.target.value.split(':');
-                const list = type === 'ic' ? roster.ics : roster.employees;
-                setToHolder(list.find((o) => String(o.id) === id) ?? null);
-              }}
-            >
-              <option value="">— Select the person receiving the keys —</option>
-              {filteredRoster.employees.length > 0 && (
-                <optgroup label="City Wide Employees">
-                  {filteredRoster.employees.map((o) => (
-                    <option key={`employee:${o.id}`} value={`employee:${o.id}`}>
-                      {o.name}{o.detail ? ` — ${o.detail}` : ''}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {filteredRoster.ics.length > 0 && (
-                <optgroup label="Independent Contractors">
-                  {filteredRoster.ics.map((o) => (
-                    <option key={`ic:${o.id}`} value={`ic:${o.id}`}>{o.name}</option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
+            {suggested && suggested.name.trim().toLowerCase() !== fromHolder.trim().toLowerCase() && (
+              <button
+                type="button"
+                onClick={() => setToHolder(suggested)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs transition-colors ${
+                  sameHolder(toHolder, suggested)
+                    ? 'bg-[#C0272D] border-[#C0272D] text-white'
+                    : 'bg-white border-cw-border text-[#1a1a1a] hover:border-[#C0272D]'
+                }`}
+                title={`Assigned to this client${suggested.email ? ` · ${suggested.email}` : ''}`}
+              >
+                <span className="font-medium truncate max-w-[15rem]">{suggested.name}</span>
+                <span className={sameHolder(toHolder, suggested) ? 'text-white/75' : 'text-cw-muted'}>
+                  {suggested.reason ?? 'assigned'}
+                </span>
+              </button>
+            )}
+            <HolderList
+              options={roster}
+              query={toQuery}
+              value={toHolder}
+              onSelect={setToHolder}
+              exclude={fromHolder}
+              emptyNote="— Select the person receiving the keys —"
+            />
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Their email <span className="text-gray-400 font-normal">— receives the notification + signature link</span>
