@@ -14,7 +14,7 @@ import { logAudit } from '../lib/audit';
 import { hashSignature } from '../lib/pdf';
 import {
   createKeyForm, getKeyForm, getKeyFormByToken, listKeyForms, markSent,
-  parseScope, serializeForm, snapshotHolder, FORM_EVENT_LABEL,
+  parseScope, serializeForm, snapshotHolder, FORM_EVENT_LABEL, EmptyHoldingsError, isReturnReceipt,
   type FormEventType,
 } from '../lib/keyForm';
 import { failedSendCount, failedSendIds, correctionFormCounts } from '../lib/keyForm';
@@ -112,15 +112,25 @@ router.post('/generate', requireAuth, async (req: AuthRequest, res: Response) =>
 
   const eventType: FormEventType = 'audit';
   const created: any[] = [];
+  // Holders with nothing on record. Collected rather than thrown on, so a
+  // multi-select generating ten forms still produces the nine that have
+  // content and reports the one that does not.
+  const empty: string[] = [];
   for (const h of clean) {
-    const row = createKeyForm({
-      eventType,
-      holderName: h.name,
-      holderType: h.type as 'employee' | 'ic',
-      holderEmail: h.email || null,
-      generatedBy: actor,
-      sourceKind: 'manual',
-    });
+    let row: any;
+    try {
+      row = createKeyForm({
+        eventType,
+        holderName: h.name,
+        holderType: h.type as 'employee' | 'ic',
+        holderEmail: h.email || null,
+        generatedBy: actor,
+        sourceKind: 'manual',
+      });
+    } catch (e) {
+      if (e instanceof EmptyHoldingsError) { empty.push(e.holder); continue; }
+      throw e;
+    }
     await refreshPdf(row.id);
     const fresh = getKeyForm(row.id);
     created.push(serializeForm(fresh));
@@ -130,7 +140,23 @@ router.post('/generate', requireAuth, async (req: AuthRequest, res: Response) =>
       no_email: !!row.no_email,
     });
   }
-  res.status(201).json({ forms: created, count: created.length });
+  // Nothing could be generated at all — the whole request was holders with no
+  // keys. That is a refusal, not an empty success.
+  if (!created.length && empty.length) {
+    return res.status(409).json({
+      error: empty.length === 1
+        ? `${empty[0]} has no keys on record; generate a return receipt instead.`
+        : `No keys on record for ${empty.join(', ')}; generate a return receipt instead.`,
+      code: 'NO_KEYS_ON_RECORD',
+      skipped: empty,
+    });
+  }
+  res.status(201).json({
+    forms: created,
+    count: created.length,
+    // Named, so a partial run never looks like it covered everyone asked for.
+    skipped: empty,
+  });
 });
 
 /** Shared send path — used by the single, bulk and auto-send callers. */
@@ -218,19 +244,34 @@ router.post('/:id(\\d+)/regenerate', requireAuth, async (req: AuthRequest, res: 
 
   const actor = req.manager?.name ?? 'System';
   // Fresh, from the database — never from the old form's stored scope.
-  const fresh = createKeyForm({
-    eventType: old.event_type as FormEventType,
-    holderName: old.holder_name,
-    holderType: (old.holder_type as 'employee' | 'ic') ?? 'employee',
-    holderEmail: old.holder_email ?? null,
-    holderId: old.holder_id ?? null,
-    eventNote: old.event_type === 'audit' ? null : `Regenerated from ${old.form_no}`,
-    generatedBy: actor,
-    sourceKind: old.source_kind ?? null,
-    sourceRef: old.source_ref ?? null,
-    counterpartyName: old.counterparty_name ?? null,
-    supersedes: id,
-  });
+  let fresh: any;
+  try {
+    fresh = createKeyForm({
+      eventType: old.event_type as FormEventType,
+      holderName: old.holder_name,
+      holderType: (old.holder_type as 'employee' | 'ic') ?? 'employee',
+      holderEmail: old.holder_email ?? null,
+      holderId: old.holder_id ?? null,
+      eventNote: old.event_type === 'audit' ? null : `Regenerated from ${old.form_no}`,
+      generatedBy: actor,
+      sourceKind: old.source_kind ?? null,
+      sourceRef: old.source_ref ?? null,
+      counterpartyName: old.counterparty_name ?? null,
+      supersedes: id,
+    });
+  } catch (e) {
+    // The holder has returned everything since this form was made. Refusing
+    // leaves the original standing rather than replacing a real statement of
+    // holdings with a blank one.
+    if (e instanceof EmptyHoldingsError) {
+      return res.status(409).json({
+        error: `${old.holder_name} has no keys on record; generate a return receipt instead. `
+          + `${old.form_no} is left as it stands.`,
+        code: 'NO_KEYS_ON_RECORD',
+      });
+    }
+    throw e;
+  }
   await refreshPdf(fresh.id);
 
   db.prepare(`
@@ -441,6 +482,12 @@ router.get('/token/:token', (req: Request, res: Response) => {
     event_note: scope.event_note,
     total_keys: row.total_keys,
     clients_covered: row.clients_covered,
+    // A check-in link opens a RETURN RECEIPT: the signer is confirming the
+    // handover, with whatever remains shown underneath. Resolved server-side
+    // so the page never has to infer the document kind from the event name.
+    doc_kind: isReturnReceipt(row) ? 'return_receipt' : 'holdings',
+    returned: scope.returned_lines ?? null,
+    returned_keys: row.returned_keys ?? 0,
     generated_at: row.created_at,
     generated_by: row.generated_by,
     signed_at: row.signed_at,

@@ -63,8 +63,50 @@ export interface FormLine {
 
 export interface FormScope {
   lines: FormLine[];
+  /**
+   * What this event RETURNED, on a check-in. Present only on return receipts.
+   *
+   * This is the signable content of a return: the keys that physically came
+   * back, which the holder is attesting to having handed over. It is kept
+   * separate from `lines` — the holder's position AFTER the return — because
+   * the two answer different questions and a return that empties someone's
+   * position leaves `lines` empty. A form whose only content was `lines` then
+   * had nothing to sign and read as a statement that they hold nothing, which
+   * is true but is not what they came to sign.
+   */
+  returned_lines?: FormLine[];
   /** Free text describing what the triggering event moved, if anything. */
   event_note?: string | null;
+}
+
+/**
+ * A check-in form is a RETURN RECEIPT: its subject is the keys handed back,
+ * with the holder's remaining position shown underneath as context.
+ *
+ * Every other event type states a position — what the person holds — and is
+ * only meaningful when that position has something in it.
+ */
+export function isReturnReceipt(row: { event_type?: string } | null | undefined): boolean {
+  return row?.event_type === 'checkin';
+}
+
+/** Event types whose whole purpose is to state a holder's standing position. */
+const HOLDINGS_EVENTS: FormEventType[] = ['audit', 'checkout'];
+
+/**
+ * Thrown when a holdings form would be generated with nothing on it.
+ *
+ * A "currently holds" document listing zero keys is not a document — there is
+ * nothing for the holder to attest to, and signing it means signing a blank.
+ * The caller is told what to generate instead rather than being handed an
+ * empty form.
+ */
+export class EmptyHoldingsError extends Error {
+  readonly code = 'NO_KEYS_ON_RECORD';
+  constructor(public readonly holder: string) {
+    super('No keys on record; generate a return receipt instead.');
+    this.name = 'EmptyHoldingsError';
+  }
 }
 
 const TTL_MS = 48 * 60 * 60 * 1000;
@@ -289,6 +331,12 @@ export interface CreateFormInput {
   holderEmail?: string | null;
   /** Omit to snapshot the holder's CURRENT state. */
   lines?: FormLine[];
+  /**
+   * The keys this event handed back. Supplying these makes the document a
+   * return receipt: they become its signable subject, and `lines` (the
+   * position afterwards) is rendered underneath as remaining context.
+   */
+  returnedLines?: FormLine[];
   eventNote?: string | null;
   holderId?: number | null;
   generatedBy: string;
@@ -310,9 +358,24 @@ export function createKeyForm(input: CreateFormInput): any {
   // Recomputed here, always. `lines` is only ever supplied for event forms
   // that describe what MOVED — never as a holder position from a caller.
   const lines = input.lines ?? snapshotHolder(input.holderName, input.holderType);
+  const returnedLines = input.returnedLines ?? [];
+
+  // A holdings form with no holdings has nothing on it to sign. Refused here,
+  // at the one place every form is born, so no route can route around it.
+  // Return receipts are exempt by construction: their subject is the keys that
+  // came back, which is never empty.
+  if (HOLDINGS_EVENTS.includes(input.eventType) && lines.length === 0) {
+    throw new EmptyHoldingsError(input.holderName);
+  }
+
   const dataVersion = dataVersionFor(lines);
-  const scope: FormScope = { lines, event_note: input.eventNote ?? null };
+  const scope: FormScope = {
+    lines,
+    ...(returnedLines.length ? { returned_lines: returnedLines } : {}),
+    event_note: input.eventNote ?? null,
+  };
   const totalKeys = lines.reduce((n, l) => n + l.subtotal, 0);
+  const returnedKeys = returnedLines.reduce((n, l) => n + l.subtotal, 0);
 
   const hasEmail = !!email;
   const token = hasEmail ? crypto.randomBytes(32).toString('hex') : null;
@@ -323,8 +386,8 @@ export function createKeyForm(input: CreateFormInput): any {
       (event_type, holder_name, holder_type, holder_role, holder_id,
        holder_email, holder_phone, scope_json, clients_covered, total_keys,
        status, token, token_expires_at, generated_by, source_kind, source_ref,
-       counterparty_name, no_email, data_version, supersedes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       counterparty_name, no_email, data_version, supersedes, returned_keys)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.eventType, input.holderName, input.holderType ?? 'employee',
     profile.role, input.holderId ?? profile.id,
@@ -332,7 +395,7 @@ export function createKeyForm(input: CreateFormInput): any {
     token, expires, input.generatedBy,
     input.sourceKind ?? null, input.sourceRef ?? null,
     input.counterpartyName ?? null, hasEmail ? 0 : 1,
-    dataVersion, input.supersedes ?? null,
+    dataVersion, input.supersedes ?? null, returnedKeys,
   );
   const id = Number(r.lastInsertRowid);
   // Human-readable identifier, assigned after insert so it matches the row id.
@@ -353,7 +416,11 @@ export function getKeyFormByToken(token: string): any | null {
 export function parseScope(row: any): FormScope {
   try {
     const s = JSON.parse(row.scope_json || '{}');
-    return { lines: Array.isArray(s.lines) ? s.lines : [], event_note: s.event_note ?? null };
+    return {
+      lines: Array.isArray(s.lines) ? s.lines : [],
+      returned_lines: Array.isArray(s.returned_lines) ? s.returned_lines : undefined,
+      event_note: s.event_note ?? null,
+    };
   } catch {
     return { lines: [], event_note: null };
   }
@@ -369,6 +436,10 @@ export function serializeForm(row: any): any {
     form_no: row.form_no,
     event_type: row.event_type,
     event_label: FORM_EVENT_LABEL[row.event_type as FormEventType] ?? row.event_type,
+    // What KIND of document this is, resolved once here so every renderer —
+    // PDF, sign-off page, email — agrees rather than each re-deriving it.
+    doc_kind: isReturnReceipt(row) ? 'return_receipt' : 'holdings',
+    doc_title: isReturnReceipt(row) ? 'Key Return Receipt' : 'Key Form',
     holder_name: row.holder_name,
     holder_type: row.holder_type,
     holder_role: row.holder_role,
@@ -391,6 +462,9 @@ export function serializeForm(row: any): any {
     supersedes: row.supersedes ?? null,
     superseded_by: row.superseded_by ?? null,
     superseded_at: row.superseded_at ?? null,
+    // The return's own subject and total, distinct from the position after it.
+    returned: scope.returned_lines ?? null,
+    returned_keys: row.returned_keys ?? 0,
     sent_to: sentTo,
     last_sent_at: row.last_sent_at,
     send_count: row.send_count ?? 0,

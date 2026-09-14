@@ -400,6 +400,31 @@ function custodySummary(actor: string, verb: 'checkout' | 'checkin', holder: str
 }
 
 /**
+ * The keys a return handed back, as the single form line they belong on.
+ *
+ * `source` is whatever carries the client's identity — an assignment row or an
+ * account row; both spell the name differently, so both spellings are tried.
+ * These lines are the RETURN's subject, so `checked_out` carries the quantity
+ * and `assigned` is zero: nothing here is a standing attribution.
+ */
+function returnedFormLines(source: any, keys: KeyLine[], bcNumber: string | null): any[] {
+  const total = totalQty(keys);
+  if (!total) return [];
+  const line: any = {
+    account_id: source?.account_id ?? source?.id ?? null,
+    client: source?.account_name ?? source?.ic_company_name ?? 'Client',
+    bc_client_number: bcNumber,
+    metal: 0, card: 0, fob: 0, dispenser: 0, office: 0,
+    subtotal: total, assigned: 0, checked_out: total,
+    via: 'Returned by this event',
+  };
+  for (const k of keys) {
+    if (k.type in line) line[k.type] += k.qty;
+  }
+  return [line];
+}
+
+/**
  * Every custody event produces a Key Form — the complete statement of what the
  * holder has AFTER the event. Generated here so no event path can forget one.
  * A form failure is logged but never fails the custody transaction itself: the
@@ -412,6 +437,7 @@ export async function generateEventForm(
     holderEmail?: string | null; holderId?: number | null; eventNote?: string | null;
     sourceKind?: string | null; sourceRef?: string | null; counterpartyName?: string | null;
     lines?: any[];
+    returnedLines?: any[];
   },
 ): Promise<any | null> {
   try {
@@ -422,6 +448,7 @@ export async function generateEventForm(
       holderEmail: input.holderEmail ?? null,
       holderId: input.holderId ?? null,
       lines: input.lines,
+      returnedLines: input.returnedLines,
       eventNote: input.eventNote ?? null,
       generatedBy: req.manager?.name ?? 'System',
       sourceKind: input.sourceKind ?? null,
@@ -691,7 +718,11 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
   const form = await generateEventForm(req, {
     eventType: 'checkin', holderName: holder, holderType: holder_type,
     holderEmail: holder_email || null, holderId: holder_id,
-    eventNote: `Reconciling check-in at ${account.ic_company_name}: ${summarizeKeys(lines)}`,
+    returnedLines: returnedFormLines(account, lines, bcNumberFor(account)),
+    // Plain language on the document itself. That this entry had no prior
+    // check-out is a bookkeeping fact, recorded in the audit log above — it is
+    // not what the person handing keys back is being asked to read.
+    eventNote: `Returned at ${account.ic_company_name}: ${summarizeKeys(lines)}`,
     sourceKind: 'assignment', sourceRef: String(newId),
   });
 
@@ -1022,6 +1053,10 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
     eventType: 'checkin', holderName: holder,
     holderType: (assignment.holder_type as 'employee' | 'ic') ?? 'employee',
     holderEmail: assignment.assignee_email ?? null, holderId: assignment.holder_id ?? null,
+    // The subject of the receipt: what actually came back at this client.
+    // Without this the form would fall back to the post-return snapshot, which
+    // is empty whenever someone returns everything — nothing to sign.
+    returnedLines: returnedFormLines(assignment, returning, bcNumberForAssignment(assignment)),
     eventNote: `Returned at ${assignment.account_name}: ${summarizeKeys(returning)}`
       + (remaining.length ? ` — ${summarizeKeys(remaining)} still out` : ''),
     sourceKind: 'assignment', sourceRef: String(returnedId),

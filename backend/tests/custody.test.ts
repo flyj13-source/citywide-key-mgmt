@@ -117,7 +117,7 @@ describe('MULTI-KEY CHECK-OUT', () => {
     expect(found).toBeTruthy();
     expect(found.holder).toBe('J. Martinez');
     expect(found.holder_type).toBe('employee');
-    expect(found.keys_summary).toBe('2 × Metal Key · 1 × Key Fob');
+    expect(found.keys_summary).toBe('2 Metal Keys · 1 Key Fob');
     expect(found.signoff_pending).toBe(true);
     expect(found.signed_at).toBeNull();
   });
@@ -297,7 +297,7 @@ describe('MULTI-KEY CHECK-OUT', () => {
     const found = back.body.assignments.find((a: any) => a.id === assignmentId);
     expect(found.condition_on_return).toBe('good');
     expect(found.checkin_recorded_by).toBe('Cara Angeloni');
-    expect(found.keys_summary).toBe('2 × Metal Key · 1 × Key Fob');
+    expect(found.keys_summary).toBe('2 Metal Keys · 1 Key Fob');
 
     // Availability is restored.
     const avail = await auth(request(app).get(`/api/assignments/availability?account_id=${clientId}`));

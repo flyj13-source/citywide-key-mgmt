@@ -342,6 +342,11 @@ for (const [col, def] of [
   ['supersedes', 'INTEGER'],
   ['superseded_by', 'INTEGER'],
   ['superseded_at', 'TEXT'],
+  // A return receipt's subject: how many keys this event handed back. Kept
+  // separate from total_keys (the position AFTER the return, which is often
+  // zero and legitimately so) so a list can report what the form is FOR
+  // without reading the scope blob.
+  ['returned_keys', 'INTEGER DEFAULT 0'],
 ] as [string, string][]) {
   if (!formCols.includes(col)) db.exec(`ALTER TABLE key_form_docs ADD COLUMN ${col} ${def}`);
 }

@@ -94,8 +94,19 @@ function legacyType(key_type: any, keys_held: any): KeyTypeKey | null {
 export const totalQty = (lines: KeyLine[]): number => lines.reduce((n, l) => n + l.qty, 0);
 
 /** "2 × Metal Key · 1 × Key Fob" — the human summary stored on keys_held. */
+/**
+ * Plain language, because these strings are read by the person signing — not
+ * by an operator reading a ledger. "1 Metal Key", never "1 × Metal Key": the
+ * multiplication sign is notation, and a return receipt is a sentence.
+ *
+ * Every label in KEY_TYPES pluralizes with a plain 's' (Metal Key → Metal
+ * Keys, Key Card → Key Cards), so the rule holds for the whole set.
+ */
+export const keyPhrase = (line: KeyLine): string =>
+  `${line.qty} ${line.label}${line.qty === 1 ? '' : 's'}`;
+
 export const summarizeKeys = (lines: KeyLine[]): string =>
-  lines.map((l) => `${l.qty} × ${l.label}`).join(' · ');
+  lines.map(keyPhrase).join(' · ');
 
 // ── Availability ─────────────────────────────────────────────────────────────
 

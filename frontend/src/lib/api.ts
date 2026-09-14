@@ -139,7 +139,13 @@ export interface ManagerRosterRow {
   personal_cards: number;
   personal_fobs: number;
   personal_dispenser: number;
+  /** Standing holder-grid attribution — what they are responsible for. */
   total_held: number;
+  /**
+   * Open custody right now. Check-in closes custody but never edits the grid,
+   * so these two legitimately differ; shown together they explain each other.
+   */
+  checked_out: number;
   total_client_keys: number;
   on_roster: true;
   /** 1 for a ZZ TEST fixture. Its totals come from the fixture client book. */

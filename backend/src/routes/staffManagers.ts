@@ -189,6 +189,31 @@ router.get('/roster', requireAuth, (req: AuthRequest, res: Response) => {
   const agg = db.prepare(aggSql(CLIENT_FILTER));
   const aggTest = db.prepare(aggSql(TEST_CLIENT_FILTER));
 
+  /**
+   * Keys this person has OPEN CUSTODY of right now — the second, independent
+   * place a person's keys live.
+   *
+   * `total_held` above is the holder GRID: the standing attribution on each
+   * client row saying who is responsible for what at that site. Check-in
+   * closes a custody record but deliberately never edits that attribution, so
+   * after someone returns everything the grid figure stays where it was. Shown
+   * beside it rather than merged, a row that disagrees with itself is visible
+   * instead of just looking wrong — the same split the Key Form prints.
+   */
+  const openCustody = db.prepare(`
+    SELECT COALESCE(SUM(
+      CASE WHEN a.keys_json IS NOT NULL AND TRIM(a.keys_json) <> '' THEN (
+        SELECT COALESCE(SUM(json_extract(v.value, '$.qty')), 0)
+          FROM json_each(a.keys_json) v
+      ) ELSE 1 END
+    ), 0) AS n
+      FROM key_assignments a
+      LEFT JOIN accounts acc ON acc.id = a.account_id
+     WHERE a.status = 'checked_out'
+       AND COALESCE(acc.archived, 0) = 0
+       AND LOWER(TRIM(a.assignee)) = LOWER(TRIM(?))
+  `);
+
   const managers = people.map((p) => {
     const isTest = Number(p.is_test) === 1;
     const a = Object.assign({}, (isTest ? aggTest : agg).get(p.name) as any);
@@ -207,6 +232,8 @@ router.get('/roster', requireAuth, (req: AuthRequest, res: Response) => {
       personal_fobs: Number(a.personal_fobs) || 0,
       personal_dispenser: Number(a.personal_dispenser) || 0,
       total_held: Number(a.total_held) || 0,
+      // The other source, so the row states where its number came from.
+      checked_out: Number(Object.assign({}, openCustody.get(p.name) as any).n) || 0,
       total_client_keys: Number(a.total_client_keys) || 0,
       on_roster: true as const,
     };

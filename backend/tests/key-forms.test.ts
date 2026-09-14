@@ -147,6 +147,77 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
     expect(res.body.key_form).toMatchObject({ event_type: 'checkin', holder_name: 'Jo' });
   });
 
+  it('a check-in form is a RETURN RECEIPT — signable even when nothing is left', async () => {
+    const id = site('RIDGEWAY PLAZA');
+    await checkout({
+      account_id: id, holder: 'Jo Martinez', holder_email: 'jo@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 2 }],
+    });
+    // Everything comes back — the position afterwards is empty.
+    const res = await checkin({
+      holder: 'Jo Martinez', account_id: id, keys: [{ type: 'metal', qty: 2 }],
+    });
+    expect(res.status).toBe(200);
+    const form = res.body.key_form;
+    expect(form.doc_kind).toBe('return_receipt');
+    expect(form.doc_title).toBe('Key Return Receipt');
+    // The SIGNABLE content: what came back. Never empty on a return.
+    expect(form.returned_keys).toBe(2);
+    expect(form.returned).toHaveLength(1);
+    expect(form.returned[0]).toMatchObject({ client: 'RIDGEWAY PLAZA', metal: 2, subtotal: 2 });
+    expect(form.returned[0].bc_client_number).toBeTruthy();
+    // The secondary section is legitimately empty here.
+    expect(form.total_keys).toBe(0);
+    expect(form.clients).toEqual([]);
+  });
+
+  it('a PARTIAL return lists what went back and what remains', async () => {
+    const id = site('RIDGEWAY PLAZA');
+    await checkout({
+      account_id: id, holder: 'Jo Martinez', holder_email: 'jo@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 3 }],
+    });
+    const res = await checkin({
+      holder: 'Jo Martinez', account_id: id, keys: [{ type: 'metal', qty: 1 }],
+    });
+    const form = res.body.key_form;
+    expect(form.returned_keys).toBe(1);
+    expect(form.total_keys).toBe(2);           // still out
+    expect(form.event_note).toContain('Returned at RIDGEWAY PLAZA');
+    expect(form.event_note).toContain('1 Metal Key');
+  });
+
+  it('a reconciling check-in reads as a plain return, not as bookkeeping', async () => {
+    const id = site('RIDGEWAY PLAZA');
+    const res = await checkin({
+      holder: 'Walk In', holder_email: 'w@cw.test', account_id: id,
+      keys: [{ type: 'metal', qty: 1 }],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.key_form.doc_kind).toBe('return_receipt');
+    expect(res.body.key_form.returned_keys).toBe(1);
+    expect(res.body.key_form.event_note).toBe('Returned at RIDGEWAY PLAZA: 1 Metal Key');
+    expect(res.body.key_form.event_note).not.toMatch(/reconcil/i);
+    expect(res.body.key_form.event_note).not.toContain('×');
+  });
+
+  it('the public sign-off link carries the return as its subject', async () => {
+    const id = site('RIDGEWAY PLAZA');
+    await checkout({
+      account_id: id, holder: 'Jo Martinez', holder_email: 'jo@cw.test',
+      holder_type: 'employee', keys: [{ type: 'card', qty: 1 }],
+    });
+    await checkin({ holder: 'Jo Martinez', account_id: id, keys: [{ type: 'card', qty: 1 }] });
+    const row = Object.assign({}, db.prepare(
+      "SELECT token FROM key_form_docs WHERE event_type='checkin' ORDER BY id DESC LIMIT 1"
+    ).get() as any);
+    const res = await request(app).get(`/api/key-forms/token/${row.token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.doc_kind).toBe('return_receipt');
+    expect(res.body.returned).toHaveLength(1);
+    expect(res.body.returned[0].card).toBe(1);
+  });
+
   it('transfer produces a form for BOTH parties, each naming the other', async () => {
     const id = site('RIDGEWAY PLAZA');
     await checkout({
@@ -253,6 +324,8 @@ describe('§3 FORMS TAB — list, search, generate, send', () => {
     addStaff('Two Person', 'two@cw.test');
     addStaff('Three Person', null);
     await checkout({ account_id: id, holder: 'One Person', holder_email: 'one@cw.test', holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }] });
+    await checkout({ account_id: id, holder: 'Two Person', holder_email: 'two@cw.test', holder_type: 'employee', keys: [{ type: 'card', qty: 2 }] });
+    await checkout({ account_id: id, holder: 'Three Person', holder_type: 'employee', keys: [{ type: 'fob', qty: 1 }], no_email_reason: 'No address on file' });
     db.exec('DELETE FROM key_form_docs');
 
     const res = await auth(request(app).post('/api/key-forms/generate')).send({
@@ -266,12 +339,43 @@ describe('§3 FORMS TAB — list, search, generate, send', () => {
     expect(res.body.count).toBe(3);
     expect(res.body.forms.map((f: any) => f.holder_name))
       .toEqual(['One Person', 'Two Person', 'Three Person']);
-    // Current state: only the first actually holds anything.
     expect(res.body.forms[0].total_keys).toBe(1);
-    expect(res.body.forms[1].total_keys).toBe(0);
+    expect(res.body.forms[1].total_keys).toBe(2);
     // No email on file is flagged, not hidden.
     expect(res.body.forms[2].no_email).toBe(true);
     expect(res.body.forms.every((f: any) => f.event_type === 'audit')).toBe(true);
+  });
+
+  it('REFUSES a holdings form for a holder with no keys, and names the alternative', async () => {
+    addStaff('Empty Handed', 'empty@cw.test');
+    const res = await auth(request(app).post('/api/key-forms/generate'))
+      .send({ holders: [{ name: 'Empty Handed', type: 'employee' }] });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NO_KEYS_ON_RECORD');
+    expect(res.body.error).toContain('return receipt');
+    // Nothing was written — a refused form must not leave a stub behind.
+    const n = Object.assign({}, db.prepare(
+      "SELECT COUNT(*) AS c FROM key_form_docs WHERE holder_name = 'Empty Handed'"
+    ).get() as any).c;
+    expect(n).toBe(0);
+  });
+
+  it('a mixed selection generates the holders who have keys and names those skipped', async () => {
+    const id = site('MIXED TOWER');
+    addStaff('Has Keys', 'has@cw.test');
+    addStaff('Has None', 'none@cw.test');
+    await checkout({ account_id: id, holder: 'Has Keys', holder_email: 'has@cw.test', holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }] });
+
+    const res = await auth(request(app).post('/api/key-forms/generate')).send({
+      holders: [
+        { name: 'Has Keys', type: 'employee' },
+        { name: 'Has None', type: 'employee' },
+      ],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.count).toBe(1);
+    expect(res.body.forms[0].holder_name).toBe('Has Keys');
+    expect(res.body.skipped).toEqual(['Has None']);
   });
 
   it('send logs recipient, timestamp and sender — and resend is allowed', async () => {
@@ -385,6 +489,9 @@ describe('§5 SIGNATURE + DELIVERY', () => {
   it('a holder with NO email gets a draft flagged red, still downloadable', async () => {
     const id = site('RIDGEWAY PLAZA');
     addStaff('No Mail', null);
+    // They must hold something: this is about the missing ADDRESS, and a
+    // holder with no keys is refused before the email question is reached.
+    await checkout({ account_id: id, holder: 'No Mail', holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }], no_email_reason: 'No address on file' });
     const res = await auth(request(app).post('/api/key-forms/generate'))
       .send({ holders: [{ name: 'No Mail', type: 'employee' }] });
     const form = res.body.forms[0];
@@ -399,8 +506,9 @@ describe('§5 SIGNATURE + DELIVERY', () => {
   });
 
   it('a no-email form can still be sent to a custom address', async () => {
-    site('RIDGEWAY PLAZA');
+    const id = site('RIDGEWAY PLAZA');
     addStaff('No Mail', null);
+    await checkout({ account_id: id, holder: 'No Mail', holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }], no_email_reason: 'No address on file' });
     const gen = await auth(request(app).post('/api/key-forms/generate'))
       .send({ holders: [{ name: 'No Mail', type: 'employee' }] });
     const res = await auth(request(app).post(`/api/key-forms/${gen.body.forms[0].id}/send`))
