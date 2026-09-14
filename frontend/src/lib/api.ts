@@ -711,7 +711,10 @@ export const retryFailedKeyForms = () =>
 
 /** One form per holder, each carrying that person's CURRENT state. */
 export const generateKeyFormDocs = (holders: { name: string; type: 'employee' | 'ic'; email?: string | null }[]) =>
-  req<{ forms: KeyFormDoc[]; count: number }>('/key-forms/generate', {
+  // `skipped` names holders with no keys on record. A holdings form states a
+  // position and cannot be built without one, so they are reported rather than
+  // issued as a blank — see the 409 when NOBODY in the selection has keys.
+  req<{ forms: KeyFormDoc[]; count: number; skipped: string[] }>('/key-forms/generate', {
     method: 'POST', body: JSON.stringify({ holders }),
   });
 

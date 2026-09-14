@@ -107,7 +107,7 @@ const fmt = (iso: string | null): string => {
 };
 
 // ── Generate: one holder or several ──────────────────────────────────────────
-function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (n: number) => void }) {
+function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (n: number, skipped: string[]) => void }) {
   const [options, setOptions] = useState<{ employees: HolderOption[]; ics: HolderOption[] }>({ employees: [], ics: [] });
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<Record<string, HolderOption>>({});
@@ -137,7 +137,7 @@ function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (n: n
     setBusy(true); setError('');
     try {
       const r = await generateKeyFormDocs(chosen.map((o) => ({ name: o.name, type: o.type, email: o.email })));
-      onDone(r.count);
+      onDone(r.count, r.skipped ?? []);
       onClose();
     } catch (e: any) { setError(e?.message || 'Could not generate'); }
     finally { setBusy(false); }
@@ -148,6 +148,8 @@ function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (n: n
       <div className="space-y-4">
         <p className="text-sm text-cw-muted">
           Each person selected gets their own form listing every key they currently hold.
+          Anyone holding nothing is skipped — a holdings form with no keys on it has
+          nothing to sign. Record a return receipt for them instead.
         </p>
         <input
           className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
@@ -614,7 +616,15 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
       {showGenerate && (
         <GenerateModal
           onClose={() => setShowGenerate(false)}
-          onDone={(n) => { notify(`${n} key form${n === 1 ? '' : 's'} generated.`); load(); }}
+          onDone={(n, skipped) => {
+            // Skipped holders are named, never swallowed: a run that covered
+            // fewer people than were selected must not read as full success.
+            const tail = skipped.length
+              ? ` ${skipped.length} skipped with no keys on record (${skipped.join(', ')}) — record a return receipt for them instead.`
+              : '';
+            notify(`${n} key form${n === 1 ? '' : 's'} generated.${tail}`);
+            load();
+          }}
         />
       )}
       {viewing && <ViewModal form={viewing} onClose={() => setViewing(null)} />}
