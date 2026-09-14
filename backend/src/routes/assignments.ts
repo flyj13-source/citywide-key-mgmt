@@ -13,7 +13,7 @@ import {
 import { sendCheckoutNotice, sendCheckinNotice, sendSignedReceipt, caraAddress, MailResult } from '../lib/custodyMail';
 import { hashSignature } from '../lib/pdf';
 import { generateCustodyReceipt } from '../lib/custodyPdf';
-import { createKeyForm, serializeForm, getKeyForm, type FormEventType } from '../lib/keyForm';
+import { createKeyForm, serializeForm, getKeyForm, EmptyHoldingsError, type FormEventType } from '../lib/keyForm';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { NOT_TEST_ASSIGNMENT } from '../lib/testFixtures';
 import {
@@ -407,7 +407,9 @@ function custodySummary(actor: string, verb: 'checkout' | 'checkin', holder: str
  * These lines are the RETURN's subject, so `checked_out` carries the quantity
  * and `assigned` is zero: nothing here is a standing attribution.
  */
-function returnedFormLines(source: any, keys: KeyLine[], bcNumber: string | null): any[] {
+function returnedFormLines(
+  source: any, keys: KeyLine[], bcNumber: string | null, via = 'Returned by this event',
+): any[] {
   const total = totalQty(keys);
   if (!total) return [];
   const line: any = {
@@ -416,7 +418,7 @@ function returnedFormLines(source: any, keys: KeyLine[], bcNumber: string | null
     bc_client_number: bcNumber,
     metal: 0, card: 0, fob: 0, dispenser: 0, office: 0,
     subtotal: total, assigned: 0, checked_out: total,
-    via: 'Returned by this event',
+    via,
   };
   for (const k of keys) {
     if (k.type in line) line[k.type] += k.qty;
@@ -437,7 +439,7 @@ export async function generateEventForm(
     holderEmail?: string | null; holderId?: number | null; eventNote?: string | null;
     sourceKind?: string | null; sourceRef?: string | null; counterpartyName?: string | null;
     lines?: any[];
-    returnedLines?: any[];
+    docKind?: 'holdings' | 'return_receipt';
   },
 ): Promise<any | null> {
   try {
@@ -448,7 +450,7 @@ export async function generateEventForm(
       holderEmail: input.holderEmail ?? null,
       holderId: input.holderId ?? null,
       lines: input.lines,
-      returnedLines: input.returnedLines,
+      docKind: input.docKind,
       eventNote: input.eventNote ?? null,
       generatedBy: req.manager?.name ?? 'System',
       sourceKind: input.sourceKind ?? null,
@@ -470,6 +472,13 @@ export async function generateEventForm(
     });
     return serializeForm(fresh);
   } catch (e) {
+    // Nothing to put on the document. Expected, not a fault: a transfer that
+    // moves only an account assignment leaves the outgoing side with no keys
+    // to sign for. Logged as the skip it is rather than as a failure.
+    if (e instanceof EmptyHoldingsError) {
+      console.log(`[keyform] no form for ${input.holderName} — ${e.message}`);
+      return null;
+    }
     console.error('[keyform] generation failed:', (e as Error).message);
     return null;
   }
@@ -718,7 +727,8 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
   const form = await generateEventForm(req, {
     eventType: 'checkin', holderName: holder, holderType: holder_type,
     holderEmail: holder_email || null, holderId: holder_id,
-    returnedLines: returnedFormLines(account, lines, bcNumberFor(account)),
+    docKind: 'return_receipt',
+    lines: returnedFormLines(account, lines, bcNumberFor(account)),
     // Plain language on the document itself. That this entry had no prior
     // check-out is a bookkeeping fact, recorded in the audit log above — it is
     // not what the person handing keys back is being asked to read.
@@ -887,6 +897,14 @@ async function multiRecordCheckin(req: AuthRequest, res: Response, records: Open
     eventType: 'checkin', holderName: holder,
     holderType: (first.holder_type as 'employee' | 'ic') ?? 'employee',
     holderEmail: first.assignee_email ?? null, holderId: first.holder_id ?? null,
+    // A return spanning several open records is still ONE handover, so the
+    // receipt lists the union of what came back — not the position left over.
+    docKind: 'return_receipt',
+    lines: returnedFormLines(
+      { account_id: accountId, account_name: accountName },
+      returnedLines,
+      bcNumberForAssignment(first),
+    ),
     eventNote: `Returned at ${accountName}: ${summarizeKeys(returnedLines)}`,
     sourceKind: 'assignment', sourceRef: String(signRecordId),
   });
@@ -1053,10 +1071,11 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
     eventType: 'checkin', holderName: holder,
     holderType: (assignment.holder_type as 'employee' | 'ic') ?? 'employee',
     holderEmail: assignment.assignee_email ?? null, holderId: assignment.holder_id ?? null,
-    // The subject of the receipt: what actually came back at this client.
-    // Without this the form would fall back to the post-return snapshot, which
-    // is empty whenever someone returns everything — nothing to sign.
-    returnedLines: returnedFormLines(assignment, returning, bcNumberForAssignment(assignment)),
+    // The receipt's subject: what actually came back at this client, and
+    // nothing else. Falling back to a snapshot here is the bug that made a
+    // full return read as "you hold no keys".
+    docKind: 'return_receipt',
+    lines: returnedFormLines(assignment, returning, bcNumberForAssignment(assignment)),
     eventNote: `Returned at ${assignment.account_name}: ${summarizeKeys(returning)}`
       + (remaining.length ? ` — ${summarizeKeys(remaining)} still out` : ''),
     sourceKind: 'assignment', sourceRef: String(returnedId),
@@ -1657,15 +1676,35 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
     movesAccounts ? `account assignment (${accountMoved?.role.toUpperCase()}) for ${account_name}` : null,
   ].filter(Boolean).join(' + ');
 
+  // The OUTGOING side signs a RETURN RECEIPT for exactly the keys they handed
+  // over — the same document a check-in produces, because it is the same act:
+  // keys leaving that person's possession. Their position afterwards is not
+  // what they are attesting to here.
+  //
+  // An accounts-only transfer moves no keys, so there is no receipt to sign;
+  // that side falls back to a holdings statement documenting where the account
+  // reassignment leaves them, and is skipped entirely if they hold nothing.
   const fromForm = await generateEventForm(req, {
     eventType: 'transfer', holderName: from_holder,
     holderType: from_holder_type ?? 'employee', holderEmail: from_holder_email,
+    ...(movesKeys
+      ? {
+          docKind: 'return_receipt' as const,
+          lines: returnedFormLines(
+            { account_id, account_name }, lines, bcNumber,
+            `Transferred to ${to_holder}`,
+          ),
+        }
+      : {}),
     eventNote: `Transferred OUT to ${to_holder}: ${movedNote}`,
     sourceKind: 'transfer', sourceRef: transferId, counterpartyName: to_holder,
   });
+  // The INCOMING side signs for what they now hold — the keys just received
+  // included — so this stays a holdings statement, snapshotted fresh.
   const toForm = await generateEventForm(req, {
     eventType: 'transfer', holderName: to_holder,
     holderType: to_holder_type, holderEmail: to_holder_email, holderId: to_holder_id,
+    docKind: 'holdings',
     eventNote: `Received IN from ${from_holder}: ${movedNote}`,
     sourceKind: 'transfer', sourceRef: transferId, counterpartyName: from_holder,
   });

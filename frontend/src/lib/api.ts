@@ -669,6 +669,17 @@ export interface KeyFormDoc {
   acknowledge_reason?: string | null;
   event_type: FormEventType;
   event_label: string;
+  /**
+   * What the document asserts. 'holdings' = "I currently hold the following";
+   * 'return_receipt' = "I have returned/transferred the keys listed".
+   * A transfer produces one of each, so this is not a function of event_type.
+   */
+  doc_kind: 'holdings' | 'return_receipt';
+  doc_title: string;
+  table_heading: string;
+  total_label: string;
+  /** How many keys the receipt covers; 0 on a holdings statement. */
+  returned_keys: number;
   holder_name: string;
   holder_type: 'employee' | 'ic';
   holder_role: string | null;

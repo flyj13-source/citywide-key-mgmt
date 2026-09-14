@@ -199,12 +199,19 @@ function ViewModal({ form, onClose }: { form: KeyFormDoc; onClose: () => void })
   ];
   type KeyFormLineLike = { metal: number; card: number; fob: number; dispenser: number; office: number };
   return (
-    <Modal title={`${form.form_no} — ${form.holder_name}`} onClose={onClose} width="max-w-3xl">
+    <Modal
+      title={`${form.form_no} · ${form.doc_title ?? 'Key Form'} — ${form.holder_name}`}
+      onClose={onClose}
+      width="max-w-3xl"
+    >
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
           <div><span className="text-cw-muted">Role:</span> {form.holder_role || '—'}</div>
           <div><span className="text-cw-muted">Contact:</span> {form.holder_email || <span className="text-[#C0272D]">no email on file</span>}</div>
           <div><span className="text-cw-muted">Event:</span> {form.event_label}</div>
+          {form.counterparty_name && (
+            <div><span className="text-cw-muted">Counterparty:</span> {form.counterparty_name}</div>
+          )}
           <div><span className="text-cw-muted">Generated:</span> {fmt(form.generated_at)}</div>
           <div><span className="text-cw-muted">By:</span> {form.generated_by || '—'}</div>
         </div>
@@ -222,7 +229,11 @@ function ViewModal({ form, onClose }: { form: KeyFormDoc; onClose: () => void })
             </thead>
             <tbody>
               {form.clients.length === 0 && (
-                <tr><td colSpan={8} className="px-3 py-4 text-center text-cw-muted">This person currently holds no keys.</td></tr>
+                <tr><td colSpan={8} className="px-3 py-4 text-center text-cw-muted">
+                  {form.doc_kind === 'return_receipt'
+                    ? 'No keys recorded on this return.'
+                    : 'This person currently holds no keys.'}
+                </td></tr>
               )}
               {form.clients.map((c, i) => (
                 <tr key={`${c.account_id}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-[#f4f4f2]'}>
@@ -237,7 +248,9 @@ function ViewModal({ form, onClose }: { form: KeyFormDoc; onClose: () => void })
                 </tr>
               ))}
               <tr className="border-t-2 border-[#C0272D] bg-[#f4f4f2]">
-                <td colSpan={7} className="px-3 py-2 font-bold">Total keys held</td>
+                <td colSpan={7} className="px-3 py-2 font-bold">
+                  {form.doc_kind === 'return_receipt' ? 'Total keys returned' : 'Total keys held'}
+                </td>
                 <td className="px-3 py-2 text-center font-bold text-[#C0272D]">{form.total_keys}</td>
               </tr>
             </tbody>

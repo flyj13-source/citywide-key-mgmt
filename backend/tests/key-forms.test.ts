@@ -161,14 +161,14 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
     const form = res.body.key_form;
     expect(form.doc_kind).toBe('return_receipt');
     expect(form.doc_title).toBe('Key Return Receipt');
-    // The SIGNABLE content: what came back. Never empty on a return.
+    expect(form.table_heading).toBe('Keys returned');
+    // The receipt's lines ARE the keys returned — and nothing else. No claim
+    // about the position afterwards appears on it at all.
+    expect(form.clients).toHaveLength(1);
+    expect(form.clients[0]).toMatchObject({ client: 'RIDGEWAY PLAZA', metal: 2, subtotal: 2 });
+    expect(form.clients[0].bc_client_number).toBeTruthy();
+    expect(form.total_keys).toBe(2);
     expect(form.returned_keys).toBe(2);
-    expect(form.returned).toHaveLength(1);
-    expect(form.returned[0]).toMatchObject({ client: 'RIDGEWAY PLAZA', metal: 2, subtotal: 2 });
-    expect(form.returned[0].bc_client_number).toBeTruthy();
-    // The secondary section is legitimately empty here.
-    expect(form.total_keys).toBe(0);
-    expect(form.clients).toEqual([]);
   });
 
   it('a PARTIAL return lists what went back and what remains', async () => {
@@ -181,8 +181,12 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
       holder: 'Jo Martinez', account_id: id, keys: [{ type: 'metal', qty: 1 }],
     });
     const form = res.body.key_form;
+    // The receipt covers the 1 that came back — not the 2 still out.
+    expect(form.doc_kind).toBe('return_receipt');
     expect(form.returned_keys).toBe(1);
-    expect(form.total_keys).toBe(2);           // still out
+    expect(form.total_keys).toBe(1);
+    expect(form.clients).toHaveLength(1);
+    expect(form.clients[0].metal).toBe(1);
     expect(form.event_note).toContain('Returned at RIDGEWAY PLAZA');
     expect(form.event_note).toContain('1 Metal Key');
   });
@@ -214,8 +218,10 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
     const res = await request(app).get(`/api/key-forms/token/${row.token}`);
     expect(res.status).toBe(200);
     expect(res.body.doc_kind).toBe('return_receipt');
-    expect(res.body.returned).toHaveLength(1);
-    expect(res.body.returned[0].card).toBe(1);
+    expect(res.body.doc_title).toBe('Key Return Receipt');
+    expect(res.body.table_heading).toBe('Keys returned');
+    expect(res.body.clients).toHaveLength(1);
+    expect(res.body.clients[0].card).toBe(1);
   });
 
   it('transfer produces a form for BOTH parties, each naming the other', async () => {
@@ -230,21 +236,30 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
       keys: [{ type: 'metal', qty: 2 }],
     });
     expect(res.status).toBe(201);
+    // OUTGOING side signs a RECEIPT for exactly what they handed over.
     expect(res.body.key_forms.from).toMatchObject({
       event_type: 'transfer', holder_name: 'From Person', counterparty_name: 'To Person',
+      doc_kind: 'return_receipt', doc_title: 'Key Return Receipt',
     });
+    expect(res.body.key_forms.from.total_keys).toBe(2);
+    expect(res.body.key_forms.from.clients[0].metal).toBe(2);
+    expect(res.body.key_forms.from.clients[0].via).toBe('Transferred to To Person');
+
+    // INCOMING side signs a HOLDINGS statement covering what they now have,
+    // the 2 just received included.
     expect(res.body.key_forms.to).toMatchObject({
       event_type: 'transfer', holder_name: 'To Person', counterparty_name: 'From Person',
+      doc_kind: 'holdings', doc_title: 'Key Form',
     });
-    // The outgoing party keeps the 1 they did not hand over.
-    expect(res.body.key_forms.from.total_keys).toBe(1);
     expect(res.body.key_forms.to.total_keys).toBe(2);
   });
 
   it('manager reassignment produces a form for both managers', async () => {
     addStaff('Old Manager', 'old@cw.test');
     addStaff('New Manager', 'new@cw.test');
-    site('CLIENT A', { account_manager: 'Old Manager' });
+    // Grid-attributed keys: without them neither manager holds anything and a
+    // holdings statement would have nothing on it to sign.
+    site('CLIENT A', { account_manager: 'Old Manager', am_metal: 2, am_keys: 2 });
     const ids = (db.prepare('SELECT id FROM accounts').all() as any[]).map((r) => Object.assign({}, r).id);
     const from = Object.assign({}, db.prepare("SELECT id FROM staff_managers WHERE name='Old Manager'").get() as any).id;
     const to = Object.assign({}, db.prepare("SELECT id FROM staff_managers WHERE name='New Manager'").get() as any).id;
@@ -253,8 +268,34 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
       fromId: from, toId: to, role: 'am', clientIds: ids, sendHandover: false,
     });
     expect(res.status).toBe(200);
-    expect(res.body.key_forms.from).toMatchObject({ event_type: 'reassignment', holder_name: 'Old Manager' });
-    expect(res.body.key_forms.to).toMatchObject({ event_type: 'reassignment', holder_name: 'New Manager' });
+    // Both sides state a position — a reassignment moves responsibility, it is
+    // not a handover of keys, so neither party signs a receipt.
+    expect(res.body.key_forms.to).toMatchObject({
+      event_type: 'reassignment', holder_name: 'New Manager', doc_kind: 'holdings',
+    });
+    expect(res.body.key_forms.to.total_keys).toBe(2);
+    // The outgoing manager no longer holds these keys, so their holdings form
+    // has nothing on it and is skipped rather than issued blank.
+    expect(res.body.key_forms.from).toBeNull();
+  });
+
+  it('a reassignment still issues a form to a manager who holds keys elsewhere', async () => {
+    addStaff('Old Manager', 'old@cw.test');
+    addStaff('New Manager', 'new@cw.test');
+    const moved = site('CLIENT A', { account_manager: 'Old Manager', am_metal: 2, am_keys: 2 });
+    // A second client stays with Old Manager, so they still hold something.
+    site('CLIENT B', { account_manager: 'Old Manager', am_metal: 1, am_keys: 1 });
+    const from = Object.assign({}, db.prepare("SELECT id FROM staff_managers WHERE name='Old Manager'").get() as any).id;
+    const to = Object.assign({}, db.prepare("SELECT id FROM staff_managers WHERE name='New Manager'").get() as any).id;
+
+    const res = await auth(request(app).post('/api/managers/reassign')).send({
+      fromId: from, toId: to, role: 'am', clientIds: [moved], sendHandover: false,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.key_forms.from).toMatchObject({
+      holder_name: 'Old Manager', doc_kind: 'holdings',
+    });
+    expect(res.body.key_forms.from.total_keys).toBe(1);   // CLIENT B only
   });
 
   it('a form lists EVERY client the holder has keys at, not just the event', async () => {
@@ -608,8 +649,22 @@ describe('§4 TRANSFER MODES', () => {
         keys: mode === 'accounts' ? [] : [{ type: 'metal', qty: 2 }],
       });
       expect(res.status, `mode ${mode}`).toBe(201);
-      expect(res.body.key_forms.from, `mode ${mode} from-form`).toBeTruthy();
-      expect(res.body.key_forms.to, `mode ${mode} to-form`).toBeTruthy();
+      if (mode === 'accounts') {
+        // No keys moved, so there is nothing for the outgoing side to sign a
+        // RECEIPT for: they get a holdings statement instead, still covering
+        // the 3 keys the account move did not touch.
+        expect(res.body.key_forms.from, `mode ${mode} from-form`).toBeTruthy();
+        expect(res.body.key_forms.from.doc_kind, `mode ${mode}`).toBe('holdings');
+        expect(res.body.key_forms.from.total_keys, `mode ${mode}`).toBe(3);
+        // The incoming side received no keys and holds none, so their form
+        // would be blank — skipped rather than issued. The transfer succeeded.
+        expect(res.body.key_forms.to, `mode ${mode} to-form`).toBeNull();
+      } else {
+        expect(res.body.key_forms.from, `mode ${mode} from-form`).toBeTruthy();
+        expect(res.body.key_forms.from.doc_kind, `mode ${mode}`).toBe('return_receipt');
+        expect(res.body.key_forms.to, `mode ${mode} to-form`).toBeTruthy();
+        expect(res.body.key_forms.to.doc_kind, `mode ${mode}`).toBe('holdings');
+      }
     }
   });
 });
@@ -619,5 +674,87 @@ describe('ESTABLISH CUSTODY IS GONE', () => {
     const res = await auth(request(app).post('/api/assignments/establish'))
       .send({ holder: 'X', account_id: 1, keys: [{ type: 'metal', qty: 1 }] });
     expect(res.status).toBe(404);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('EVENT → DOCUMENT MAPPING', () => {
+  it('maps every event to the document it should produce', async () => {
+    const { DOC_KIND_BY_EVENT, docKindOf } = await import('../src/lib/keyForm');
+
+    // The table itself. Transfer's entry is the DEFAULT only — the transfer
+    // route overrides it per party, which is asserted in §4.
+    expect(DOC_KIND_BY_EVENT).toMatchObject({
+      checkout: 'holdings',
+      checkin: 'return_receipt',
+      reassignment: 'holdings',
+      audit: 'holdings',
+    });
+
+    // A stored kind always wins, so one transfer can carry both.
+    expect(docKindOf({ event_type: 'transfer', doc_kind: 'return_receipt' })).toBe('return_receipt');
+    expect(docKindOf({ event_type: 'transfer', doc_kind: 'holdings' })).toBe('holdings');
+    // Rows written before doc_kind existed fall back to the event mapping, so
+    // an old check-in form still reads as the receipt it was meant to be.
+    expect(docKindOf({ event_type: 'checkin', doc_kind: null })).toBe('return_receipt');
+    expect(docKindOf({ event_type: 'audit', doc_kind: null })).toBe('holdings');
+  });
+
+  it('check-out produces a HOLDINGS statement', async () => {
+    const id = site('RIDGEWAY PLAZA');
+    const res = await checkout({
+      account_id: id, holder: 'Jo Martinez', holder_email: 'jo@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 2 }],
+    });
+    expect(res.body.key_form).toMatchObject({
+      doc_kind: 'holdings', doc_title: 'Key Form', table_heading: 'Keys held',
+    });
+    expect(res.body.key_form.returned_keys).toBe(0);
+  });
+});
+
+describe('ADD IC / ADD CUSTOMER SENDS NOTHING', () => {
+  it('creating an IC fires no email and writes no invitation', async () => {
+    const before = Object.assign({}, db.prepare(
+      "SELECT COUNT(*) AS c FROM audit_log WHERE action LIKE '%email%' OR action LIKE '%invit%'"
+    ).get() as any).c as number;
+
+    const res = await auth(request(app).post('/api/accounts')).send({
+      ic_company_name: 'BRAND NEW IC LLC',
+      bc_vendor_number: '02014199999',
+      record_type: 'ic',
+      ic_email: 'newic@vendor.test',
+      ic_primary_contact: 'Pat Vendor',
+    });
+    expect(res.status).toBe(201);
+
+    const after = Object.assign({}, db.prepare(
+      "SELECT COUNT(*) AS c FROM audit_log WHERE action LIKE '%email%' OR action LIKE '%invit%'"
+    ).get() as any).c as number;
+    // Every send in this system writes an audit row, so no new row means no
+    // send was attempted — not merely that a send failed quietly.
+    expect(after).toBe(before);
+
+    // And no contractor invitation/token was minted on record creation.
+    const invites = Object.assign({}, db.prepare(
+      "SELECT COUNT(*) AS c FROM contractors WHERE name = 'BRAND NEW IC LLC' OR email = 'newic@vendor.test'"
+    ).get() as any).c as number;
+    expect(invites).toBe(0);
+  });
+
+  it('creating a customer fires no email either', async () => {
+    const before = Object.assign({}, db.prepare(
+      "SELECT COUNT(*) AS c FROM audit_log WHERE action LIKE '%email%'"
+    ).get() as any).c as number;
+    const res = await auth(request(app).post('/api/accounts')).send({
+      ic_company_name: 'BRAND NEW CLIENT', bc_client_number: '01014199999',
+      record_type: 'customer', account_manager: 'Someone',
+    });
+    expect(res.status).toBe(201);
+    const after = Object.assign({}, db.prepare(
+      "SELECT COUNT(*) AS c FROM audit_log WHERE action LIKE '%email%'"
+    ).get() as any).c as number;
+    expect(after).toBe(before);
   });
 });

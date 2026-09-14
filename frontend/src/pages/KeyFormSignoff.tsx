@@ -85,72 +85,24 @@ export default function KeyFormSignoff() {
     </div>
   );
 
-  const sum = (rows: any[]) => rows.reduce((n: number, c: any) => n + c.subtotal, 0);
-  const held: any[] = data.clients ?? [];
-  // A check-in link is a RETURN RECEIPT: what came back is the subject, and
-  // the remaining position is context. Anything else states a position.
+  const rows: any[] = data.clients ?? [];
+  const grand = rows.reduce((n: number, c: any) => n + c.subtotal, 0);
+  // A receipt is signed for the keys that left this person's hands and for
+  // nothing else — no claim about what they still hold elsewhere.
   const isReturn = data.doc_kind === 'return_receipt';
-  const returned: any[] = data.returned ?? [];
-
-  /** One titled table. `emptyText` is what it says when it has no rows. */
-  const table = (
-    heading: string, rows: any[], totalLabel: string, emptyText: string, accent: boolean,
-  ) => (
-    <div className="bg-white border border-cw-border rounded-lg overflow-hidden">
-      <div className={`px-5 py-3 flex items-center justify-between ${accent ? 'bg-cw-black' : 'bg-[#4a4a48]'}`}>
-        <h2 className="text-white font-semibold text-sm">{heading}</h2>
-        <span className="text-white/60 text-xs">
-          {data.holder_role} · generated {fmt(data.generated_at)}
-        </span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-[#f4f4f2] text-xs uppercase tracking-wide text-cw-muted">
-              <th className="text-left px-4 py-2 font-semibold">Client</th>
-              <th className="text-left px-3 py-2 font-semibold">BC #</th>
-              {COLS.map((c) => <th key={c.key} className="text-center px-2 py-2 font-semibold">{c.label}</th>)}
-              <th className="text-center px-3 py-2 font-semibold">Subtotal</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-6 text-center text-cw-muted">{emptyText}</td></tr>
-            )}
-            {rows.map((c: any, i: number) => (
-              <tr key={i} className="border-t border-gray-100">
-                <td className="px-4 py-2.5 font-medium">{c.client}</td>
-                <td className="px-3 py-2.5 font-mono text-xs text-gray-600">{c.bc_client_number || '—'}</td>
-                {COLS.map((col) => (
-                  <td key={col.key} className="px-2 py-2.5 text-center">
-                    {c[col.key] || <span className="text-gray-300">—</span>}
-                  </td>
-                ))}
-                <td className="px-3 py-2.5 text-center font-bold">{c.subtotal}</td>
-              </tr>
-            ))}
-            <tr className={`border-t-2 bg-[#f4f4f2] ${accent ? 'border-cw-red' : 'border-gray-300'}`}>
-              <td colSpan={7} className="px-4 py-2.5 font-bold">{totalLabel}</td>
-              <td className={`px-3 py-2.5 text-center font-bold ${accent ? 'text-cw-red' : 'text-cw-text'}`}>
-                {sum(rows)}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+  const toWhom: string | null = isReturn ? (data.counterparty_name || null) : null;
 
   return shell(
     <>
       <div className="bg-white border border-cw-border rounded-lg p-6">
         <h1 className="text-xl font-bold mb-1">
-          {isReturn ? 'Key Return Receipt' : 'Key Form'} {data.form_no}
+          {data.doc_title ?? 'Key Form'} {data.form_no}
         </h1>
         <p className="text-sm text-cw-muted">
           {isReturn ? (
-            <>Hello <strong>{data.holder}</strong>, please confirm you have returned the keys
-            listed below to City Wide Boston.</>
+            <>Hello <strong>{data.holder}</strong>, please confirm you have
+            {toWhom ? <> transferred the keys listed below to <strong>{toWhom}</strong></>
+                    : <> returned the keys listed below to City Wide Boston</>}.</>
           ) : (
             <>Hello <strong>{data.holder}</strong>, please confirm the keys below are the ones you
             currently hold for City Wide Boston.</>
@@ -158,23 +110,56 @@ export default function KeyFormSignoff() {
         </p>
         <p className="mt-3 text-sm font-semibold text-[#C0272D]">
           {isReturn
-            ? 'You are signing for the return below. Anything still on record is shown underneath.'
+            ? 'You are signing only for the keys listed below.'
             : 'This is a statement of everything on record in your name.'}
         </p>
       </div>
 
-      {isReturn ? (
-        <>
-          {table('Keys returned', returned, 'Total keys returned',
-            'No keys were recorded on this return.', true)}
-          {/* Empty here is a normal outcome — they returned everything. */}
-          {table('Remaining keys on record', held, 'Total still held',
-            'No keys remain on record in your name.', false)}
-        </>
-      ) : (
-        table('Keys held', held, 'Total keys held',
-          'No keys are currently on record in your name.', true)
-      )}
+      <div className="bg-white border border-cw-border rounded-lg overflow-hidden">
+        <div className="px-5 py-3 bg-cw-black flex items-center justify-between">
+          <h2 className="text-white font-semibold text-sm">{data.table_heading ?? 'Keys held'}</h2>
+          <span className="text-white/60 text-xs">
+            {data.holder_role} · {fmt(data.generated_at)}
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-[#f4f4f2] text-xs uppercase tracking-wide text-cw-muted">
+                <th className="text-left px-4 py-2 font-semibold">Client</th>
+                <th className="text-left px-3 py-2 font-semibold">BC #</th>
+                {COLS.map((c) => <th key={c.key} className="text-center px-2 py-2 font-semibold">{c.label}</th>)}
+                <th className="text-center px-3 py-2 font-semibold">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr><td colSpan={8} className="px-4 py-6 text-center text-cw-muted">
+                  {isReturn ? 'No keys recorded on this return.' : 'No keys are currently on record in your name.'}
+                </td></tr>
+              )}
+              {rows.map((c: any, i: number) => (
+                <tr key={i} className="border-t border-gray-100">
+                  <td className="px-4 py-2.5 font-medium">{c.client}</td>
+                  <td className="px-3 py-2.5 font-mono text-xs text-gray-600">{c.bc_client_number || '—'}</td>
+                  {COLS.map((col) => (
+                    <td key={col.key} className="px-2 py-2.5 text-center">
+                      {c[col.key] || <span className="text-gray-300">—</span>}
+                    </td>
+                  ))}
+                  <td className="px-3 py-2.5 text-center font-bold">{c.subtotal}</td>
+                </tr>
+              ))}
+              <tr className="border-t-2 border-cw-red bg-[#f4f4f2]">
+                <td colSpan={7} className="px-4 py-2.5 font-bold">
+                  {isReturn ? 'Total keys returned' : 'Total keys held'}
+                </td>
+                <td className="px-3 py-2.5 text-center font-bold text-cw-red">{grand}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="bg-white border border-cw-border rounded-lg p-5 space-y-4">
         <label className="flex items-start gap-3 text-sm cursor-pointer">
@@ -188,14 +173,14 @@ export default function KeyFormSignoff() {
             {isReturn ? (
               <>
                 <strong>
-                  I confirm I have returned the keys listed above to City Wide Boston
-                  on {fmt(data.generated_at).split(',').slice(0, 2).join(',')}.
+                  {toWhom
+                    ? `I confirm I have transferred the keys listed above to ${toWhom}.`
+                    : 'I confirm I have returned the keys listed above to City Wide Boston.'}
                 </strong>
                 <span className="block text-xs text-cw-muted mt-1">
-                  Any keys still shown on record above remain in my possession under the same
-                  terms · I will safeguard them · I will not duplicate or share them with
-                  unauthorized personnel · I will return them upon request or at the end of my
-                  assignment · I will report any loss within 24 hours.
+                  I have handed back every key listed above · I have retained no copies or
+                  duplicates of them · I no longer hold access to the client site by means of
+                  these keys · I will report any discrepancy to City Wide Boston immediately.
                 </span>
               </>
             ) : (

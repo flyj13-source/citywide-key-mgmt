@@ -347,6 +347,11 @@ for (const [col, def] of [
   // zero and legitimately so) so a list can report what the form is FOR
   // without reading the scope blob.
   ['returned_keys', 'INTEGER DEFAULT 0'],
+  // What the document ASSERTS: 'holdings' or 'return_receipt'. A stored
+  // property rather than a function of event_type, because one transfer
+  // produces both at once — a receipt for the party handing keys over and a
+  // holdings statement for the party receiving them.
+  ['doc_kind', 'TEXT'],
 ] as [string, string][]) {
   if (!formCols.includes(col)) db.exec(`ALTER TABLE key_form_docs ADD COLUMN ${col} ${def}`);
 }

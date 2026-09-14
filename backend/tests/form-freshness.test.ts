@@ -112,15 +112,28 @@ describe('§4 THE SCENARIO — a form tracks live state', () => {
     const afterCheckin = liveTotal();
     expect(afterCheckin).toBe(afterCheckout - 1);
 
-    // 5. The next form shows one fewer.
+    // 5. The check-in's own form is a RETURN RECEIPT covering the 1 that came
+    // back — not a restatement of the position. The live position dropping by
+    // one is asserted above against the database; the receipt answers the
+    // different question of what was handed over.
     const f2 = lastForm();
     expect(f2.id).not.toBe(f1.id);
-    expect(f2.total_keys).toBe(afterCheckin);
-    expect(f2.total_keys).toBe(f1.total_keys - 1);
+    expect(f2.doc_kind).toBe('return_receipt');
+    expect(f2.total_keys).toBe(1);
+    expect(scopeOf(f2).reduce((n, l) => n + l.subtotal, 0)).toBe(1);
     // eslint-disable-next-line no-console
     console.log(`  §4 step 4 — after checking in 1: ${afterCheckin}`);
     // eslint-disable-next-line no-console
-    console.log(`  §4 step 5 — form ${f2.form_no} total_keys: ${f2.total_keys} (was ${f1.total_keys})`);
+    console.log(`  §4 step 5 — receipt ${f2.form_no} covers ${f2.total_keys} key returned; live position now ${afterCheckin}`);
+
+    // 6. A fresh HOLDINGS form still tracks the live position.
+    const gen = await auth(request(app).post('/api/key-forms/generate'))
+      .send({ holders: [{ name: HOLDER, type: 'employee' }] });
+    expect(gen.status).toBe(201);
+    expect(gen.body.forms[0].doc_kind).toBe('holdings');
+    expect(gen.body.forms[0].total_keys).toBe(afterCheckin);
+    // eslint-disable-next-line no-console
+    console.log(`  §4 step 6 — audit form ${gen.body.forms[0].form_no} total_keys: ${gen.body.forms[0].total_keys}`);
   });
 
   it('an on-demand form matches the live total exactly', async () => {
@@ -174,14 +187,15 @@ describe('§1 WHERE THE NUMBERS COME FROM', () => {
     });
     expect(res.status).toBe(201);
 
-    // The person who handed them over is left with their standing grid
-    // position only — the transfer moved checked-out keys, not the AM
-    // attribution on the client row.
+    // The person who handed them over signs a RECEIPT for exactly the 2 keys
+    // that left their hands. Their remaining grid position is not what they
+    // are attesting to here, and does not appear on the document.
     const fromForm = one(
       "SELECT * FROM key_form_docs WHERE holder_name = ? AND event_type='transfer' ORDER BY id DESC LIMIT 1", HOLDER,
     );
-    expect(fromForm.total_keys).toBe(gridTotal());
-    expect(scopeOf(fromForm).reduce((n, l) => n + l.checked_out, 0)).toBe(0);
+    expect(fromForm.doc_kind).toBe('return_receipt');
+    expect(fromForm.total_keys).toBe(2);
+    expect(scopeOf(fromForm).reduce((n, l) => n + l.subtotal, 0)).toBe(2);
     // …and the person who took them holds two.
     const toForm = one(
       "SELECT * FROM key_form_docs WHERE holder_name = 'Freshness Target' ORDER BY id DESC LIMIT 1",

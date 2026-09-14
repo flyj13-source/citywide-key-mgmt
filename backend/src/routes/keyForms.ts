@@ -14,12 +14,14 @@ import { logAudit } from '../lib/audit';
 import { hashSignature } from '../lib/pdf';
 import {
   createKeyForm, getKeyForm, getKeyFormByToken, listKeyForms, markSent,
-  parseScope, serializeForm, snapshotHolder, FORM_EVENT_LABEL, EmptyHoldingsError, isReturnReceipt,
+  parseScope, serializeForm, snapshotHolder, FORM_EVENT_LABEL, EmptyHoldingsError,
+  docKindOf, DOC_TITLE, DOC_TABLE_HEADING, DOC_TOTAL_LABEL,
   type FormEventType,
 } from '../lib/keyForm';
 import { failedSendCount, failedSendIds, correctionFormCounts } from '../lib/keyForm';
 import { checkReason, voidKeyForm, acknowledgeKeyForm, MIN_REASON_LENGTH } from '../lib/corrections';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
+import { readKeyLines, bcNumberForAssignment } from '../lib/custody';
 import { sendKeyForm, caraAddress, notifyAddresses } from '../lib/custodyMail';
 
 /** Same base the custody sign-off links use. */
@@ -45,6 +47,36 @@ async function refreshPdf(id: number): Promise<string | null> {
     console.error(`[keyform] PDF generation failed for ${id}:`, (e as Error).message);
     return null;
   }
+}
+
+/**
+ * Rebuild a return receipt's line items from the custody record it names.
+ *
+ * Forms carry source_kind='assignment' + source_ref=<id>, so the keys that
+ * moved are recoverable from the row itself rather than from the holder's
+ * position today. Returns an empty array when the record cannot be found,
+ * which the caller reports rather than papering over — inventing line items
+ * for a document somebody signs would be worse than refusing.
+ */
+function receiptLinesFromSource(form: any): any[] {
+  if (form.source_kind !== 'assignment' || !form.source_ref) return [];
+  const raw = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(Number(form.source_ref)) as any;
+  if (!raw) return [];
+  const rec = Object.assign({}, raw);
+  const keys = readKeyLines(rec);
+  const total = keys.reduce((n, k) => n + k.qty, 0);
+  if (!total) return [];
+
+  const line: any = {
+    account_id: rec.account_id ?? null,
+    client: rec.account_name ?? 'Client',
+    bc_client_number: bcNumberForAssignment(rec),
+    metal: 0, card: 0, fob: 0, dispenser: 0, office: 0,
+    subtotal: total, assigned: 0, checked_out: total,
+    via: form.counterparty_name ? `Transferred to ${form.counterparty_name}` : 'Returned by this event',
+  };
+  for (const k of keys) if (k.type in line) line[k.type] += k.qty;
+  return [line];
 }
 
 // ── GET /api/key-forms — the Forms tab ───────────────────────────────────────
@@ -243,6 +275,27 @@ router.post('/:id(\\d+)/regenerate', requireAuth, async (req: AuthRequest, res: 
   }
 
   const actor = req.manager?.name ?? 'System';
+  const kind = docKindOf(old);
+
+  // A RECEIPT is rebuilt from the custody record it was written for, not from
+  // the holder's current position: what came back on that day is a historical
+  // fact and does not change because the world moved on. This is also what
+  // repairs the forms written before receipts existed — a check-in form that
+  // stored the post-return snapshot (and so read "holds no keys") regenerates
+  // into the receipt it should always have been.
+  let receiptLines: any[] | undefined;
+  if (kind === 'return_receipt') {
+    receiptLines = receiptLinesFromSource(old);
+    if (!receiptLines.length) {
+      return res.status(409).json({
+        error: `${old.form_no} cannot be rebuilt as a return receipt — the custody record `
+          + 'it was generated from is no longer available, so the keys it covered cannot be '
+          + 'established. Record the return again to produce a fresh receipt.',
+        code: 'RECEIPT_SOURCE_MISSING',
+      });
+    }
+  }
+
   // Fresh, from the database — never from the old form's stored scope.
   let fresh: any;
   try {
@@ -252,6 +305,8 @@ router.post('/:id(\\d+)/regenerate', requireAuth, async (req: AuthRequest, res: 
       holderType: (old.holder_type as 'employee' | 'ic') ?? 'employee',
       holderEmail: old.holder_email ?? null,
       holderId: old.holder_id ?? null,
+      docKind: kind,
+      lines: receiptLines,
       eventNote: old.event_type === 'audit' ? null : `Regenerated from ${old.form_no}`,
       generatedBy: actor,
       sourceKind: old.source_kind ?? null,
@@ -482,11 +537,14 @@ router.get('/token/:token', (req: Request, res: Response) => {
     event_note: scope.event_note,
     total_keys: row.total_keys,
     clients_covered: row.clients_covered,
-    // A check-in link opens a RETURN RECEIPT: the signer is confirming the
-    // handover, with whatever remains shown underneath. Resolved server-side
-    // so the page never has to infer the document kind from the event name.
-    doc_kind: isReturnReceipt(row) ? 'return_receipt' : 'holdings',
-    returned: scope.returned_lines ?? null,
+    // What the signer is being asked to attest to. Resolved server-side so the
+    // page never infers the document kind from the event name.
+    doc_kind: docKindOf(row),
+    doc_title: DOC_TITLE[docKindOf(row)],
+    table_heading: DOC_TABLE_HEADING[docKindOf(row)],
+    total_label: DOC_TOTAL_LABEL[docKindOf(row)],
+    // Set on a transfer receipt: the person the keys went to.
+    counterparty_name: row.counterparty_name ?? null,
     returned_keys: row.returned_keys ?? 0,
     generated_at: row.created_at,
     generated_by: row.generated_by,
