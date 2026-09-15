@@ -1338,6 +1338,25 @@ export const downloadImportTemplate = async () => {
 export const getContractors = () => req<any[]>('/contractors');
 export const inviteContractor = (data: any) =>
   req<any>('/contractors/invite', { method: 'POST', body: JSON.stringify(data) });
+
+/** One IC record as the invite modal's lookup returns it. */
+export interface IcMatch {
+  id: number;
+  /** Best default for "Contractor Name": the named contact, else the company. */
+  name: string;
+  company: string;
+  contact: string | null;
+  email: string | null;
+  bc_vendor_number: string | null;
+}
+/**
+ * Bidirectional IC lookup for the invite modal: a vendor number resolves to at
+ * most one record, a name to several. Either direction fills the other fields.
+ */
+export const icLookup = (by: 'vendor' | 'name', value: string) =>
+  req<{ matches: IcMatch[]; by: 'vendor' | 'name' | null }>(
+    `/contractors/ic-lookup?${by}=${encodeURIComponent(value)}`
+  );
 // These two are public (no JWT) — contractor portal routes
 export const getContractorByToken = (token: string) =>
   fetch(`${API_ORIGIN}/api/contractor/${token}`).then((r) => r.json());

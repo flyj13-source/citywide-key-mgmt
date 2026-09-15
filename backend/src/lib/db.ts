@@ -248,6 +248,19 @@ if (!smCols.includes('role_category')) {
   db.exec("UPDATE staff_managers SET role_category = 'manager' WHERE role_category IS NULL");
 }
 
+// ── Contractors: the BC vendor number the invitation belongs to ─────────────
+// A contractor invitation names a person and an address, which is not enough to
+// say WHICH vendor the signed document covers — two contacts at the same vendor
+// and one contact working for two vendors are both ordinary. The number is what
+// ties the signature to a record in the registry, so it is carried on the row
+// and printed on the PDF.
+const contractorCols = (db.prepare('PRAGMA table_info(contractors)').all() as any[]).map(
+  (c) => (Object.assign({}, c) as any).name as string,
+);
+if (!contractorCols.includes('bc_vendor_number')) {
+  db.exec('ALTER TABLE contractors ADD COLUMN bc_vendor_number TEXT');
+}
+
 // Key sign-off forms — append-only log of in-person e-signatures for employees
 // and contractors receiving/returning keys. Created here too (idempotent) so the
 // forms API can always read/write it even on a DB whose schema.sql predates it.

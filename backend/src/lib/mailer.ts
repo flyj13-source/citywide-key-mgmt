@@ -228,7 +228,34 @@ export async function sendOverdueAlert(
   });
 }
 
-export async function sendContractorInvite(to: string, name: string, magicLink: string) {
+/**
+ * The contractor invitation.
+ *
+ * Returns a result rather than throwing, and — importantly — checks whether a
+ * provider is configured BEFORE touching the transport. Without that check an
+ * unconfigured deployment sits on an SMTP connect until the socket gives up,
+ * which blocks the invite request itself; the magic link is generated whether
+ * or not the email goes out, so the caller should never wait on the mail to
+ * hand it back.
+ */
+export async function sendContractorInvite(
+  to: string, name: string, magicLink: string,
+): Promise<{ ok: boolean; skipped: boolean; error: string | null }> {
+  if (!to || !to.trim()) {
+    return { ok: false, skipped: true, error: 'No recipient address' };
+  }
+  const blocker = providerBlocker();
+  if (blocker) return { ok: false, skipped: true, error: blocker };
+
+  try {
+    await sendContractorInviteMail(to, name, magicLink);
+    return { ok: true, skipped: false, error: null };
+  } catch (e) {
+    return { ok: false, skipped: false, error: (e as Error).message };
+  }
+}
+
+async function sendContractorInviteMail(to: string, name: string, magicLink: string) {
   const transport = createTransport();
   const reply = fromConfig().replyTo;
   await transport.sendMail({

@@ -6,6 +6,8 @@ import path from 'path';
 interface ContractorSignData {
   contractorName: string;
   contractorEmail: string;
+  /** The vendor this signature covers. Optional at invite time. */
+  bcVendorNumber?: string | null;
   accounts: string[];
   signatureData: string;
   signedAt: string;
@@ -51,6 +53,14 @@ export async function generateSignedPDF(data: ContractorSignData): Promise<strin
   // Contractor details
   page.drawText('Contractor Name:', { x: 40, y, size: 10, font: boldFont, color: BLACK });
   page.drawText(data.contractorName, { x: 160, y, size: 10, font: regularFont, color: BLACK });
+  y -= 18;
+  // Printed directly beneath the name: the name alone does not say which vendor
+  // the signature covers, and two contacts can share one vendor.
+  page.drawText('BC Vendor Number:', { x: 40, y, size: 10, font: boldFont, color: BLACK });
+  page.drawText(data.bcVendorNumber || 'Not provided', {
+    x: 160, y, size: 10, font: regularFont,
+    color: data.bcVendorNumber ? BLACK : GRAY,
+  });
   y -= 18;
   page.drawText('Email:', { x: 40, y, size: 10, font: boldFont, color: BLACK });
   page.drawText(data.contractorEmail, { x: 160, y, size: 10, font: regularFont, color: BLACK });
@@ -110,9 +120,12 @@ export async function generateSignedPDF(data: ContractorSignData): Promise<strin
 
   page.drawLine({ start: { x: 40, y }, end: { x: 280, y }, thickness: 1, color: rgb(0.7, 0.7, 0.7) });
   y -= 14;
-  page.drawText(`${data.contractorName} — Electronic Signature`, {
-    x: 40, y, size: 9, font: regularFont, color: GRAY,
-  });
+  page.drawText(
+    data.bcVendorNumber
+      ? `${data.contractorName} (BC Vendor ${data.bcVendorNumber}) — Electronic Signature`
+      : `${data.contractorName} — Electronic Signature`,
+    { x: 40, y, size: 9, font: regularFont, color: GRAY },
+  );
 
   // Footer
   const hash = hashSignature(data.signatureData);

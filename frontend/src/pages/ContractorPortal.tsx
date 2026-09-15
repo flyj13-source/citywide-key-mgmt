@@ -106,7 +106,9 @@ export default function ContractorPortal() {
         <div className="text-green-600 text-4xl mb-3">✓</div>
         <div className="text-xl font-bold text-cw-text mb-2">Receipt Acknowledged</div>
         <p className="text-sm text-cw-muted mb-4">
-          Thank you, {contractor?.name}. Your signed PDF receipt has been generated and stored securely with City Wide Boston.
+          Thank you, {contractor?.name}
+          {contractor?.bc_vendor_number ? ` (BC Vendor ${contractor.bc_vendor_number})` : ''}.
+          Your signed PDF receipt has been generated and stored securely with City Wide Boston.
         </p>
         {pdfPath && (
           <p className="text-xs text-cw-muted">PDF: {pdfPath}</p>
@@ -133,6 +135,15 @@ export default function ContractorPortal() {
           <p className="text-sm text-cw-muted">
             Hello <strong>{contractor?.name}</strong>, please review your assigned keys below and provide your electronic signature.
           </p>
+          {/* The vendor this document covers. The name alone is ambiguous —
+              one contact can work for two vendors, and one vendor can have
+              two contacts — so the number is shown wherever the name is. */}
+          {contractor?.bc_vendor_number && (
+            <div className="mt-3 inline-flex items-center gap-2 rounded border border-cw-border bg-[#f4f4f2] px-3 py-1.5">
+              <span className="text-[11px] uppercase tracking-wide text-cw-muted">BC Vendor Number</span>
+              <span className="font-mono text-sm font-semibold text-[#1a1a1a]">{contractor.bc_vendor_number}</span>
+            </div>
+          )}
         </div>
 
         {/* Assigned accounts */}
