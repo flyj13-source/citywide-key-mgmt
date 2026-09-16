@@ -51,6 +51,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   db.exec('DELETE FROM key_assignments');
+  db.exec('DELETE FROM access_codes');
+  db.exec('DELETE FROM access_codes');
   db.exec('DELETE FROM accounts');
   db.exec('DELETE FROM staff_managers');
   db.exec('DELETE FROM key_form_docs');
@@ -640,6 +642,7 @@ describe('§4 TRANSFER MODES', () => {
 
   it('all three modes produce paired forms', async () => {
     for (const mode of ['keys', 'accounts', 'both'] as const) {
+      db.exec('DELETE FROM access_codes');
       db.exec('DELETE FROM key_assignments'); db.exec('DELETE FROM accounts');
       db.exec('DELETE FROM staff_managers'); db.exec('DELETE FROM key_form_docs');
       const id = await setup();

@@ -31,6 +31,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   // Children before parents: key_assignments references accounts.
+  db.exec('DELETE FROM access_codes');
   db.exec('DELETE FROM key_assignments; DELETE FROM accounts; DELETE FROM key_form_docs');
 });
 

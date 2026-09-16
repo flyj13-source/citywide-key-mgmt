@@ -72,6 +72,7 @@ beforeAll(async () => {
   autoSeedIfEmpty();
 
   const clean = openDb();
+  clean.exec('DELETE FROM access_codes');
   clean.exec('DELETE FROM accounts; DELETE FROM staff_managers; DELETE FROM key_assignments; DELETE FROM staff_key_holders; DELETE FROM audit_log;');
   clean.close();
 

@@ -261,6 +261,36 @@ if (!contractorCols.includes('bc_vendor_number')) {
   db.exec('ALTER TABLE contractors ADD COLUMN bc_vendor_number TEXT');
 }
 
+// ── Access codes ─────────────────────────────────────────────────────────────
+// A client has MANY labeled codes — front door, back door, supply closet, gate,
+// alarm, lockbox — not the single door/alarm pair the accounts row could hold.
+//
+// SECURITY: code_encrypted/code_iv are AES-256-GCM and leave this table by
+// exactly ONE route (the reveal endpoint), which audit-logs every read. No list
+// response, export or log line ever carries them.
+//
+// Rows are archived, never deleted: a code that existed is part of the audit
+// history of who could open what.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS access_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    code_type TEXT NOT NULL,
+    custom_label TEXT,
+    code_encrypted TEXT NOT NULL,
+    code_iv TEXT NOT NULL,
+    notes TEXT,
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT,
+    updated_at DATETIME,
+    is_test INTEGER DEFAULT 0,
+    archived INTEGER DEFAULT 0
+  )
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_access_codes_account ON access_codes(account_id)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_access_codes_type ON access_codes(code_type)');
+
 // Key sign-off forms — append-only log of in-person e-signatures for employees
 // and contractors receiving/returning keys. Created here too (idempotent) so the
 // forms API can always read/write it even on a DB whose schema.sql predates it.

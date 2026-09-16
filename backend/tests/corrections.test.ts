@@ -75,6 +75,7 @@ beforeEach(() => {
   db.exec('DELETE FROM key_assignments');
   db.exec('DELETE FROM key_form_docs');
   db.exec('DELETE FROM audit_log');
+  db.exec('DELETE FROM access_codes');
   db.exec("DELETE FROM accounts WHERE bc_client_number = '01014277001'");
   const r = db.prepare(`
     INSERT INTO accounts (ic_company_name, bc_client_number, record_type, status, archived, metal_keys)

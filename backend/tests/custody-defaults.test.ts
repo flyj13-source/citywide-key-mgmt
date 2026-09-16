@@ -63,6 +63,7 @@ beforeEach(() => {
   icId = obj(db.prepare("SELECT id FROM accounts WHERE bc_vendor_number = ? AND record_type='ic'").get(IC_VENDOR)).id;
 
   // …and a client site that assigns it, with a mixed key inventory.
+  db.exec('DELETE FROM access_codes');
   db.exec("DELETE FROM accounts WHERE bc_client_number = '01014299001'");
   const r = db.prepare(`
     INSERT INTO accounts (

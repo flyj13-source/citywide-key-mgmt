@@ -11,6 +11,8 @@ beforeAll(async()=>{ app=(await import('../src/index')).default; (await import('
   const l=await request(app).post('/api/auth/login').send({email:'cara@citywideboston.com',password:'demo1234'}); token=l.body.token;
   db=new DatabaseSync(path.join(D,'citywide.db')); });
 it('checked_out tracks custody, total_held tracks the grid', async () => {
+  db.exec('DELETE FROM access_codes');
+  db.exec('DELETE FROM access_codes');
   db.exec('DELETE FROM accounts; DELETE FROM key_assignments; DELETE FROM staff_managers');
   db.prepare("INSERT INTO staff_managers (name,manager_type,role_category,email,active) VALUES ('Jeremiah','account_manager','manager','j@cw.test',1)").run();
   const id=Number(db.prepare(`INSERT INTO accounts (ic_company_name,record_type,bc_client_number,account_manager,metal_keys,am_metal,am_keys) VALUES ('SITE A','customer','0101','Jeremiah',3,1,1)`).run().lastInsertRowid);

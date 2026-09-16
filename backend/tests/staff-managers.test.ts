@@ -57,6 +57,7 @@ beforeAll(async () => {
   // Wipe the demo data autoSeed created so this suite owns a clean fixture. The
   // login-account table (managers) is left intact so we can authenticate.
   const clean = openDb();
+  clean.exec('DELETE FROM access_codes');
   clean.exec('DELETE FROM accounts; DELETE FROM staff_managers; DELETE FROM audit_log;');
   clean.close();
 

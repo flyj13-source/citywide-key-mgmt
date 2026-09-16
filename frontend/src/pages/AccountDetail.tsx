@@ -1,9 +1,9 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Badge from '../components/Badge';
 import YesNo from '../components/YesNo';
-import { getAccount, revealCode } from '../lib/api';
+import { getAccount, revealCode, getAccessCodes, revealAccessCode, type AccessCode } from '../lib/api';
 import { QuickCustodyButtons, useCustodyContext } from '../components/QuickCustody';
 import { CheckOutModal, CheckInModal } from '../components/CustodyModals';
 import { ActionButton, ActionRow, ActionGroup } from '../components/ActionRow';
@@ -76,12 +76,57 @@ function CodeReveal({ accountId, type, hasCode }: { accountId: number; type: 'do
   );
 }
 
+/**
+ * A labeled access-code row. Same masked + reveal behaviour as the Door Codes
+ * tab, and the same single audited endpoint behind it — the value lives in
+ * state for five seconds and is never stored.
+ */
+function AccessCodeReveal({ id }: { id: number }) {
+  const [code, setCode] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    if (code === null) return;
+    const t = setTimeout(() => setCode(null), 5000);
+    return () => clearTimeout(t);
+  }, [code]);
+
+  if (code !== null) {
+    return (
+      <span className="font-mono text-sm bg-[#fff8e6] border border-[#e8cf8a] px-2 py-0.5 rounded select-all">
+        {code}
+        <button onClick={() => setCode(null)} className="ml-2 text-xs text-cw-muted hover:text-cw-text">hide</button>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-2">
+      {err && <span className="text-xs text-[#C0272D]">{err}</span>}
+      <span className="font-mono text-gray-400 tracking-widest select-none">••••</span>
+      <button
+        onClick={async () => {
+          setLoading(true); setErr('');
+          try { setCode((await revealAccessCode(id)).code); }
+          catch (e: any) { setErr(e?.message || 'Could not reveal'); }
+          finally { setLoading(false); }
+        }}
+        disabled={loading}
+        className="text-xs border border-[#C0272D] text-[#C0272D] rounded px-2 py-0.5 hover:bg-[#C0272D] hover:text-white transition-colors disabled:opacity-50"
+      >
+        {loading ? '…' : 'Reveal'}
+      </button>
+    </span>
+  );
+}
+
 export default function AccountDetail() {
   const { accountId } = useParams<{ accountId: string }>();
   const navigate = useNavigate();
   const [account, setAccount] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [codes, setCodes] = useState<AccessCode[]>([]);
   const [checkOutOpen, setCheckOutOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
   const [notice, setNotice] = useState('');
@@ -92,6 +137,10 @@ export default function AccountDetail() {
       .then(setAccount)
       .catch(() => setError('Account not found'))
       .finally(() => setLoading(false));
+    // Separate call: codes live in their own table and carry no ciphertext here.
+    getAccessCodes({ account_id: String(accountId), include_test: '1' })
+      .then((r) => setCodes(r.codes))
+      .catch(() => setCodes([]));
   }, [accountId]);
   useEffect(() => { load(); }, [load]);
 
@@ -228,27 +277,71 @@ export default function AccountDetail() {
           </div>
         )}
 
-        {/* Access Codes */}
+        {/* Access Codes — this client's labeled codes, from access_codes */}
         <div className="card p-4">
-          <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">Access Codes</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide">
+              Access Codes {codes.length > 0 && <span className="text-gray-400">({codes.length})</span>}
+            </h2>
+            <Link to="/registry?tab=doorcodes" className="text-xs text-[#C0272D] hover:underline">
+              All door codes →
+            </Link>
+          </div>
+
           <div className="divide-y divide-gray-100 text-sm">
+            {codes.length === 0 && (
+              <div className="py-2 text-cw-muted text-xs">
+                No access codes recorded for this client.
+              </div>
+            )}
+            {codes.map((c) => (
+              <div key={c.id} className="flex items-center justify-between py-2 gap-3">
+                <div className="min-w-0">
+                  <span className="text-cw-text">{c.label}</span>
+                  {c.notes && <span className="block text-[11px] text-cw-muted truncate">{c.notes}</span>}
+                </div>
+                <AccessCodeReveal id={c.id} />
+              </div>
+            ))}
+
+            {/* The lockbox code is plain text on the client row, not a secret in
+                access_codes, so it stays here. */}
             <div className="flex items-center justify-between py-2">
               <span className="text-cw-muted">Lockbox Code</span>
               <span className="font-mono text-sm">{account.lockbox_code || '—'}</span>
             </div>
-            <div className="flex items-center justify-between py-2">
-              <span className="text-cw-muted">Door Code</span>
-              <CodeReveal accountId={account.id} type="door" hasCode={!!account.door_code_encrypted} />
-            </div>
-            <div className="flex items-center justify-between py-2">
-              <span className="text-cw-muted">Alarm Code</span>
-              <CodeReveal accountId={account.id} type="alarm" hasCode={!!account.alarm_code_encrypted} />
-            </div>
-            <div className="flex items-center justify-between py-2">
-              <span className="text-cw-muted">Door Access Code</span>
-              <CodeReveal accountId={account.id} type="door_access" hasCode={!!account.door_access_code_encrypted} />
-            </div>
           </div>
+
+          {/* The pre-migration columns. Shown only while they still hold
+              something, so a value that never migrated stays reachable rather
+              than disappearing behind the new table. */}
+          {(account.door_code_encrypted || account.alarm_code_encrypted || account.door_access_code_encrypted) && (
+            <div className="mt-3 pt-3 border-t border-gray-200">
+              <div className="text-[10px] uppercase tracking-wide text-gray-400 mb-2">
+                Legacy fields on the client record
+              </div>
+              <div className="divide-y divide-gray-100 text-sm">
+                {account.door_code_encrypted && (
+                  <div className="flex items-center justify-between py-2">
+                    <span className="text-cw-muted">Door Code</span>
+                    <CodeReveal accountId={account.id} type="door" hasCode />
+                  </div>
+                )}
+                {account.alarm_code_encrypted && (
+                  <div className="flex items-center justify-between py-2">
+                    <span className="text-cw-muted">Alarm Code</span>
+                    <CodeReveal accountId={account.id} type="alarm" hasCode />
+                  </div>
+                )}
+                {account.door_access_code_encrypted && (
+                  <div className="flex items-center justify-between py-2">
+                    <span className="text-cw-muted">Door Access Code</span>
+                    <CodeReveal accountId={account.id} type="door_access" hasCode />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Current Key Holders */}

@@ -23,6 +23,7 @@ import ManagerPanel from '../components/ManagerPanel';
 import ManagerModal from '../components/ManagerModal';
 import SelectionToolbar, { selectionCapabilities } from '../components/SelectionToolbar';
 import KeyFormsTab from '../components/KeyFormsTab';
+import DoorCodesTab from '../components/DoorCodesTab';
 import BulkArchiveModal from '../components/BulkArchiveModal';
 import { useBulkSelect } from '../lib/useBulkSelect';
 import { CheckedOutTable, CheckedInTable, type SortState } from '../components/CustodyTables';
@@ -35,7 +36,7 @@ import { getAccounts, getAccount, createAccount, updateAccount, revealCode, getM
   getDataQualitySummary,
 } from '../lib/api';
 
-type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'checkedout' | 'checkedin' | 'keyforms' | 'all' | 'archived';
+type TabType = 'ic' | 'customer' | 'am' | 'ccm' | 'office' | 'cwemployees' | 'checkedout' | 'checkedin' | 'keyforms' | 'all' | 'archived' | 'doorcodes';
 
 const emptyForm = {
   ic_company_name: '',
@@ -1107,7 +1108,7 @@ export default function Registry() {
   const TAB_ALIASES: Record<string, TabType> = {
     'account-managers': 'am', managers: 'am', am: 'am',
     'contract-compliance': 'ccm', ccm: 'ccm',
-    archived: 'archived', cwemployees: 'cwemployees',
+    archived: 'archived', cwemployees: 'cwemployees', doorcodes: 'doorcodes',
     checkedout: 'checkedout', checkedin: 'checkedin',
     keyforms: 'keyforms', 'key-forms': 'keyforms', forms: 'keyforms',
   };
@@ -1224,7 +1225,14 @@ export default function Registry() {
   const isCustodyTab = (tab === 'checkedout' || tab === 'checkedin') && !drill;
   // Tabs that render their OWN roster (no account list / account search box).
   const isFormsTab = tab === 'keyforms' && !drill;
-  const isPeopleTab = isRosterTab || isStaffTab || isFormsTab;
+  const isCodesTab = tab === 'doorcodes' && !drill;
+  // Tabs that own their entire view: their own search, their own filters, their
+  // own data. The registry's search box, bulk toolbar and pager are suppressed
+  // for these, and the account list is not fetched at all — `type=keyforms`
+  // matched no filter server-side, so it was quietly pulling the whole registry
+  // to render a tab that never looked at it.
+  const isSelfContainedTab = isFormsTab || isCodesTab;
+  const isPeopleTab = isRosterTab || isStaffTab || isSelfContainedTab;
 
   // Debounce the applied search: typing updates the input instantly, but the
   // list is only refetched 300ms after the user pauses (was 4 API calls PER
@@ -1332,11 +1340,12 @@ export default function Registry() {
   useEffect(() => { loadGaps(); }, [loadGaps]);
 
   useEffect(() => {
+    if (isSelfContainedTab) return;
     if (isCustodyTab) loadCustody();
     else if (isStaffTab) loadStaff();
     else if (isRosterTab) loadRoster();
     else loadRows();
-  }, [isCustodyTab, isStaffTab, isRosterTab, loadCustody, loadStaff, loadRoster, loadRows]);
+  }, [isSelfContainedTab, isCustodyTab, isStaffTab, isRosterTab, loadCustody, loadStaff, loadRoster, loadRows]);
 
   // Tab/type counts — independent of search, so they are NOT refetched while
   // typing. Refreshed on mount and after any mutation.
@@ -1419,9 +1428,10 @@ export default function Registry() {
     { key: 'keyforms', label: 'Key Forms' },
     { key: 'all', label: `All (${counts.all})` },
     { key: 'archived', label: `Archived (${counts.archived})` },
+    { key: 'doorcodes', label: 'Door Codes' },
   ], [counts]);
 
-  const DEEP_LINK_TABS: TabType[] = ['archived', 'cwemployees', 'checkedout', 'checkedin', 'keyforms', 'am', 'ccm'];
+  const DEEP_LINK_TABS: TabType[] = ['archived', 'cwemployees', 'checkedout', 'checkedin', 'keyforms', 'am', 'ccm', 'doorcodes'];
 
   const selectTab = (key: TabType) => {
     setTab(key);
@@ -2017,6 +2027,8 @@ export default function Registry() {
               onNotice={setNotice}
             />
           )
+        ) : isCodesTab ? (
+          <DoorCodesTab notify={setNotice} />
         ) : isFormsTab ? (
           <KeyFormsTab notify={setNotice} />
         ) : isStaffTab ? (

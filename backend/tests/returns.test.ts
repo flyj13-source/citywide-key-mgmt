@@ -48,6 +48,7 @@ beforeEach(() => {
   db.exec('DELETE FROM key_assignments');
   db.exec('DELETE FROM key_form_docs');
   db.exec('DELETE FROM audit_log');
+  db.exec('DELETE FROM access_codes');
   db.exec("DELETE FROM accounts WHERE bc_client_number = '01014100777'");
   db.exec("DELETE FROM staff_managers WHERE name = 'Return Tester'");
   db.prepare(

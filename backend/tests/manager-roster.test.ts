@@ -30,6 +30,8 @@ beforeAll(async () => {
 
   const db = openDb();
   db.exec('DELETE FROM staff_managers');
+  db.exec('DELETE FROM access_codes');
+  db.exec('DELETE FROM access_codes');
   db.exec('DELETE FROM accounts');
   const ins = db.prepare(
     "INSERT INTO staff_managers (name, manager_type, role_category, shift, day_night, email, active) VALUES (?,?,?,?,?,?,?)"

@@ -41,6 +41,8 @@ beforeAll(async () => {
 beforeEach(() => {
   // Assignments first — they carry a foreign key onto accounts.
   db.exec('DELETE FROM key_assignments');
+  db.exec('DELETE FROM access_codes');
+  db.exec('DELETE FROM access_codes');
   db.exec('DELETE FROM accounts');
   // Audit entries accumulate across tests otherwise, and several assertions
   // here are precisely about how many entries a bulk action writes.

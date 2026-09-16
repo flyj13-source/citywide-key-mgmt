@@ -36,6 +36,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  db.exec('DELETE FROM access_codes');
   db.exec('DELETE FROM key_assignments; DELETE FROM accounts; DELETE FROM contractors');
 });
 

@@ -4,6 +4,7 @@ import { encrypt } from './crypto';
 import { backfillStaffManagers } from './backfillStaffManagers';
 import { seedTestFixtures } from './testFixtures';
 import { applyMailboxUpdates, CARA_NEW_EMAIL } from './mailboxUpdates';
+import { migrateAccountCodesToAccessCodes } from './accessCodeMigration';
 
 // Runs at every server startup. Idempotent — only writes when rows are missing.
 // This is the ONLY place seeding happens in production; seed.ts is local-dev-only.
@@ -58,6 +59,30 @@ function applyMailboxChanges(): void {
   }
 }
 
+/**
+ * Moves each account's single door/alarm code into access_codes. Runs once,
+ * guarded internally; the count goes in the boot log because a data migration
+ * is the line you want when the Door Codes tab looks emptier than expected.
+ */
+function migrateAccessCodes(): void {
+  try {
+    const r = migrateAccountCodesToAccessCodes();
+    if (!r.applied) return;
+    console.log(
+      `\u2713 [seed] Access codes migrated: ${r.total} total `
+      + `(${r.door} door \u2192 front_door, ${r.alarm} alarm)`
+    );
+    if (r.incomplete > 0) {
+      console.warn(
+        `\u26a0 [seed] ${r.incomplete} code(s) had ciphertext but no IV and were SKIPPED — `
+        + 'they cannot be decrypted; the original accounts columns still hold them.'
+      );
+    }
+  } catch (e) {
+    console.error('[seed] Access code migration failed:', (e as Error).message);
+  }
+}
+
 export function autoSeedIfEmpty(): void {
   const seedPassword = process.env.SEED_PASSWORD || 'demo1234';
 
@@ -107,6 +132,7 @@ export function autoSeedIfEmpty(): void {
     console.log(`✓ [seed] Accounts table has ${count} rows — skipping demo data`);
     seedStaffManagerRoster();
     applyMailboxChanges();
+    migrateAccessCodes();
     seedFixtures();
     return;
   }
@@ -173,6 +199,9 @@ export function autoSeedIfEmpty(): void {
 
   seedStaffManagerRoster();
   applyMailboxChanges();
+  // Runs on a fresh database too: the demo records seeded above carry door and
+  // alarm codes, so they arrive in the Door Codes tab like any other client's.
+  migrateAccessCodes();
   seedFixtures();
 }
 

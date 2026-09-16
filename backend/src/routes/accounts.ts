@@ -640,11 +640,29 @@ router.delete('/:id', requireAuth, (req: AuthRequest, res: Response) => {
   const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id) as any;
   if (!account) return res.status(404).json({ error: 'Not found' });
 
-  db.prepare('DELETE FROM accounts WHERE id = ?').run(req.params.id);
+  // Access codes carry a foreign key onto accounts, so they go first — and they
+  // must go regardless: leaving a client's door codes behind after purging the
+  // client would strand secrets with nothing to attribute them to. The count is
+  // recorded, because "how many codes did that purge take with it" is the first
+  // question afterwards.
+  const codeCount = Object.assign({}, db.prepare(
+    'SELECT COUNT(*) AS c FROM access_codes WHERE account_id = ?'
+  ).get(req.params.id) as any).c as number;
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM access_codes WHERE account_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM accounts WHERE id = ?').run(req.params.id);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
 
   logAudit(req, 'account_purged', account.ic_company_name, req.params.id, {
     bc_vendor_number: account.bc_vendor_number, bc_client_number: account.bc_client_number,
     record_type: account.record_type,
+    access_codes_deleted: codeCount,
   });
 
   res.json({ success: true });

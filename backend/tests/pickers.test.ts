@@ -42,6 +42,7 @@ beforeAll(async () => {
 beforeEach(() => {
   db.exec('DELETE FROM key_assignments');
   db.exec('DELETE FROM key_form_docs');
+  db.exec('DELETE FROM access_codes');
   db.exec("DELETE FROM accounts WHERE COALESCE(is_test,0)=0");
   db.exec("DELETE FROM staff_managers WHERE COALESCE(is_test,0)=0");
 });

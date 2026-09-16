@@ -180,6 +180,72 @@ export const restoreAccount = (id: number) =>
 export const purgeAccount = (id: number, confirm: string) =>
   req<any>(`/accounts/${id}`, { method: 'DELETE', body: JSON.stringify({ confirm }) });
 
+// ── Access codes (Door Codes tab) ───────────────────────────────────────────
+// A client's many labeled codes. NOTE what is absent from this type: there is
+// no ciphertext and no plaintext field. The server never puts one in a list
+// response — the only way to a value is revealAccessCode(), which is audited
+// server-side on every call.
+export type AccessCodeType =
+  | 'front_door' | 'back_door' | 'supply_closet' | 'gate' | 'alarm' | 'lockbox' | 'other';
+
+export interface AccessCode {
+  id: number;
+  account_id: number;
+  client: string | null;
+  bc_client_number: string | null;
+  record_type: string | null;
+  code_type: AccessCodeType;
+  /** The type's display name, e.g. "Supply Closet". */
+  type_label: string;
+  /** What the row is called: the custom label for 'other', else the type name. */
+  label: string;
+  custom_label: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
+  is_test: number;
+  archived: number;
+}
+
+export interface AccessCodeFeed {
+  codes: AccessCode[];
+  counts: { total: number; by_type: Record<string, number> };
+  types: { key: AccessCodeType; label: string }[];
+}
+
+export const getAccessCodes = (params?: Record<string, string>) => {
+  const q = params ? '?' + new URLSearchParams(params).toString() : '';
+  return req<AccessCodeFeed>(`/access-codes${q}`);
+};
+
+/** The single audited path to a plaintext code. POST because it is an event. */
+export const revealAccessCode = (id: number) =>
+  req<{ code: string }>(`/access-codes/${id}/reveal`, { method: 'POST' });
+
+export const createAccessCode = (data: {
+  account_id: number; code_type: AccessCodeType; custom_label?: string;
+  code: string; notes?: string;
+}) => req<{ code: AccessCode }>('/access-codes', { method: 'POST', body: JSON.stringify(data) });
+
+/** Omit `code` to leave the stored secret untouched. */
+export const updateAccessCode = (id: number, data: {
+  code_type?: AccessCodeType; custom_label?: string; code?: string; notes?: string;
+}) => req<{ code: AccessCode; changed: string[] }>(
+  `/access-codes/${id}`, { method: 'PATCH', body: JSON.stringify(data) },
+);
+
+export const moveAccessCode = (id: number, accountId: number) =>
+  req<{ code: AccessCode; from: string; to: string }>(
+    `/access-codes/${id}/move`, { method: 'POST', body: JSON.stringify({ account_id: accountId }) },
+  );
+
+export const archiveAccessCode = (id: number) =>
+  req<{ success: true }>(`/access-codes/${id}/archive`, { method: 'POST' });
+export const restoreAccessCode = (id: number) =>
+  req<{ success: true }>(`/access-codes/${id}/restore`, { method: 'POST' });
+
 // ── Key custody (Check Out / Check In, inside the Key Registry) ─────────────
 export type KeyTypeKey = 'metal' | 'card' | 'fob' | 'dispenser';
 export interface KeyLine { type: KeyTypeKey; label: string; qty: number }
