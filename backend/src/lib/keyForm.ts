@@ -115,20 +115,39 @@ export function isReturnReceipt(row: { doc_kind?: string | null; event_type?: st
   return docKindOf(row) === 'return_receipt';
 }
 
-export const DOC_TITLE: Record<DocKind, string> = {
-  holdings: 'Key Form',
-  return_receipt: 'Key Return Receipt',
-};
+/**
+ * Where the keys went decides the words, so the labels are resolved from the
+ * row rather than looked up by kind alone.
+ *
+ * A receipt covers keys leaving the holder's hands, but there are two ways for
+ * that to happen and they are not the same event. Handed back to City Wide is
+ * a RETURN. Handed to a named person is a TRANSFER — the keys are still out,
+ * with somebody else, and calling that "returned" tells the reader the
+ * opposite of what happened. The counterparty is what distinguishes them, and
+ * it is the same input the acknowledgement sentence already branches on.
+ */
+function receiptIsTransfer(row: { counterparty_name?: string | null } | null | undefined): boolean {
+  return !!(row?.counterparty_name && String(row.counterparty_name).trim());
+}
 
-/** The heading over the line-item table, and the label on its footing total. */
-export const DOC_TABLE_HEADING: Record<DocKind, string> = {
-  holdings: 'Keys held',
-  return_receipt: 'Keys returned',
-};
-export const DOC_TOTAL_LABEL: Record<DocKind, string> = {
-  holdings: 'TOTAL KEYS HELD',
-  return_receipt: 'TOTAL KEYS RETURNED',
-};
+type LabelRow = { doc_kind?: string | null; event_type?: string; counterparty_name?: string | null };
+
+export function docTitleFor(row: LabelRow): string {
+  if (docKindOf(row) === 'holdings') return 'Key Form';
+  return receiptIsTransfer(row) ? 'Key Transfer Receipt' : 'Key Return Receipt';
+}
+
+/** The heading over the line-item table. */
+export function docTableHeadingFor(row: LabelRow): string {
+  if (docKindOf(row) === 'holdings') return 'Keys held';
+  return receiptIsTransfer(row) ? 'Keys transferred' : 'Keys returned';
+}
+
+/** The label on the footing total. */
+export function docTotalLabelFor(row: LabelRow): string {
+  if (docKindOf(row) === 'holdings') return 'TOTAL KEYS HELD';
+  return receiptIsTransfer(row) ? 'TOTAL KEYS TRANSFERRED' : 'TOTAL KEYS RETURNED';
+}
 
 /**
  * Thrown when a form would be generated with nothing on it.
@@ -480,9 +499,9 @@ export function serializeForm(row: any): any {
     // PDF, sign-off page, Forms tab, email — agrees rather than each
     // re-deriving it and drifting apart.
     doc_kind: docKindOf(row),
-    doc_title: DOC_TITLE[docKindOf(row)],
-    table_heading: DOC_TABLE_HEADING[docKindOf(row)],
-    total_label: DOC_TOTAL_LABEL[docKindOf(row)],
+    doc_title: docTitleFor(row),
+    table_heading: docTableHeadingFor(row),
+    total_label: docTotalLabelFor(row),
     holder_name: row.holder_name,
     holder_type: row.holder_type,
     holder_role: row.holder_role,

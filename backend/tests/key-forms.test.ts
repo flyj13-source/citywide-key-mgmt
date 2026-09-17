@@ -241,10 +241,14 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
       keys: [{ type: 'metal', qty: 2 }],
     });
     expect(res.status).toBe(201);
-    // OUTGOING side signs a RECEIPT for exactly what they handed over.
+    // OUTGOING side signs a RECEIPT for exactly what they handed over — and it
+    // says TRANSFER, not return: the keys are still out, with the other party.
     expect(res.body.key_forms.from).toMatchObject({
       event_type: 'transfer', holder_name: 'From Person', counterparty_name: 'To Person',
-      doc_kind: 'return_receipt', doc_title: 'Key Return Receipt',
+      doc_kind: 'return_receipt',
+      doc_title: 'Key Transfer Receipt',
+      table_heading: 'Keys transferred',
+      total_label: 'TOTAL KEYS TRANSFERRED',
     });
     expect(res.body.key_forms.from.total_keys).toBe(2);
     expect(res.body.key_forms.from.clients[0].metal).toBe(2);
@@ -860,3 +864,143 @@ function pdfText(buf: Buffer): string {
   while ((t = tj.exec(raw)) !== null) out.push(Buffer.from(t[1], 'hex').toString('latin1'));
   return out.join('\n');
 }
+
+// ════════ A TRANSFER IS NOT A RETURN ════════
+// Same root cause as the check-in bug: one code path, two meanings. Keys handed
+// to a named person are still OUT — calling that "returned" tells the reader
+// the opposite of what happened.
+describe('TRANSFER WORDING', () => {
+  const setup = async () => {
+    const id = site('ZZ TEST SITE ALPHA');
+    addStaff('ZZ Test AM One', 'am1@cw.test');
+    addStaff('ZZ Test AM Two', 'am2@cw.test');
+    await checkout({
+      account_id: id, holder: 'ZZ Test AM One', holder_email: 'am1@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 2 }],
+    });
+    const res = await auth(request(app).post('/api/assignments/transfer')).send({
+      account_id: id, mode: 'keys',
+      from_holder: 'ZZ Test AM One', to_holder: 'ZZ Test AM Two',
+      to_holder_email: 'am2@cw.test', to_holder_type: 'employee',
+      keys: [{ type: 'metal', qty: 2 }],
+    });
+    expect(res.status).toBe(201);
+    return res.body.key_forms;
+  };
+
+  it('the FROM document asserts TRANSFER — never return, never holdings', async () => {
+    const { from } = await setup();
+    expect(from.doc_title).toBe('Key Transfer Receipt');
+    expect(from.table_heading).toBe('Keys transferred');
+    expect(from.total_label).toBe('TOTAL KEYS TRANSFERRED');
+    expect(from.counterparty_name).toBe('ZZ Test AM Two');
+    expect(from.total_keys).toBe(2);
+    expect(JSON.stringify(from)).not.toMatch(/Keys returned|Key Return Receipt|TOTAL KEYS RETURNED/);
+  });
+
+  it('the TO document is a holdings statement', async () => {
+    const { to } = await setup();
+    expect(to.doc_kind).toBe('holdings');
+    expect(to.doc_title).toBe('Key Form');
+    expect(to.table_heading).toBe('Keys held');
+    expect(to.total_keys).toBe(2);
+  });
+
+  it('neither document can generate with zero line items', async () => {
+    const { from, to } = await setup();
+    expect(from.clients.length).toBeGreaterThan(0);
+    expect(to.clients.length).toBeGreaterThan(0);
+    // And the guard itself refuses rather than emitting a blank either way.
+    const { EmptyHoldingsError, createKeyForm } = await import('../src/lib/keyForm');
+    expect(() => createKeyForm({
+      eventType: 'transfer', holderName: 'Nobody', docKind: 'return_receipt',
+      lines: [], generatedBy: 'test',
+    })).toThrow(EmptyHoldingsError);
+    expect(() => createKeyForm({
+      eventType: 'transfer', holderName: 'Nobody At All', docKind: 'holdings',
+      lines: [], generatedBy: 'test',
+    })).toThrow(EmptyHoldingsError);
+  });
+
+  it('the FROM PDF says transferred, and dates it as a transfer', async () => {
+    const { from } = await setup();
+    const pdf = await auth(request(app).get(`/api/key-forms/${from.id}/pdf`));
+    const text = pdfText(pdf.body as Buffer);
+
+    expect(text).toContain('Key Transfer Receipt');
+    expect(text).toContain('KEYS TRANSFERRED');
+    expect(text).toContain('Keys transferred by ZZ Test AM One');
+    expect(text).toContain('I confirm I have transferred the keys listed above to ZZ Test AM Two');
+    expect(text).toContain('Transfer of keys');
+    // The words that would be false on this document.
+    expect(text).not.toMatch(/Key Return Receipt/);
+    expect(text).not.toMatch(/KEYS RETURNED/);
+    expect(text).not.toMatch(/I have returned the keys listed above/);
+    expect(text).not.toMatch(/currently in my possession/);
+  });
+
+  it('the TO PDF is the holdings acknowledgement', async () => {
+    const { to } = await setup();
+    const text = pdfText((await auth(request(app).get(`/api/key-forms/${to.id}/pdf`))).body as Buffer);
+    expect(text).toContain('Key Form');
+    expect(text).toContain('KEYS HELD');
+    expect(text).toContain('currently in my possession');
+    expect(text).not.toMatch(/transferred the keys listed above/);
+  });
+});
+
+// ════════ REGENERATE RE-DERIVES, IT DOES NOT COPY ════════
+describe('REGENERATE FIXES A WRONGLY-STORED KIND', () => {
+  it('a reconciled check-in stored as a receipt rebuilds as HOLDINGS', async () => {
+    const id = site('ATENEA SERVICES');
+    const res = await checkin({
+      holder: 'Jo Martinez', holder_email: 'jo@cw.test', holder_type: 'employee',
+      account_id: id, keys: [{ type: 'metal', qty: 1 }],
+    });
+    const formId = res.body.key_form.id;
+
+    // Put it back into the broken state the Atenea record is in: the wrong kind
+    // stored on a reconciled entry.
+    db.prepare("UPDATE key_form_docs SET doc_kind='return_receipt' WHERE id=?").run(formId);
+    const before = await auth(request(app).get(`/api/key-forms/${formId}`));
+    expect(before.body.form.doc_kind).toBe('return_receipt');
+    expect(before.body.form.doc_title).toBe('Key Return Receipt');
+
+    const re = await auth(request(app).post(`/api/key-forms/${formId}/regenerate`));
+    expect(re.status).toBe(201);
+    // Re-derived from the custody record's origin, NOT copied from the row.
+    expect(re.body.form.doc_kind).toBe('holdings');
+    expect(re.body.form.doc_title).toBe('Key Form');
+    expect(re.body.form.table_heading).toBe('Keys held');
+    expect(re.body.form.total_keys).toBe(1);
+    expect(re.body.form.clients[0]).toMatchObject({ client: 'ATENEA SERVICES', metal: 1 });
+    expect(re.body.form.supersedes).toBe(formId);
+
+    // The original is kept and marked, never edited or deleted.
+    const old = Object.assign({}, db.prepare(
+      'SELECT status, superseded_by FROM key_form_docs WHERE id = ?'
+    ).get(formId) as any);
+    expect(old.status).toBe('superseded');
+    expect(old.superseded_by).toBe(re.body.form.id);
+
+    // And the rebuilt PDF carries the holdings sentence.
+    const text = pdfText((await auth(request(app).get(`/api/key-forms/${re.body.form.id}/pdf`))).body as Buffer);
+    expect(text).toContain('currently in my possession');
+    expect(text).not.toMatch(/I have returned the keys listed above/);
+  });
+
+  it('a GENUINE return still rebuilds as a return receipt', async () => {
+    const id = site('ATENEA SERVICES');
+    await checkout({
+      account_id: id, holder: 'Jo Martinez', holder_email: 'jo@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }],
+    });
+    const res = await checkin({
+      holder: 'Jo Martinez', account_id: id, keys: [{ type: 'metal', qty: 1 }],
+    });
+    const re = await auth(request(app).post(`/api/key-forms/${res.body.key_form.id}/regenerate`));
+    expect(re.status).toBe(201);
+    expect(re.body.form.doc_kind).toBe('return_receipt');
+    expect(re.body.form.doc_title).toBe('Key Return Receipt');
+  });
+});

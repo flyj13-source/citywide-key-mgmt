@@ -15,7 +15,7 @@ import { hashSignature } from '../lib/pdf';
 import {
   createKeyForm, getKeyForm, getKeyFormByToken, listKeyForms, markSent,
   parseScope, serializeForm, snapshotHolder, FORM_EVENT_LABEL, EmptyHoldingsError,
-  docKindOf, DOC_TITLE, DOC_TABLE_HEADING, DOC_TOTAL_LABEL,
+  docKindOf, docTitleFor, docTableHeadingFor, docTotalLabelFor,
   type FormEventType,
 } from '../lib/keyForm';
 import { failedSendCount, failedSendIds, correctionFormCounts } from '../lib/keyForm';
@@ -58,7 +58,7 @@ async function refreshPdf(id: number): Promise<string | null> {
  * which the caller reports rather than papering over — inventing line items
  * for a document somebody signs would be worse than refusing.
  */
-function receiptLinesFromSource(form: any): any[] {
+function receiptLinesFromSource(form: any, viaOverride?: string): any[] {
   if (form.source_kind !== 'assignment' || !form.source_ref) return [];
   const raw = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(Number(form.source_ref)) as any;
   if (!raw) return [];
@@ -73,10 +73,31 @@ function receiptLinesFromSource(form: any): any[] {
     bc_client_number: bcNumberForAssignment(rec),
     metal: 0, card: 0, fob: 0, dispenser: 0, office: 0,
     subtotal: total, assigned: 0, checked_out: total,
-    via: form.counterparty_name ? `Transferred to ${form.counterparty_name}` : 'Returned by this event',
+    via: viaOverride
+      ?? (form.counterparty_name ? `Transferred to ${form.counterparty_name}` : 'Returned by this event'),
   };
   for (const k of keys) if (k.type in line) line[k.type] += k.qty;
   return [line];
+}
+
+/**
+ * What kind of document SHOULD this form be, judged from the event it records
+ * rather than from what was stored on it.
+ *
+ * A check-in is the only ambiguous case: origin='reconciled' means it closed no
+ * prior check-out — Cara putting keys somebody already has on record — which is
+ * a holdings assertion, not a return. Everything else keeps its stored kind,
+ * which callers set deliberately (a transfer stores one of each).
+ */
+function rederiveDocKind(form: any): 'holdings' | 'return_receipt' {
+  if (form.event_type === 'checkin' && form.source_kind === 'assignment' && form.source_ref) {
+    const raw = db.prepare('SELECT origin FROM key_assignments WHERE id = ?')
+      .get(Number(form.source_ref)) as any;
+    if (raw) {
+      return Object.assign({}, raw).origin === 'reconciled' ? 'holdings' : 'return_receipt';
+    }
+  }
+  return docKindOf(form);
 }
 
 // ── GET /api/key-forms — the Forms tab ───────────────────────────────────────
@@ -275,7 +296,14 @@ router.post('/:id(\\d+)/regenerate', requireAuth, async (req: AuthRequest, res: 
   }
 
   const actor = req.manager?.name ?? 'System';
-  const kind = docKindOf(old);
+  // The kind is RE-DERIVED, not copied from the row being replaced.
+  //
+  // Copying it would make regenerate useless for the case it exists to fix: a
+  // form whose stored kind is wrong would rebuild wrong forever. The truth is
+  // on the custody record — a check-in with origin='reconciled' closed nothing,
+  // so it is a HOLDINGS statement ("these keys are in my possession"), and only
+  // a check-in that actually closed a check-out is a return receipt.
+  const kind = rederiveDocKind(old);
 
   // A RECEIPT is rebuilt from the custody record it was written for, not from
   // the holder's current position: what came back on that day is a historical
@@ -284,6 +312,19 @@ router.post('/:id(\\d+)/regenerate', requireAuth, async (req: AuthRequest, res: 
   // stored the post-return snapshot (and so read "holds no keys") regenerates
   // into the receipt it should always have been.
   let receiptLines: any[] | undefined;
+  // A reconciled check-in states what the holder HAS, but it still lists the
+  // keys that were recorded rather than a fresh snapshot — the record is of
+  // that moment. Same source, different assertion.
+  if (kind === 'holdings' && old.event_type === 'checkin') {
+    receiptLines = receiptLinesFromSource(old, 'Recorded as held');
+    if (!receiptLines.length) {
+      return res.status(409).json({
+        error: `${old.form_no} cannot be rebuilt — the custody record it was generated from is `
+          + 'no longer available, so the keys it covered cannot be established.',
+        code: 'RECEIPT_SOURCE_MISSING',
+      });
+    }
+  }
   if (kind === 'return_receipt') {
     receiptLines = receiptLinesFromSource(old);
     if (!receiptLines.length) {
@@ -308,6 +349,8 @@ router.post('/:id(\\d+)/regenerate', requireAuth, async (req: AuthRequest, res: 
       docKind: kind,
       lines: receiptLines,
       eventNote: old.event_type === 'audit' ? null : `Regenerated from ${old.form_no}`,
+      // Carried through so a rebuilt transfer receipt keeps naming the person
+      // the keys went to — which is what makes it a transfer and not a return.
       generatedBy: actor,
       sourceKind: old.source_kind ?? null,
       sourceRef: old.source_ref ?? null,
@@ -540,9 +583,9 @@ router.get('/token/:token', (req: Request, res: Response) => {
     // What the signer is being asked to attest to. Resolved server-side so the
     // page never infers the document kind from the event name.
     doc_kind: docKindOf(row),
-    doc_title: DOC_TITLE[docKindOf(row)],
-    table_heading: DOC_TABLE_HEADING[docKindOf(row)],
-    total_label: DOC_TOTAL_LABEL[docKindOf(row)],
+    doc_title: docTitleFor(row),
+    table_heading: docTableHeadingFor(row),
+    total_label: docTotalLabelFor(row),
     // Set on a transfer receipt: the person the keys went to.
     counterparty_name: row.counterparty_name ?? null,
     returned_keys: row.returned_keys ?? 0,

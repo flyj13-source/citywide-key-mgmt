@@ -451,23 +451,48 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
 }
 
 export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
-  // A first-time custody record is not a return. One flag, read once, decides
-  // every piece of wording below — so the two cannot drift apart.
+  // THREE outcomes reach this one function, and they mean different things:
+  //
+  //   recorded    keys the holder ALREADY HAS, put on record for the first time
+  //               — nothing moved (origin='reconciled')
+  //   transferred keys handed to a NAMED PERSON — they are still out, with
+  //               somebody else, so "returned" tells the reader the opposite
+  //               of what happened
+  //   returned    keys handed back to City Wide — the plain case
+  //
+  // One decision, made once, drives subject/headline/date/table/list together,
+  // so they cannot drift apart. Recorded wins over transferred: a first-time
+  // record is not a handover at all.
   const recorded = !!d.firstRecord;
+  const transferredTo = !recorded && d.transferTo ? d.transferTo : null;
+
   const subject = recorded
     ? subjectFor('Key custody recorded', d.holder, d.client)
-    : subjectFor('Keys returned', d.holder, d.client);
-  const headline = recorded ? 'Key custody recorded' : 'Keys returned';
+    : transferredTo
+      ? subjectFor('Keys transferred', d.holder, d.client)
+      : subjectFor('Keys returned', d.holder, d.client);
+  const headline = recorded
+    ? 'Key custody recorded'
+    : transferredTo ? 'Keys transferred' : 'Keys returned';
   const lede = recorded
     ? `${d.holder} is on record holding these keys for ${d.client}.`
-    : `${d.holder} has returned keys for ${d.client}.`;
-  const dateLabel = recorded ? 'Recorded on' : 'Date returned';
-  const keyTableHeader = recorded ? 'Key type held' : 'Key type returned';
-  const keyListLabel = recorded ? 'Keys on record:' : 'Keys returned:';
+    : transferredTo
+      ? `${d.holder} transferred keys for ${d.client} to ${transferredTo}.`
+      : `${d.holder} has returned keys for ${d.client}.`;
+  const dateLabel = recorded
+    ? 'Recorded on'
+    : transferredTo ? 'Date transferred' : 'Date returned';
+  const keyTableHeader = recorded
+    ? 'Key type held'
+    : transferredTo ? 'Key type transferred' : 'Key type returned';
+  const keyListLabel = recorded
+    ? 'Keys on record:'
+    : transferredTo ? 'Keys transferred:' : 'Keys returned:';
 
-  const transferNote = d.transferTo
+  const transferNote = transferredTo
     ? `<p style="margin:0 0 16px;font-size:13px;color:${CW_CHARCOAL};background:${CW_BG};border-left:4px solid ${CW_RED};padding:10px 14px;border-radius:3px">
-         Handed directly to <strong>${esc(d.transferTo)}</strong> — person-to-person transfer.
+         Handed directly to <strong>${esc(transferredTo)}</strong> — person-to-person transfer.
+         These keys are still out; they are now with ${esc(transferredTo)}.
        </p>`
     : '';
 
@@ -479,9 +504,10 @@ export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
        ${detailRows([
          ...partyRows(d),
          [dateLabel, fmtDate(d.returnedAt)],
-         // Condition describes keys handed over. On a first-time record nothing
-         // was inspected, so the row is omitted rather than asserted.
-         ...(recorded ? [] : ([['Condition', d.condition]] as [string, string][])),
+         // Condition is an inspection on hand-back. Nothing is inspected on a
+         // first-time record, and on a transfer the keys went straight to
+         // another holder — so the row is omitted rather than asserted.
+         ...(recorded || transferredTo ? [] : ([['Condition', d.condition]] as [string, string][])),
          ['Recorded by', d.onBehalf ? `${d.recordedBy} (on behalf of ${d.holder})` : d.recordedBy],
        ])}
      </table>
@@ -498,17 +524,21 @@ export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
     // sentence IS the correction.
     lede,
     '',
-    ...(d.transferTo ? [`Handed directly to ${d.transferTo} (person-to-person transfer).`, ''] : []),
+    ...(transferredTo
+      ? [`Handed directly to ${transferredTo} (person-to-person transfer).`,
+         `These keys are still out; they are now with ${transferredTo}.`, '']
+      : []),
     `Holder: ${d.holder} (${holderTypeLabel(d.holderType)})`,
     `Client: ${d.client}${d.bcNumber ? ` (BC #${d.bcNumber})` : ''}`,
     `${dateLabel}: ${fmtDate(d.returnedAt)}`,
-    ...(recorded ? [] : [`Condition: ${d.condition}`]),
+    ...(recorded || transferredTo ? [] : [`Condition: ${d.condition}`]),
     `Recorded by: ${d.recordedBy}${d.onBehalf ? ` (on behalf of ${d.holder})` : ''}`,
     '',
     keyListLabel,
     ...d.keys.map((k) => `  ${keyPhrase(k)}`),
     ...(d.signoffLink
-      ? ['', `${recorded ? 'Confirm these keys' : 'Sign for this return'} (expires in 48 hours): ${d.signoffLink}`]
+      ? ['', `${recorded ? 'Confirm these keys' : transferredTo ? 'Sign for this transfer' : 'Sign for this return'}`
+           + ` (expires in 48 hours): ${d.signoffLink}`]
       : []),
   ].join('\n');
 
