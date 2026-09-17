@@ -143,7 +143,7 @@ describe('CUSTODY EMAIL BODY', () => {
     // Plain-text alternative carries the same facts.
     expect(text).toContain('Rick Ruiz (Independent Contractor (IC))');
     expect(text).toContain('BC #01014000123');
-    expect(text).toContain('2 × Metal Key');
+    expect(text).toContain('2 Metal Keys');
   });
 
   it('a check-in states the condition and asks for a RETURN signature', async () => {
@@ -287,5 +287,73 @@ describe('SEND FAILURES ARE REPORTED, NEVER SWALLOWED', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toBe('550 mailbox unavailable');
     sendBehaviour = () => ({ messageId: 'test' });
+  });
+});
+
+// ═══════════════ A FIRST-TIME CUSTODY RECORD IS NOT A RETURN ═══════════════
+// Cara logging keys somebody ALREADY HAS shares a request shape with a real
+// return — deliberately, so the person at the counter need not know which it
+// is. That is exactly why the notification has to tell them apart: the
+// recipient is usually the holder, who would otherwise read "you have returned
+// these" about keys still in their pocket.
+describe('CHECK-IN WORDING BRANCHES ON ORIGIN', () => {
+  const base = {
+    holder: 'Jo Martinez', holderEmail: 'jo@cw.test', holderType: 'employee' as const,
+    client: 'ATENEA SERVICES', bcNumber: '01014200311',
+    keys: KEYS, returnedAt: '2026-09-17T14:00:00.000Z',
+    condition: 'good', recordedBy: 'Cara Angeloni', onBehalf: true,
+    signoffLink: null,
+  };
+
+  it('a FIRST-TIME record says recorded, never returned', async () => {
+    await mail.sendCheckinNotice({ ...base, firstRecord: true });
+    const msg = sent[0];
+
+    expect(msg.subject).toContain('Key custody recorded');
+    expect(msg.subject).toContain('Jo Martinez');
+    expect(msg.subject).toContain('ATENEA SERVICES');
+    expect(msg.subject).not.toMatch(/returned/i);
+
+    for (const body of [msg.html, msg.text]) {
+      expect(body).toContain('Jo Martinez is on record holding these keys for ATENEA SERVICES.');
+      expect(body).toContain('Recorded on');
+      // The whole point: not one word of returning anywhere in the message.
+      expect(body).not.toMatch(/has returned/i);
+      expect(body).not.toMatch(/Date returned/i);
+      expect(body).not.toMatch(/Keys returned/i);
+      expect(body).not.toMatch(/Key type returned/i);
+    }
+    // Condition describes keys handed over; nothing was inspected here.
+    expect(msg.html).not.toMatch(/Condition/i);
+    expect(msg.text).toContain('Keys on record:');
+    expect(msg.html).toContain('Key type held');
+  });
+
+  it('a GENUINE return keeps the returned wording exactly as it was', async () => {
+    await mail.sendCheckinNotice({ ...base, firstRecord: false });
+    const msg = sent[0];
+
+    expect(msg.subject).toContain('Keys returned');
+    for (const body of [msg.html, msg.text]) {
+      expect(body).toContain('Jo Martinez has returned keys for ATENEA SERVICES.');
+      expect(body).toMatch(/Date returned/);
+      expect(body).not.toMatch(/is on record holding/);
+      expect(body).not.toMatch(/Recorded on/);
+    }
+    expect(msg.html).toContain('Key type returned');
+    expect(msg.html).toMatch(/Condition/);
+    expect(msg.text).toContain('Keys returned:');
+  });
+
+  it('omitting the flag defaults to the return wording', async () => {
+    await mail.sendCheckinNotice(base);
+    expect(sent[0].subject).toContain('Keys returned');
+  });
+
+  it('plain language in the key list — no multiplication sign', async () => {
+    await mail.sendCheckinNotice({ ...base, firstRecord: true });
+    expect(sent[0].text).toContain('2 Metal Keys');
+    expect(sent[0].text).toContain('1 Key Fob');
+    expect(sent[0].text).not.toContain('×');
   });
 });

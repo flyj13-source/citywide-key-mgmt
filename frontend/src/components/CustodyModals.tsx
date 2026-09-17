@@ -1002,6 +1002,17 @@ export function CheckInModal({
 
   const lines = selectedLines(picks);
   const totalReturning = lines.reduce((n, l) => n + l.qty, 0);
+  /**
+   * No open check-out to close: this submission RECORDS keys the holder already
+   * has rather than taking any back. The server decides the same way, from the
+   * same fact — but it decides after the send, and the wording of what goes out
+   * differs, so Cara is told which mode she is in before she commits to it.
+   *
+   * Only meaningful once a client and holder are chosen; before that `ctx` has
+   * nothing to say and the modal should not claim either mode.
+   */
+  const contextKnown = !!account && !!holderName && ctx !== null;
+  const recordingHeld = contextKnown && !hasPrior;
   const totalOut = hasPrior ? ctx!.keys.reduce((n, k) => n + k.qty, 0) : 0;
   const isPartial = hasPrior && totalReturning < totalOut;
 
@@ -1118,8 +1129,19 @@ export function CheckInModal({
   }
 
   return (
-    <Modal title="Check In Keys" onClose={onClose} width="max-w-lg">
+    <Modal
+      title={recordingHeld ? 'Record Keys Held' : 'Check In Keys'}
+      onClose={onClose}
+      width="max-w-lg"
+    >
       <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
+        {recordingHeld && (
+          <div className="rounded border border-[#e8cf8a] bg-[#fff8e6] px-3 py-2 text-xs text-[#7a5a00]">
+            <strong>Recording keys already held.</strong> {holderName} has no open check-out at
+            this client, so nothing is being returned — this puts the keys below on record as
+            theirs. The notification and the form will say <em>recorded</em>, not returned.
+          </div>
+        )}
         {/* 1 — Client */}
         <div>
           <SectionLabel>Client</SectionLabel>
@@ -1257,7 +1279,11 @@ export function CheckInModal({
         ) : null}
         <div className="flex items-center gap-2">
           <button onClick={submit} disabled={!canSubmit} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-            {saving ? 'Checking in…' : `Check In${totalReturning ? ` ${totalReturning} Key${totalReturning === 1 ? '' : 's'}` : ''}`}
+            {saving
+              ? (recordingHeld ? 'Recording…' : 'Checking in…')
+              : recordingHeld
+                ? `Record ${totalReturning || ''} Key${totalReturning === 1 ? '' : 's'} Held`.replace('  ', ' ')
+                : `Check In${totalReturning ? ` ${totalReturning} Key${totalReturning === 1 ? '' : 's'}` : ''}`}
           </button>
           <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
         </div>

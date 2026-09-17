@@ -52,7 +52,6 @@ beforeAll(async () => {
 beforeEach(() => {
   db.exec('DELETE FROM key_assignments');
   db.exec('DELETE FROM access_codes');
-  db.exec('DELETE FROM access_codes');
   db.exec('DELETE FROM accounts');
   db.exec('DELETE FROM staff_managers');
   db.exec('DELETE FROM key_form_docs');
@@ -193,17 +192,21 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
     expect(form.event_note).toContain('1 Metal Key');
   });
 
-  it('a reconciling check-in reads as a plain return, not as bookkeeping', async () => {
+  it('a reconciling check-in reads as a RECORD of keys held, not a return', async () => {
     const id = site('RIDGEWAY PLAZA');
     const res = await checkin({
       holder: 'Walk In', holder_email: 'w@cw.test', account_id: id,
       keys: [{ type: 'metal', qty: 1 }],
     });
     expect(res.status).toBe(201);
-    expect(res.body.key_form.doc_kind).toBe('return_receipt');
-    expect(res.body.key_form.returned_keys).toBe(1);
-    expect(res.body.key_form.event_note).toBe('Returned at RIDGEWAY PLAZA: 1 Metal Key');
+    // Nothing came back, so this states what the holder HAS.
+    expect(res.body.key_form.doc_kind).toBe('holdings');
+    expect(res.body.key_form.total_keys).toBe(1);
+    expect(res.body.key_form.event_note)
+      .toBe('Recorded at RIDGEWAY PLAZA: 1 Metal Key on record as held');
+    // Still plain language, and still no bookkeeping jargon on the document.
     expect(res.body.key_form.event_note).not.toMatch(/reconcil/i);
+    expect(res.body.key_form.event_note).not.toMatch(/returned/i);
     expect(res.body.key_form.event_note).not.toContain('×');
   });
 
@@ -761,3 +764,99 @@ describe('ADD IC / ADD CUSTOMER SENDS NOTHING', () => {
     expect(after).toBe(before);
   });
 });
+
+// ═════════ A RECONCILED ENTRY IS A HOLDINGS RECORD, NOT A RECEIPT ═════════
+describe('FIRST-TIME CUSTODY RECORD vs GENUINE RETURN', () => {
+  it('a reconciled check-in produces a HOLDINGS assertion', async () => {
+    const id = site('ATENEA SERVICES');
+    const res = await checkin({
+      holder: 'Jo Martinez', holder_email: 'jo@cw.test', holder_type: 'employee',
+      account_id: id, keys: [{ type: 'metal', qty: 1 }],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.reconciled).toBe(true);
+
+    const form = res.body.key_form;
+    // "I confirm I have returned the keys listed above" is FALSE here, so the
+    // document must not be the kind that says it.
+    expect(form.doc_kind).toBe('holdings');
+    expect(form.doc_title).toBe('Key Form');
+    expect(form.table_heading).toBe('Keys held');
+    expect(form.total_label).toBe('TOTAL KEYS HELD');
+    expect(form.total_keys).toBe(1);
+    expect(form.clients[0]).toMatchObject({ client: 'ATENEA SERVICES', metal: 1 });
+    expect(form.clients[0].via).toBe('Recorded as held');
+    expect(form.event_note).toBe('Recorded at ATENEA SERVICES: 1 Metal Key on record as held');
+    expect(form.event_note).not.toMatch(/returned/i);
+  });
+
+  it('a genuine return after a check-out still produces a RETURN RECEIPT', async () => {
+    const id = site('ATENEA SERVICES');
+    await checkout({
+      account_id: id, holder: 'Jo Martinez', holder_email: 'jo@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }],
+    });
+    const res = await checkin({
+      holder: 'Jo Martinez', account_id: id, keys: [{ type: 'metal', qty: 1 }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.reconciled).toBeUndefined();
+
+    const form = res.body.key_form;
+    expect(form.doc_kind).toBe('return_receipt');
+    expect(form.doc_title).toBe('Key Return Receipt');
+    expect(form.table_heading).toBe('Keys returned');
+    expect(form.event_note).toContain('Returned at ATENEA SERVICES');
+  });
+
+  it('the reconciled PDF never says the holder returned anything', async () => {
+    const id = site('ATENEA SERVICES');
+    const res = await checkin({
+      holder: 'Jo Martinez', holder_email: 'jo@cw.test', holder_type: 'employee',
+      account_id: id, keys: [{ type: 'metal', qty: 2 }],
+    });
+    const pdf = await auth(request(app).get(`/api/key-forms/${res.body.key_form.id}/pdf`));
+    expect(pdf.status).toBe(200);
+    const text = pdfText(pdf.body as Buffer);
+
+    expect(text).toContain('Key Form');
+    expect(text).toContain('KEYS HELD');
+    expect(text).toContain('currently in my possession');
+    // The false sentence must never be generated for this record.
+    expect(text).not.toMatch(/I have returned the keys listed above/i);
+    expect(text).not.toMatch(/Key Return Receipt/);
+  });
+
+  it('the genuine-return PDF still carries the return acknowledgement', async () => {
+    const id = site('ATENEA SERVICES');
+    await checkout({
+      account_id: id, holder: 'Jo Martinez', holder_email: 'jo@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 2 }],
+    });
+    const res = await checkin({
+      holder: 'Jo Martinez', account_id: id, keys: [{ type: 'metal', qty: 2 }],
+    });
+    const pdf = await auth(request(app).get(`/api/key-forms/${res.body.key_form.id}/pdf`));
+    const text = pdfText(pdf.body as Buffer);
+    expect(text).toContain('Key Return Receipt');
+    expect(text).toContain('I confirm I have returned the keys listed above');
+  });
+});
+
+/** Drawn text from a pdf-lib document (hex-encoded Tj operands). */
+function pdfText(buf: Buffer): string {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const zlib = require('zlib');
+  let raw = '';
+  const s = buf.toString('latin1');
+  const re = /stream\r?\n([\s\S]*?)endstream/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) {
+    try { raw += zlib.inflateSync(Buffer.from(m[1], 'latin1')).toString('latin1'); } catch { /* not deflate */ }
+  }
+  const out: string[] = [];
+  const tj = /<([0-9A-Fa-f]+)>\s*Tj/g;
+  let t: RegExpExecArray | null;
+  while ((t = tj.exec(raw)) !== null) out.push(Buffer.from(t[1], 'hex').toString('latin1'));
+  return out.join('\n');
+}

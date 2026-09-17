@@ -727,12 +727,15 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
   const form = await generateEventForm(req, {
     eventType: 'checkin', holderName: holder, holderType: holder_type,
     holderEmail: holder_email || null, holderId: holder_id,
-    docKind: 'return_receipt',
-    lines: returnedFormLines(account, lines, bcNumberFor(account)),
-    // Plain language on the document itself. That this entry had no prior
-    // check-out is a bookkeeping fact, recorded in the audit log above — it is
-    // not what the person handing keys back is being asked to read.
-    eventNote: `Returned at ${account.ic_company_name}: ${summarizeKeys(lines)}`,
+    // A HOLDINGS assertion, not a receipt. Nothing was handed back, so
+    // "I confirm I have returned the keys listed above" would be false — and a
+    // signature on a false sentence is worse than no signature. What is true,
+    // and what this records, is that the holder HAS these keys.
+    docKind: 'holdings',
+    lines: returnedFormLines(
+      account, lines, bcNumberFor(account), 'Recorded as held',
+    ),
+    eventNote: `Recorded at ${account.ic_company_name}: ${summarizeKeys(lines)} on record as held`,
     sourceKind: 'assignment', sourceRef: String(newId),
   });
 
@@ -740,6 +743,8 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
     holder, holderEmail: holder_email || null, holderType: holder_type,
     client: account.ic_company_name, bcNumber: bcNumberFor(account),
     keys: lines, returnedAt: returned_at, condition, recordedBy: actor, onBehalf: true,
+    // Nothing came back: this is keys the holder already had, put on record.
+    firstRecord: true,
     signoffLink: null,
   });
   logMail(req, mail, 'checkin', account.ic_company_name, account_id, holder);
@@ -1148,6 +1153,9 @@ router.post('/:id/resend-signoff', requireAuth, async (req: AuthRequest, res: Re
     : await sendCheckinNotice({
       holder: a.assignee, holderEmail: a.assignee_email ?? null, holderType,
       client: a.account_name, bcNumber, keys,
+      // A resend must say the same thing the original did, so the wording is
+      // taken from the record's own origin rather than assumed.
+      firstRecord: a.origin === 'reconciled',
       returnedAt: a.returned_at, condition: a.condition_on_return || 'good',
       recordedBy: a.checkin_recorded_by || a.recorded_by || actor,
       onBehalf: !!a.checkin_recorded_by && a.checkin_recorded_by !== a.assignee,

@@ -4,7 +4,7 @@ import {
   deliverMessage, fromConfig, fromHeader, activeProvider, providerBlocker,
 } from './mailer';
 import { custodyNotifyRecipients, custodyNotifyDisplay } from './settings';
-import type { KeyLine } from './custody';
+import { keyPhrase, type KeyLine } from './custody';
 import db from './db';
 
 // ── CW-branded custody notifications ─────────────────────────────────────────
@@ -189,6 +189,17 @@ export interface CheckoutMail extends CustodyParty {
 
 export interface CheckinMail extends CustodyParty {
   keys: KeyLine[];
+  /**
+   * TRUE when this entry closes no prior check-out — Cara putting keys somebody
+   * ALREADY HAS on record for the first time (origin='reconciled').
+   *
+   * Nothing physically came back, so every word about returning is false. The
+   * recipient is usually the holder, who would read "you have returned these"
+   * about keys still in their pocket. The two cases share a request shape
+   * deliberately (the person at the counter should not have to know which it
+   * is), which is exactly why the DOCUMENT has to tell them apart.
+   */
+  firstRecord?: boolean;
   returnedAt: string;
   condition: string;
   recordedBy: string;
@@ -432,7 +443,7 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
     `Recorded by: ${d.recordedBy}${d.onBehalf ? ` (on behalf of ${d.holder})` : ''}`,
     '',
     'Keys:',
-    ...d.keys.map((k) => `  ${k.qty} × ${k.label}`),
+    ...d.keys.map((k) => `  ${keyPhrase(k)}`),
     ...(d.signoffLink ? ['', `Sign for these keys (expires in 48 hours): ${d.signoffLink}`] : []),
   ].join('\n');
 
@@ -440,7 +451,19 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
 }
 
 export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
-  const subject = subjectFor('Keys returned', d.holder, d.client);
+  // A first-time custody record is not a return. One flag, read once, decides
+  // every piece of wording below — so the two cannot drift apart.
+  const recorded = !!d.firstRecord;
+  const subject = recorded
+    ? subjectFor('Key custody recorded', d.holder, d.client)
+    : subjectFor('Keys returned', d.holder, d.client);
+  const headline = recorded ? 'Key custody recorded' : 'Keys returned';
+  const lede = recorded
+    ? `${d.holder} is on record holding these keys for ${d.client}.`
+    : `${d.holder} has returned keys for ${d.client}.`;
+  const dateLabel = recorded ? 'Recorded on' : 'Date returned';
+  const keyTableHeader = recorded ? 'Key type held' : 'Key type returned';
+  const keyListLabel = recorded ? 'Keys on record:' : 'Keys returned:';
 
   const transferNote = d.transferTo
     ? `<p style="margin:0 0 16px;font-size:13px;color:${CW_CHARCOAL};background:${CW_BG};border-left:4px solid ${CW_RED};padding:10px 14px;border-radius:3px">
@@ -449,34 +472,44 @@ export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
     : '';
 
   const html = brandedShell(
-    'Keys returned',
-    `${d.holder} has returned keys for ${d.client}.`,
+    headline,
+    lede,
     `${transferNote}
      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
        ${detailRows([
          ...partyRows(d),
-         ['Date returned', fmtDate(d.returnedAt)],
-         ['Condition', d.condition],
+         [dateLabel, fmtDate(d.returnedAt)],
+         // Condition describes keys handed over. On a first-time record nothing
+         // was inspected, so the row is omitted rather than asserted.
+         ...(recorded ? [] : ([['Condition', d.condition]] as [string, string][])),
          ['Recorded by', d.onBehalf ? `${d.recordedBy} (on behalf of ${d.holder})` : d.recordedBy],
        ])}
      </table>
-     ${keyTable(d.keys, 'Key type returned')}
-     ${d.signoffLink ? signoffBlock(d.signoffLink, 'checkin') : ''}`,
+     ${keyTable(d.keys, keyTableHeader)}
+     ${d.signoffLink ? signoffBlock(d.signoffLink, recorded ? 'established' : 'checkin') : ''}`,
     !!logoBytes(),
   );
 
   const text = [
     subject,
+    '',
+    // The same sentence the HTML leads with. Without it a plain-text reader got
+    // the subject and then a bare table — and on a first-time record the
+    // sentence IS the correction.
+    lede,
+    '',
     ...(d.transferTo ? [`Handed directly to ${d.transferTo} (person-to-person transfer).`, ''] : []),
     `Holder: ${d.holder} (${holderTypeLabel(d.holderType)})`,
     `Client: ${d.client}${d.bcNumber ? ` (BC #${d.bcNumber})` : ''}`,
-    `Date returned: ${fmtDate(d.returnedAt)}`,
-    `Condition: ${d.condition}`,
+    `${dateLabel}: ${fmtDate(d.returnedAt)}`,
+    ...(recorded ? [] : [`Condition: ${d.condition}`]),
     `Recorded by: ${d.recordedBy}${d.onBehalf ? ` (on behalf of ${d.holder})` : ''}`,
     '',
-    'Keys returned:',
-    ...d.keys.map((k) => `  ${k.qty} × ${k.label}`),
-    ...(d.signoffLink ? ['', `Sign for this return (expires in 48 hours): ${d.signoffLink}`] : []),
+    keyListLabel,
+    ...d.keys.map((k) => `  ${keyPhrase(k)}`),
+    ...(d.signoffLink
+      ? ['', `${recorded ? 'Confirm these keys' : 'Sign for this return'} (expires in 48 hours): ${d.signoffLink}`]
+      : []),
   ].join('\n');
 
   return sendBranded(subject, html, text, [d.holderEmail || '', ...notifyAddresses()]);
@@ -617,7 +650,7 @@ export async function sendSignedReceipt(d: SignedReceiptMail): Promise<MailResul
       ? [`${d.action === 'checkout' ? 'Handed over by' : 'Handed over to'}: ${d.counterpartyName}`] : []),
     '',
     'Keys:',
-    ...d.keys.map((k) => `  ${k.qty} × ${k.label}`),
+    ...d.keys.map((k) => `  ${keyPhrase(k)}`),
     '',
     d.pdf
       ? 'The signed PDF receipt is attached.'
