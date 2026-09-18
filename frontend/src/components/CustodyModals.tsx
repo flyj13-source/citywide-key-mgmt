@@ -7,7 +7,7 @@ import { getManager } from '../lib/auth';
 import {
   getKeyAvailability, getHolders, getRecentHolders, checkout, checkin, getAssignments, saveHolderEmail,
   getCheckoutContext, getCheckinContext, getReturnContext, getMyRosterRecord, signInPerson, resendSignoff,
-  type ReturnContext,
+  type ReturnContext, type AvailabilityScopeInfo,
   type Assignment, type HolderOption, type KeyAvailability, type KeyTypeKey, type MailOutcome,
   type SignatureStatus,
 } from '../lib/api';
@@ -936,6 +936,7 @@ export function CheckInModal({
   const [ctxLoading, setCtxLoading] = useState(false);
   // Key types at the client, for a return with nothing on file.
   const [siteKeys, setSiteKeys] = useState<KeyAvailability[]>([]);
+  const [scope, setScope] = useState<AvailabilityScopeInfo | null>(null);
 
   const holderName = mode === 'self' ? (me?.name ?? '') : (holder?.name ?? '');
   const holderType: 'employee' | 'ic' = mode === 'self' ? 'employee' : (holder?.type ?? 'employee');
@@ -986,19 +987,27 @@ export function CheckInModal({
     return () => { cancelled = true; };
   }, [account, holderName]);
 
-  // With nothing on file the key list falls back to what the client holds, so
-  // the return can still be captured in full.
+  // With nothing on file the key list falls back to what the HOLDER holds at
+  // this client — their am_/ccm_/contractor_/office_ cells — not the site
+  // total, which is the sum across all four holders and would offer the AM the
+  // contractor's keys.
   useEffect(() => {
-    if (!account) { setSiteKeys([]); return; }
-    getKeyAvailability(account.id)
-      .then((d) => setSiteKeys(d.types))
-      .catch(() => setSiteKeys([]));
-  }, [account]);
+    if (!account || !holderName) { setSiteKeys([]); setScope(null); return; }
+    let cancelled = false;
+    getKeyAvailability(account.id, { name: holderName, type: holderType })
+      .then((d) => { if (!cancelled) { setSiteKeys(d.types); setScope(d.scope); } })
+      .catch(() => { if (!cancelled) { setSiteKeys([]); setScope(null); } });
+    return () => { cancelled = true; };
+  }, [account, holderName, holderType]);
 
   const hasPrior = !!ctx && ctx.open_count > 0;
   const keyRows = hasPrior
     ? ctx!.keys.map((k) => ({ type: k.type as KeyTypeKey, label: k.label, available: k.qty }))
     : siteKeys.map((k) => ({ type: k.type, label: k.label, available: k.site_total }));
+
+  // The holder occupies no role on this client at all. Saying so is the honest
+  // answer; falling back to the account total is how the wrong keys get listed.
+  const noRole = !hasPrior && !!account && !!holderName && scope !== null && !scope.has_role;
 
   const lines = selectedLines(picks);
   const totalReturning = lines.reduce((n, l) => n + l.qty, 0);
@@ -1018,7 +1027,7 @@ export function CheckInModal({
 
   // A return is a fact worth recording even when nobody can be told about it,
   // so there is no email gate here — only a note that the link cannot be sent.
-  const canSubmit = !saving && !!account && !!holderName && lines.length > 0;
+  const canSubmit = !saving && !!account && !!holderName && lines.length > 0 && !noRole;
 
   const submit = async () => {
     if (!canSubmit || !account) return;
@@ -1177,13 +1186,21 @@ export function CheckInModal({
             <p className="text-sm text-cw-muted">Choose a client above to list its key types.</p>
           ) : ctxLoading ? (
             <p className="text-sm text-cw-muted">Checking what is on record…</p>
+          ) : noRole ? (
+            <p className="text-sm text-cw-muted">
+              No keys on record for {holderName} at {account.name}.
+            </p>
           ) : (
             <KeyPickerList
               rows={keyRows}
               picks={picks}
               setPicks={setPicks}
-              availableLabel={hasPrior ? 'checked out' : 'on record at this client'}
-              emptyNote="No key inventory recorded for this client."
+              availableLabel={
+                hasPrior ? 'checked out'
+                  : scope?.summary ? `on record for ${scope.summary} at this client`
+                  : 'on record at this client'
+              }
+              emptyNote={`No keys on record for ${holderName || 'this holder'} at this client.`}
             />
           )}
 

@@ -14,6 +14,7 @@ import { sendCheckoutNotice, sendCheckinNotice, sendSignedReceipt, caraAddress, 
 import { hashSignature } from '../lib/pdf';
 import { generateCustodyReceipt } from '../lib/custodyPdf';
 import { createKeyForm, serializeForm, getKeyForm, EmptyHoldingsError, type FormEventType } from '../lib/keyForm';
+import { rolesForHolder, hasRoleAtClient, holderKeysAtClient, hasGrid, ROLE_SHORT } from '../lib/roleScope';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { NOT_TEST_ASSIGNMENT } from '../lib/testFixtures';
 import {
@@ -306,9 +307,35 @@ router.get('/availability', requireAuth, (req: AuthRequest, res: Response) => {
   const raw = db.prepare('SELECT * FROM accounts WHERE id = ?').get(accountId) as any;
   if (!raw) return res.status(404).json({ error: 'Account not found' });
   const account = Object.assign({}, raw);
+
+  // Scoped to a holder when one is named. Unscoped it still reports the whole
+  // site, which is what the registry and the client detail page ask for.
+  const holderName = cleanText(req.query.holder as string);
+  const holderType = req.query.holder_type === 'ic' ? 'ic' : 'employee';
+  const holder = holderName ? { name: holderName, type: holderType } : null;
+
+  // A client whose holder grid was never filled in has nothing to scope to, so
+  // it keeps the whole-client numbers and reports itself as unscoped.
+  const gridded = hasGrid(accountId);
+  const roles = holder && gridded
+    ? rolesForHolder(accountId, holder.name, holder.type, { includeEmpty: true })
+    : [];
+
   res.json({
     account: { id: account.id, name: account.ic_company_name, record_type: account.record_type ?? 'ic' },
-    types: availabilityFor(accountId),
+    types: availabilityFor(accountId, { holder }),
+    // What the numbers above are scoped TO, so the UI can say so rather than
+    // leaving the reader to assume they are looking at the whole client.
+    scope: holder && gridded
+      ? {
+        holder: holder.name,
+        // No role at all is different from a role holding nothing: the first
+        // means this person has no business with this client's keys.
+        has_role: roles.length > 0,
+        roles: roles.map((r) => ({ role: r.role, label: r.label, total: r.total })),
+        summary: roles.length ? roles.map((r) => ROLE_SHORT[r.role]).join(' + ') : null,
+      }
+      : { holder: null, has_role: true, roles: [], summary: null },
   });
 });
 
@@ -522,6 +549,18 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
     const parsed = parseKeyLines(body.keys);
     if (parsed.error) return res.status(400).json({ error: parsed.error });
     lines = parsed.lines;
+    // Check-OUT is capped by PHYSICAL reality — is there a key left at this
+    // client to hand over — which is the site total minus everything already
+    // out. It is deliberately NOT capped to the holder's grid role.
+    //
+    // The grid records who is RESPONSIBLE for keys at a client. Handing keys to
+    // someone is a transaction, and a crew member, a temp or a covering manager
+    // can legitimately be issued keys at a client they are not the AM, CCM or
+    // contractor of. Capping check-out to the grid would make those people
+    // unable to receive keys at all.
+    //
+    // Check-IN is the opposite case and IS capped to the holder (see the
+    // return context): you cannot hand back what you never had.
     const conflict = checkAvailability(account_id, lines);
     if (conflict) return res.status(409).json({ error: conflict });
   } else {
@@ -703,6 +742,31 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
   const notes = cleanText(body.notes);
   const returned_at = cleanText(body.returned_at) || new Date().toISOString();
   const lines = parsed.lines;
+
+  // No prior check-out to cap this against, so the ceiling is the holder's own
+  // grid cells at this client — their role's keys, not the site total (which is
+  // the sum across the AM, CCM, contractor and Office). Recording a return of
+  // six keys from a contractor who holds two is how the registry loses its
+  // meaning, and it is exactly what the unscoped site total used to allow.
+  const gridded = hasGrid(account_id);
+  if (gridded && !hasRoleAtClient(account_id, holder, holder_type)) {
+    return res.status(409).json({
+      error: `No keys on record for ${holder} at ${account.ic_company_name}.`,
+    });
+  }
+  const held = new Map(
+    holderKeysAtClient(account_id, holder, holder_type).map((k) => [k.type, k]),
+  );
+  for (const line of gridded ? lines : []) {
+    const h = held.get(line.type);
+    const qty = h?.qty ?? 0;
+    if (line.qty > qty) {
+      return res.status(409).json({
+        error: `${holder} holds ${qty} ${line.label}${qty === 1 ? '' : 's'} at `
+          + `${account.ic_company_name} — cannot record a return of ${line.qty}.`,
+      });
+    }
+  }
 
   const result = db.prepare(`
     INSERT INTO key_assignments

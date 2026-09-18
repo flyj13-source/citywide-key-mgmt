@@ -244,8 +244,11 @@ export function snapshotHolder(holderName: string, holderType?: string | null): 
   // One query per role rather than a single OR: a person can be BOTH the AM
   // and the CCM of the same client, and each role carries its own cells.
   const gridRoles: { role: string; where: string; prefix: string; params: (n: string) => any[] }[] = [
-    { role: 'AM', where: 'TRIM(account_manager) = TRIM(?)', prefix: 'am', params: (n) => [n] },
-    { role: 'CCM', where: 'TRIM(ccm_manager) = TRIM(?)', prefix: 'ccm', params: (n) => [n] },
+    // Case-insensitive, matching roleScope.ts exactly. A form that resolved a
+    // role differently from the check-in that produced it is the one way the
+    // document and the transaction can disagree about what somebody holds.
+    { role: 'AM', where: "LOWER(TRIM(COALESCE(account_manager,''))) = LOWER(TRIM(?))", prefix: 'am', params: (n) => [n] },
+    { role: 'CCM', where: "LOWER(TRIM(COALESCE(ccm_manager,''))) = LOWER(TRIM(?))", prefix: 'ccm', params: (n) => [n] },
   ];
   // An IC holds keys as the contractor on the sites that name it — matched on
   // the company name, and on the vendor number where the roster carries one,

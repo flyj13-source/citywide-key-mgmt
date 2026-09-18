@@ -1,4 +1,5 @@
 import db from './db';
+import { holderKeysAtClient, hasGrid } from './roleScope';
 
 // ── Key custody model ────────────────────────────────────────────────────────
 // A single check-out transaction can carry SEVERAL key types at once (2 metal
@@ -126,14 +127,47 @@ export interface Availability {
  * `excludeAssignmentId` lets a caller re-price an existing transaction without
  * counting its own keys against it.
  */
-export function availabilityFor(accountId: number, excludeAssignmentId?: number): Availability[] {
+export interface AvailabilityScope {
+  excludeAssignmentId?: number;
+  /**
+   * Scope to ONE holder's keys instead of the client-site total.
+   *
+   * The site total is the sum across all four holders (AM, CCM, contractor,
+   * Office). Offering it to a named holder is how a check-in for the AM ended
+   * up listing the contractor's keys — so when a holder is named, the ceiling
+   * becomes that person's own cells and `checked_out` counts only their open
+   * records.
+   */
+  holder?: { name: string; type?: string | null } | null;
+}
+
+export function availabilityFor(
+  accountId: number,
+  scopeOrExclude?: number | AvailabilityScope,
+): Availability[] {
+  const scope: AvailabilityScope = typeof scopeOrExclude === 'number'
+    ? { excludeAssignmentId: scopeOrExclude }
+    : (scopeOrExclude ?? {});
+  const { excludeAssignmentId, holder } = scope;
+
   const acct = db.prepare('SELECT * FROM accounts WHERE id = ?').get(accountId) as any;
   const account = acct ? Object.assign({}, acct) : null;
 
+  // Scoping needs a grid to scope to. A pre-grid client has all sixteen cells
+  // at zero beside a real site total, and scoping there would report zero keys
+  // everywhere rather than the truth the record actually holds.
+  const holderName = (holder?.name?.trim() && hasGrid(accountId)) ? holder!.name.trim() : '';
+  // Only that holder's open records count against their own ceiling. Somebody
+  // else's check-out at the same client does not reduce what this person holds.
   const openRows = (db.prepare(
-    `SELECT id, keys_json, key_type, keys_held FROM key_assignments
-      WHERE account_id = ? AND status = 'checked_out'`
-  ).all(accountId) as any[]).map((r) => Object.assign({}, r));
+    holderName
+      ? `SELECT id, keys_json, key_type, keys_held FROM key_assignments
+          WHERE account_id = ? AND status = 'checked_out'
+            AND LOWER(TRIM(assignee)) = LOWER(TRIM(?))`
+      : `SELECT id, keys_json, key_type, keys_held FROM key_assignments
+          WHERE account_id = ? AND status = 'checked_out'`
+  ).all(...(holderName ? [accountId, holderName] : [accountId])) as any[])
+    .map((r) => Object.assign({}, r));
 
   const out = new Map<string, number>();
   for (const row of openRows) {
@@ -143,8 +177,15 @@ export function availabilityFor(accountId: number, excludeAssignmentId?: number)
     }
   }
 
+  // The ceiling: this holder's grid cells, or the whole site when unscoped.
+  const roleKeys = holderName
+    ? new Map(holderKeysAtClient(accountId, holderName, holder?.type).map((k) => [k.type, k.qty]))
+    : null;
+
   return KEY_TYPES.map((t) => {
-    const site_total = account ? num(account[t.column]) : 0;
+    const site_total = roleKeys
+      ? (roleKeys.get(t.key) ?? 0)
+      : (account ? num(account[t.column]) : 0);
     const checked_out = out.get(t.key) ?? 0;
     return {
       type: t.key,
@@ -160,12 +201,22 @@ export function availabilityFor(accountId: number, excludeAssignmentId?: number)
  * Reject a check-out that would take more keys of a type than the client has
  * left. Returns an error string, or null when the request fits.
  */
-export function checkAvailability(accountId: number, lines: KeyLine[]): string | null {
-  const avail = new Map(availabilityFor(accountId).map((a) => [a.type, a]));
+export function checkAvailability(
+  accountId: number,
+  lines: KeyLine[],
+  holder?: { name: string; type?: string | null } | null,
+): string | null {
+  const scoped = !!holder?.name?.trim();
+  const avail = new Map(availabilityFor(accountId, { holder }).map((a) => [a.type, a]));
   for (const line of lines) {
     const a = avail.get(line.type);
     if (!a) continue;
     if (line.qty > a.available) {
+      if (scoped) {
+        return `${holder!.name} holds ${a.site_total} ${a.label}${a.site_total === 1 ? '' : 's'} `
+          + `at this client (${a.checked_out} already checked out, ${a.available} available) `
+          + `— cannot check out ${line.qty}.`;
+      }
       return `Only ${a.available} ${a.label}${a.available === 1 ? '' : 's'} available at this client (${a.site_total} on site, ${a.checked_out} already checked out) — cannot check out ${line.qty}.`;
     }
   }

@@ -397,10 +397,35 @@ export const getAssignments = (params?: Record<string, string>) => {
   const q = params ? '?' + new URLSearchParams(params).toString() : '';
   return req<{ assignments: Assignment[]; total: number }>(`/assignments${q}`);
 };
-export const getKeyAvailability = (accountId: number) =>
-  req<{ account: { id: number; name: string; record_type: string }; types: KeyAvailability[] }>(
-    `/assignments/availability?account_id=${accountId}`
-  );
+/** What the availability numbers are scoped TO — the whole client, or one holder. */
+export interface AvailabilityScopeInfo {
+  holder: string | null;
+  /** False when the holder occupies no role on this client at all. */
+  has_role: boolean;
+  roles: { role: string; label: string; total: number }[];
+  /** "AM", or "AM + CCM" when they wear two hats. Null when unscoped. */
+  summary: string | null;
+}
+/**
+ * Naming a holder scopes the numbers to THAT person's keys at the client — the
+ * am_, ccm_, contractor_ and office_ cells — instead of the site total, which is
+ * the sum across all four holders.
+ */
+export const getKeyAvailability = (
+  accountId: number,
+  holder?: { name: string; type?: 'employee' | 'ic' | null } | null,
+) => {
+  const q = new URLSearchParams({ account_id: String(accountId) });
+  if (holder?.name) {
+    q.set('holder', holder.name);
+    if (holder.type) q.set('holder_type', holder.type);
+  }
+  return req<{
+    account: { id: number; name: string; record_type: string };
+    types: KeyAvailability[];
+    scope: AvailabilityScopeInfo;
+  }>(`/assignments/availability?${q.toString()}`);
+};
 // What is on file for a client + person, resolved server-side so the Check In
 // modal never has to show a record picker.
 export interface ReturnContext {
