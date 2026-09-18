@@ -547,9 +547,18 @@ describe('§5 SIGNATURE + DELIVERY', () => {
     const form = res.body.forms[0];
     expect(form.no_email).toBe(true);
     expect(form.status).toBe('draft');
-    // No token — an unusable link would make it look like it is waiting.
-    const row = Object.assign({}, db.prepare('SELECT token FROM key_form_docs WHERE id=?').get(form.id) as any);
-    expect(row.token).toBeNull();
+    // A TOKEN IS STILL MINTED. no_email now describes a delivery problem, not
+    // the absence of a signature path — the link opens on a phone handed
+    // across a counter, which is how a holder with no address signs at all.
+    const row = Object.assign({}, db.prepare(
+      'SELECT token, token_expires_at FROM key_form_docs WHERE id=?'
+    ).get(form.id) as any);
+    expect(row.token).toBeTruthy();
+    expect(row.token_expires_at).toBeTruthy();
+    // …and that link resolves to a signable form.
+    const open = await request(app).get(`/api/key-forms/token/${row.token}`);
+    expect(open.status).toBe(200);
+    expect(open.body.holder).toBe('No Mail');
     // …but the PDF is still there to print or route.
     const pdf = await auth(request(app).get(`/api/key-forms/${form.id}/pdf`));
     expect(pdf.status).toBe(200);
@@ -1002,5 +1011,170 @@ describe('REGENERATE FIXES A WRONGLY-STORED KIND', () => {
     expect(re.status).toBe(201);
     expect(re.body.form.doc_kind).toBe('return_receipt');
     expect(re.body.form.doc_title).toBe('Key Return Receipt');
+  });
+});
+
+// ════════ POLICY: EVERY CUSTODY FORM IS SIGNABLE ════════
+// No event type, origin or missing address decides WHETHER a signature
+// happens. Only the wording branches.
+describe('EVERY FORM IS SIGNABLE', () => {
+  /** A form is signable when its token resolves to an openable sign-off page. */
+  const assertSignable = async (form: any, label: string) => {
+    expect(form, `${label}: no form generated`).toBeTruthy();
+    const row = Object.assign({}, db.prepare(
+      'SELECT token, token_expires_at FROM key_form_docs WHERE id = ?'
+    ).get(form.id) as any);
+    expect(row.token, `${label}: no token minted`).toBeTruthy();
+    expect(row.token_expires_at, `${label}: no expiry`).toBeTruthy();
+    const open = await request(app).get(`/api/key-forms/token/${row.token}`);
+    expect(open.status, `${label}: link did not open`).toBe(200);
+    expect(open.body.holder, `${label}: wrong holder`).toBe(form.holder_name);
+    // And the status is a signature state, never "no signature wanted".
+    expect(['draft', 'sent', 'unsigned'], `${label}: ${form.status}`).toContain(form.status);
+    expect(form.signed_at, `${label}: unexpectedly signed`).toBeNull();
+    return row.token as string;
+  };
+
+  it('CHECK-OUT is signable', async () => {
+    const id = site('ZZ TEST SITE ALPHA');
+    const res = await checkout({
+      account_id: id, holder: 'ZZ Test AM One', holder_email: 'am1@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 2 }],
+    });
+    await assertSignable(res.body.key_form, 'checkout');
+    expect(res.body.signoff_link).toBeTruthy();
+  });
+
+  it('GENUINE CHECK-IN is signable', async () => {
+    const id = site('ZZ TEST SITE ALPHA');
+    await checkout({
+      account_id: id, holder: 'ZZ Test AM One', holder_email: 'am1@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 2 }],
+    });
+    const res = await checkin({
+      holder: 'ZZ Test AM One', account_id: id, keys: [{ type: 'metal', qty: 2 }],
+    });
+    await assertSignable(res.body.key_form, 'genuine check-in');
+    expect(res.body.signoff_link).toBeTruthy();
+  });
+
+  it('RECONCILED CHECK-IN is signable — the exemption is gone', async () => {
+    const id = site('ZZ TEST SITE ALPHA');
+    const res = await checkin({
+      holder: 'ZZ Test AM One', holder_email: 'am1@cw.test', holder_type: 'employee',
+      account_id: id, keys: [{ type: 'metal', qty: 1 }],
+    });
+    expect(res.body.reconciled).toBe(true);
+    await assertSignable(res.body.key_form, 'reconciled check-in');
+    // The custody record itself now carries a link and an awaiting status.
+    expect(res.body.signoff_link).toBeTruthy();
+    const rec = Object.assign({}, db.prepare(
+      'SELECT signature_status, checkin_signoff_token FROM key_assignments ORDER BY id DESC LIMIT 1'
+    ).get() as any);
+    expect(rec.signature_status).toBe('awaiting_signature');
+    expect(rec.checkin_signoff_token).toBeTruthy();
+  });
+
+  it("a reconciled record's sign-off page asks the HOLDINGS question", async () => {
+    const id = site('ZZ TEST SITE ALPHA');
+    const res = await checkin({
+      holder: 'ZZ Test AM One', holder_email: 'am1@cw.test', holder_type: 'employee',
+      account_id: id, keys: [{ type: 'metal', qty: 1 }],
+    });
+    const rec = Object.assign({}, db.prepare(
+      'SELECT checkin_signoff_token FROM key_assignments ORDER BY id DESC LIMIT 1'
+    ).get() as any);
+    const page = await request(app).get(`/api/signoff/${rec.checkin_signoff_token}`);
+    expect(page.status).toBe(200);
+    // 'established' is the holdings wording — never the returned wording.
+    expect(page.body.action).toBe('established');
+    expect(res.body.signoff_link).toContain(rec.checkin_signoff_token);
+  });
+
+  it('a genuine return\'s sign-off page still asks the RETURN question', async () => {
+    const id = site('ZZ TEST SITE ALPHA');
+    await checkout({
+      account_id: id, holder: 'ZZ Test AM One', holder_email: 'am1@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }],
+    });
+    await checkin({ holder: 'ZZ Test AM One', account_id: id, keys: [{ type: 'metal', qty: 1 }] });
+    const rec = Object.assign({}, db.prepare(
+      "SELECT checkin_signoff_token FROM key_assignments WHERE checkin_signoff_token IS NOT NULL ORDER BY id DESC LIMIT 1"
+    ).get() as any);
+    const page = await request(app).get(`/api/signoff/${rec.checkin_signoff_token}`);
+    expect(page.body.action).toBe('checkin');
+  });
+
+  it('signing a RECONCILED record writes the CHECK-IN columns, not the check-out ones', async () => {
+    const id = site('ZZ TEST SITE ALPHA');
+    await checkin({
+      holder: 'ZZ Test AM One', holder_email: 'am1@cw.test', holder_type: 'employee',
+      account_id: id, keys: [{ type: 'metal', qty: 1 }],
+    });
+    const before = Object.assign({}, db.prepare(
+      'SELECT id, checkin_signoff_token FROM key_assignments ORDER BY id DESC LIMIT 1'
+    ).get() as any);
+
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const sign = await request(app).post(`/api/signoff/${before.checkin_signoff_token}/sign`)
+      .send({ signature_data: png, typed_name: 'ZZ Test AM One' });
+    expect(sign.status).toBe(200);
+
+    const after = Object.assign({}, db.prepare(
+      'SELECT checkin_signed_at, signed_at, checkin_signoff_token FROM key_assignments WHERE id = ?'
+    ).get(before.id) as any);
+    // The wording said "established"; the COLUMNS must still be the check-in set.
+    expect(after.checkin_signed_at).toBeTruthy();
+    expect(after.signed_at).toBeNull();
+    expect(after.checkin_signoff_token).toBeNull();
+  });
+
+  it('BOTH TRANSFER parties are signable', async () => {
+    const id = site('ZZ TEST SITE ALPHA');
+    await checkout({
+      account_id: id, holder: 'ZZ Test AM One', holder_email: 'am1@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 2 }],
+    });
+    const res = await auth(request(app).post('/api/assignments/transfer')).send({
+      account_id: id, mode: 'keys',
+      from_holder: 'ZZ Test AM One', to_holder: 'ZZ Test AM Two',
+      to_holder_email: 'am2@cw.test', to_holder_type: 'employee',
+      keys: [{ type: 'metal', qty: 2 }],
+    });
+    await assertSignable(res.body.key_forms.from, 'transfer FROM');
+    await assertSignable(res.body.key_forms.to, 'transfer TO');
+  });
+
+  it('an AUDIT / holdings statement is signable', async () => {
+    const id = site('ZZ TEST SITE ALPHA');
+    addStaff('ZZ Test AM One', 'am1@cw.test');
+    await checkout({
+      account_id: id, holder: 'ZZ Test AM One', holder_email: 'am1@cw.test',
+      holder_type: 'employee', keys: [{ type: 'metal', qty: 1 }],
+    });
+    const gen = await auth(request(app).post('/api/key-forms/generate'))
+      .send({ holders: [{ name: 'ZZ Test AM One', type: 'employee', email: 'am1@cw.test' }] });
+    expect(gen.status).toBe(201);
+    await assertSignable(gen.body.forms[0], 'audit');
+  });
+
+  it('a holder with NO EMAIL still gets a signable form', async () => {
+    const id = site('ZZ TEST SITE ALPHA');
+    const res = await checkout({
+      account_id: id, holder: 'No Mail Holder', holder_type: 'employee',
+      keys: [{ type: 'metal', qty: 1 }], no_email_reason: 'No address on file',
+    });
+    const form = res.body.key_form;
+    expect(form.no_email).toBe(true);
+    // The delivery failed; the signature path did not.
+    await assertSignable(form, 'no-email checkout');
+  });
+
+  it('still refuses a zero-item form — the guard is unchanged', async () => {
+    addStaff('Empty Handed', 'empty@cw.test');
+    const res = await auth(request(app).post('/api/key-forms/generate'))
+      .send({ holders: [{ name: 'Empty Handed', type: 'employee' }] });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NO_KEYS_ON_RECORD');
   });
 });

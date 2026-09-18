@@ -84,8 +84,10 @@ export function serializeAssignment(raw: any) {
     signature_hash: a.signature_hash ?? null,
     signature_typed_name: a.signature_typed_name ?? null,
     has_pdf: !!a.pdf_path,
+    // Every custody record is signable now, so an unset status means the
+    // signature has not landed yet — never that none was wanted.
     signature_status: (a.signature_status as SignatureStatus)
-      ?? (a.signed_at ? 'signed' : a.status === 'checked_out' ? 'awaiting_signature' : 'not_required'),
+      ?? (a.signed_at ? 'signed' : 'awaiting_signature'),
     no_email_reason: a.no_email_reason ?? null,
     signed_in_person_by: a.signed_in_person_by ?? null,
     signature_send_error: a.signature_send_error ?? null,
@@ -707,7 +709,7 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
       (account_id, account_name, assignee, assignee_email, key_type, keys_held, keys_json,
        holder_type, holder_id, recorded_by, checkin_recorded_by, checked_out_at, returned_at,
        condition_on_return, notes, status, signature_status, origin)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'returned', 'not_required', 'reconciled')
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'returned', 'awaiting_signature', 'reconciled')
   `).run(
     account_id, account.ic_company_name, holder, holder_email,
     lines[0]?.type ?? 'physical', summarizeKeys(lines), JSON.stringify(lines),
@@ -723,6 +725,15 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
     summary: `${actor} recorded a return from ${holder} with no prior check-out on file`,
     note: 'Reconciling entry — the keys came back from someone this system never saw take them',
   });
+
+  // EVERY custody event is signable. A first-time record is still a statement
+  // somebody is asserting about keys in their possession, so it gets the same
+  // 48h token and the same link as a return — only the wording differs.
+  const { token: recordToken, expires: recordExpires } = mintToken();
+  db.prepare(
+    'UPDATE key_assignments SET checkin_signoff_token=?, checkin_signoff_expires_at=?, return_reason=COALESCE(return_reason, ?) WHERE id=?'
+  ).run(recordToken, recordExpires, 'recorded', newId);
+  const recordSignoffLink = signoffLinkFor(recordToken);
 
   const form = await generateEventForm(req, {
     eventType: 'checkin', holderName: holder, holderType: holder_type,
@@ -745,7 +756,7 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
     keys: lines, returnedAt: returned_at, condition, recordedBy: actor, onBehalf: true,
     // Nothing came back: this is keys the holder already had, put on record.
     firstRecord: true,
-    signoffLink: null,
+    signoffLink: recordSignoffLink,
   });
   logMail(req, mail, 'checkin', account.ic_company_name, account_id, holder);
 
@@ -757,7 +768,7 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
     still_out: [],
     assignment: serializeAssignment(row),
     key_form: form,
-    signoff_link: null,
+    signoff_link: recordSignoffLink,
     email: {
       ok: mail.ok, recipients: mail.recipients, error: mail.error,
       skipped: !!mail.skipped, cara: caraAddress(),
@@ -850,7 +861,7 @@ async function multiRecordCheckin(req: AuthRequest, res: Response, records: Open
         (account_id, account_name, assignee, assignee_email, key_type, keys_held, keys_json,
          holder_type, holder_id, recorded_by, checkin_recorded_by, checked_out_at, returned_at,
          condition_on_return, notes, status, signature_status, origin)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'returned', 'not_required', 'reconciled')
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'returned', 'awaiting_signature', 'reconciled')
     `).run(
       accountId, accountName, holder, first.assignee_email ?? null,
       alloc.unmatched[0].type, summarizeKeys(alloc.unmatched), JSON.stringify(alloc.unmatched),

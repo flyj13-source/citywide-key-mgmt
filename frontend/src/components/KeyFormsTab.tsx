@@ -73,25 +73,31 @@ function StatusPill({ status, noEmail }: { status: string; noEmail: boolean }) {
       </span>
     );
   }
-  if (noEmail && status !== 'signed') {
+  // Every form is signable, so the pill answers ONE question: has the
+  // signature landed? Signed, or awaiting it.
+  if (status === 'signed') {
     return (
-      <span
-        title="No email on file — this form cannot be sent to the holder"
-        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#fbeaea] text-[#C0272D] border border-[#C0272D]"
-      >
-        Draft · no email
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap border bg-[#e8f5ea] text-[#2d7a3a] border-[#2d7a3a]">
+        Signed
       </span>
     );
   }
-  const style: Record<string, string> = {
-    signed: 'bg-[#e8f5ea] text-[#2d7a3a] border-[#2d7a3a]',
-    sent: 'bg-[#fff8e6] text-[#7a5a00] border-[#e8cf8a]',
-    unsigned: 'bg-[#fbeaea] text-[#C0272D] border-[#C0272D]',
-    draft: 'bg-[#f0f0ee] text-[#6b6b68] border-cw-border',
-  };
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold capitalize border whitespace-nowrap ${style[status] ?? style.draft}`}>
-      {status}
+    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-[#fff8e6] text-[#7a5a00] border-[#e8cf8a]">
+        Awaiting signature
+      </span>
+      {/* A DELIVERY problem, not a missing signature path: the link exists and
+          opens on a device handed to the holder. Shown beside the state rather
+          than replacing it, so a form is never read as unsignable. */}
+      {noEmail && (
+        <span
+          title="No email on file — the link cannot be emailed. Open it on a device with the holder to collect the signature in person."
+          className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold border bg-[#fbeaea] text-[#C0272D] border-[#C0272D]"
+        >
+          no email
+        </span>
+      )}
     </span>
   );
 }

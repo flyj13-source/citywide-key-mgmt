@@ -437,9 +437,22 @@ export function createKeyForm(input: CreateFormInput): any {
   // without reading the scope blob; 0 on a holdings statement.
   const returnedKeys = docKind === 'return_receipt' ? totalKeys : 0;
 
+  // EVERY form is signable. A token is minted unconditionally — including for a
+  // holder with no address on file.
+  //
+  // The link used to be withheld in that case on the reasoning that an unusable
+  // link makes a form look like it is waiting for something it is not. That was
+  // backwards: the link is not unusable, it is merely unsendable BY EMAIL. It
+  // still opens on a phone handed across a counter, which is how a signature
+  // gets collected from someone who has no address in the first place.
+  // Withholding it removed the only route those holders had.
+  //
+  // `no_email` is still recorded, because "we could not email this" remains
+  // true and worth showing — but it now describes a DELIVERY problem, not the
+  // absence of a signature path.
   const hasEmail = !!email;
-  const token = hasEmail ? crypto.randomBytes(32).toString('hex') : null;
-  const expires = hasEmail ? new Date(Date.now() + TTL_MS).toISOString() : null;
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = new Date(Date.now() + TTL_MS).toISOString();
 
   const r = db.prepare(`
     INSERT INTO key_form_docs

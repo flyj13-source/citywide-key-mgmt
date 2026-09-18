@@ -23,7 +23,22 @@ const router = Router();
 // These routes are mounted WITHOUT requireAuth — the token IS the credential —
 // so they expose only what the signer needs to see: their own transaction.
 
-interface Found { row: any; action: CustodyAction }
+/**
+ * TWO separate questions, deliberately not one field:
+ *
+ *   slot    WHICH COLUMNS this signature closes — the checkout set
+ *           (signoff_token/signed_at/…) or the check-in set
+ *           (checkin_signoff_token/checkin_signed_at/…). Decided purely by
+ *           which token column the link matched.
+ *   variant WHAT THE SIGNER IS ATTESTING TO — the acknowledgement wording.
+ *           Decided by the record's origin.
+ *
+ * They used to be one value, which worked only while every "I currently hold
+ * these" form happened to live in the checkout columns. A reconciled check-in
+ * is that wording in the CHECK-IN columns, so collapsing them would have
+ * written the signature to the wrong half of the row and left the link live.
+ */
+interface Found { row: any; slot: 'checkout' | 'checkin'; variant: CustodyAction }
 
 /** The other party on a transferred record — shown to the signer for context. */
 function counterpartyName(linkedId: any): string | null {
@@ -45,18 +60,29 @@ function loadByToken(token: string): Found | { error: string; status: number } {
   const found: Found | null = asCheckout
     ? {
         row: Object.assign({}, asCheckout),
-        action: Object.assign({}, asCheckout).origin === 'established' ? 'established' : 'checkout',
+        slot: 'checkout',
+        variant: Object.assign({}, asCheckout).origin === 'established' ? 'established' : 'checkout',
       }
     : (() => {
       const asCheckin = db.prepare('SELECT * FROM key_assignments WHERE checkin_signoff_token = ?').get(token) as any;
-      return asCheckin ? { row: Object.assign({}, asCheckin), action: 'checkin' as const } : null;
+      if (!asCheckin) return null;
+      const row = Object.assign({}, asCheckin);
+      // A reconciled entry reuses the check-IN token column — it is recorded
+      // the same way — but nothing came back, so its acknowledgement must say
+      // "I currently hold these keys", never "I have returned them". `origin`
+      // decides the direction here for exactly the reason it does above.
+      return {
+        row,
+        slot: 'checkin' as const,
+        variant: (row.origin === 'reconciled' ? 'established' : 'checkin') as CustodyAction,
+      };
     })();
 
   if (!found) return { error: 'Invalid or expired link', status: 404 };
 
   // An opening balance lives in the CHECK-OUT token columns — it is a custody
   // opening — so only a check-IN reads the checkin_* expiry.
-  const expiry = found.action === 'checkin'
+  const expiry = found.slot === 'checkin'
     ? found.row.checkin_signoff_expires_at
     : found.row.signoff_expires_at;
   if (!expiry || new Date(`${expiry}`.replace(' ', 'T')) < new Date()) {
@@ -78,7 +104,7 @@ function groupRows(row: any): any[] {
   ).all(row.establish_group_id) as any[]).map((r) => Object.assign({}, r));
 }
 
-function publicView({ row, action }: Found) {
+function publicView({ row, slot, variant: action }: Found) {
   const keys = readKeyLines(row);
   const counterparty = counterpartyName(row.linked_assignment_id);
 
@@ -95,8 +121,8 @@ function publicView({ row, action }: Found) {
     due_at: row.due_at ?? null,
     returned_at: row.returned_at ?? null,
     condition_on_return: row.condition_on_return ?? null,
-    recorded_by: (action === 'checkin' ? row.checkin_recorded_by : row.recorded_by) || row.recorded_by || null,
-    signed_at: (action === 'checkin' ? row.checkin_signed_at : row.signed_at) ?? null,
+    recorded_by: (slot === 'checkin' ? row.checkin_recorded_by : row.recorded_by) || row.recorded_by || null,
+    signed_at: (slot === 'checkin' ? row.checkin_signed_at : row.signed_at) ?? null,
     status: row.status,
     // Transfer context — the signer should see who the keys came from / went to.
     is_transfer: !!row.transfer_id,
@@ -126,9 +152,9 @@ router.get('/:token', (req: Request, res: Response) => {
 router.post('/:token/sign', async (req: Request, res: Response) => {
   const found = loadByToken(req.params.token);
   if ('error' in found) return res.status(found.status).json({ error: found.error });
-  const { row, action } = found;
+  const { row, slot, variant: action } = found;
 
-  const alreadySigned = action === 'checkin' ? row.checkin_signed_at : row.signed_at;
+  const alreadySigned = slot === 'checkin' ? row.checkin_signed_at : row.signed_at;
   if (alreadySigned) {
     return res.status(409).json({
       error: action === 'checkin'
@@ -181,7 +207,7 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
       dueAt: row.due_at ?? null,
       returnedAt: row.returned_at ?? null,
       condition: row.condition_on_return ?? null,
-      recordedBy: (action === 'checkin' ? row.checkin_recorded_by : row.recorded_by) || row.recorded_by || 'City Wide Boston',
+      recordedBy: (slot === 'checkin' ? row.checkin_recorded_by : row.recorded_by) || row.recorded_by || 'City Wide Boston',
       signatureData: signature_data,
       typedName: typed_name,
       signedAt,
@@ -201,8 +227,9 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
     pdfError = err?.message || 'PDF generation failed';
   }
 
+  // COLUMN routing — `slot`, never the wording.
   const closeSignature = db.prepare(
-    action === 'checkin'
+    slot === 'checkin'
       ? `UPDATE key_assignments
             SET checkin_signed_at=?, checkin_signature_data=?, checkin_signature_hash=?,
                 checkin_signature_typed_name=?, checkin_pdf_path=?, checkin_signoff_token=NULL
@@ -217,7 +244,7 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
   // One acknowledgement can cover several clients (a bulk opening balance), so
   // the signature closes every row in the group. Closing only the matched row
   // would leave the rest looking unsigned forever.
-  const covered = action === 'checkin' ? [row] : groupRows(row);
+  const covered = slot === 'checkin' ? [row] : groupRows(row);
   for (const r of covered) {
     closeSignature.run(signedAt, signature_data, hash, typed_name, pdfPath, r.id);
   }
