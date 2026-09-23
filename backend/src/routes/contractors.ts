@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { sendContractorInvite } from '../lib/mailer';
 import { generateSignedPDF, hashSignature } from '../lib/pdf';
+import { SIGNATURE_TTL_MS } from '../lib/signatureLink';
 
 const router = Router();
 
@@ -23,7 +24,7 @@ router.post('/invite', requireAuth, async (req: AuthRequest, res: Response) => {
   const vendorNumber = String(bc_vendor_number ?? '').trim() || null;
 
   const token = crypto.randomBytes(32).toString('hex');
-  const expires = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+  const expires = new Date(Date.now() + SIGNATURE_TTL_MS).toISOString();
 
   const existing = db.prepare('SELECT id FROM contractors WHERE email = ?').get(email) as any;
   if (existing) {

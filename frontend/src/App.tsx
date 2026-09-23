@@ -33,9 +33,9 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/contractor/:token" element={<ContractorPortal />} />
-        {/* Public, login-free key sign-off (48h token from the check-out email) */}
+        {/* Public, login-free key sign-off (5-day token from the check-out email) */}
         <Route path="/key-signoff/:token" element={<KeySignoff />} />
-        {/* Public, login-free Key Form acknowledgement (48h token). */}
+        {/* Public, login-free Key Form acknowledgement (5-day token). */}
         <Route path="/key-form/:token" element={<KeyFormSignoff />} />
         <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
         <Route path="/registry" element={<RequireAuth><Registry /></RequireAuth>} />

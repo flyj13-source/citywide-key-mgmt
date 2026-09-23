@@ -9,6 +9,9 @@
 import crypto from 'crypto';
 import db from './db';
 import { KEY_TYPES, readKeyLines, type KeyLine } from './custody';
+import {
+  SIGNATURE_TTL_MS, MAX_AUTO_RENEWALS, linkStateOf, linkStateWhere, linkStateParams, type LinkState,
+} from './signatureLink';
 
 export type FormEventType = 'checkin' | 'checkout' | 'transfer' | 'reassignment' | 'audit';
 export type FormStatus =
@@ -168,7 +171,7 @@ export class EmptyHoldingsError extends Error {
   }
 }
 
-const TTL_MS = 48 * 60 * 60 * 1000;
+const TTL_MS = SIGNATURE_TTL_MS;
 const cleanText = (v: any): string | null => {
   const s = v == null ? '' : String(v).trim();
   return s || null;
@@ -547,6 +550,15 @@ export function serializeForm(row: any): any {
     send_error: row.send_error ?? null,
     signed_at: row.signed_at,
     signature_typed_name: row.signature_typed_name,
+    // The signature link's lifecycle, evaluated NOW rather than stored, so the
+    // pill is right the moment the list loads. null = outside the cycle
+    // (voided, acknowledged, superseded).
+    link_state: linkStateOf(row),
+    link_expires_at: row.token_expires_at ?? null,
+    link_renewals: Number(row.link_renewals) || 0,
+    link_max_renewals: MAX_AUTO_RENEWALS,
+    link_renewed_at: row.link_renewed_at ?? null,
+    link_exhausted_at: row.link_exhausted_at ?? null,
     has_pdf: !!row.pdf_path,
     no_email: !!row.no_email,
     counterparty_name: row.counterparty_name,
@@ -582,7 +594,13 @@ export function listKeyForms(f: FormFilters): { rows: any[]; total: number } {
   // 'send_failed' is not a stored status — a failed send leaves the form
   // 'unsigned', which is also what a never-sent form reads as. The thing that
   // actually distinguishes them is send_error, so the filter asks for that.
-  if (f.status === 'send_failed') {
+  const LINK_FILTERS: LinkState[] = ['awaiting', 'expiring_soon', 'expired'];
+  if (f.status && (LINK_FILTERS as string[]).includes(f.status)) {
+    // Link-state chips ask the same question linkStateOf answers per row.
+    const st = f.status as LinkState;
+    where += ` AND ${linkStateWhere(st)}`;
+    params.push(...linkStateParams(st));
+  } else if (f.status === 'send_failed') {
     where += " AND send_error IS NOT NULL AND TRIM(send_error) <> ''";
   } else if (f.status && f.status !== 'all') {
     where += ' AND status = ?'; params.push(f.status);

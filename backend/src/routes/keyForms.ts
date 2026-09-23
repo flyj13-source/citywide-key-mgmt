@@ -23,6 +23,7 @@ import { checkReason, voidKeyForm, acknowledgeKeyForm, MIN_REASON_LENGTH } from 
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { readKeyLines, bcNumberForAssignment } from '../lib/custody';
 import { sendKeyForm, caraAddress, notifyAddresses } from '../lib/custodyMail';
+import { runSweepSafely, linkStateCounts, reviveLinkForManualSend } from '../lib/signatureLink';
 
 /** Same base the custody sign-off links use. */
 const frontendBase = (): string => process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -105,6 +106,12 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   const q = req.query as Record<string, string>;
   const page = Math.max(1, parseInt(q.page || '1', 10));
   const limit = Math.min(200, Math.max(1, parseInt(q.limit || '50', 10)));
+  // On-read fallback for the scheduler: any link that ran out since the last
+  // tick is renewed (or stopped at the cap) before the list is read, so the
+  // pills and counts are current even if the interval missed — a restart, a
+  // deploy, a crash. The sweep is idempotent; running it here costs one query
+  // when nothing is due.
+  runSweepSafely();
   const { rows, total } = listKeyForms({
     search: cleanText(q.search) || undefined,
     event_type: cleanText(q.event_type) || undefined,
@@ -121,6 +128,7 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
     forms: rows, total, page, limit,
     failed_count: failedSendCount(),
     ...correctionFormCounts(),
+    link_counts: linkStateCounts(),
   });
 });
 
@@ -216,6 +224,10 @@ router.post('/generate', requireAuth, async (req: AuthRequest, res: Response) =>
 export async function deliverKeyForm(
   req: AuthRequest, id: number, customTo?: string | null,
 ): Promise<{ ok: boolean; recipients: string[]; error?: string | null; form: any }> {
+  // A person sending this by hand is the "manual attention" the renewal cap
+  // asks for. If the link is dead, revive it first — an email must never carry
+  // a link that fails on open.
+  reviveLinkForManualSend(id, req.manager?.name ?? 'System');
   let row = getKeyForm(id);
   if (!row) return { ok: false, recipients: [], error: 'Form not found', form: null };
 

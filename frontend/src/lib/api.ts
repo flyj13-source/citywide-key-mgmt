@@ -749,6 +749,9 @@ export interface KeyFormLine {
   subtotal: number;
 }
 
+export type LinkState = 'signed' | 'awaiting' | 'expiring_soon' | 'expired';
+export type LinkStateCounts = Record<LinkState, number>;
+
 export interface KeyFormDoc {
   id: number;
   form_no: string;
@@ -786,6 +789,19 @@ export interface KeyFormDoc {
   send_error: string | null;
   signed_at: string | null;
   signature_typed_name: string | null;
+  /**
+   * The signature link's lifecycle, evaluated server-side at read time.
+   * null when the form has left the signature cycle (voided, acknowledged,
+   * superseded).
+   */
+  link_state: LinkState | null;
+  link_expires_at: string | null;
+  /** Automatic renewals so far; the link stops renewing at link_max_renewals. */
+  link_renewals: number;
+  link_max_renewals: number;
+  link_renewed_at: string | null;
+  /** Set when the renewal cap stopped the cycle — needs manual attention. */
+  link_exhausted_at: string | null;
   has_pdf: boolean;
   no_email: boolean;
   counterparty_name: string | null;
@@ -799,7 +815,10 @@ export interface KeyFormDoc {
 }
 
 export const getKeyFormDocs = (params: Record<string, string>) =>
-  req<{ forms: KeyFormDoc[]; total: number; page: number; limit: number; failed_count: number }>(
+  req<{
+    forms: KeyFormDoc[]; total: number; page: number; limit: number; failed_count: number;
+    link_counts: LinkStateCounts;
+  }>(
     `/key-forms?${new URLSearchParams(params)}`
   );
 
@@ -1100,7 +1119,7 @@ export const setCustodyNotification = (value: string) =>
     method: 'PUT', body: JSON.stringify({ value }),
   });
 
-// Public sign-off portal (no JWT — the 48h token is the credential)
+// Public sign-off portal (no JWT — the 5-day token is the credential)
 export interface SignoffView {
   id: number;
   action: 'checkout' | 'checkin' | 'established';

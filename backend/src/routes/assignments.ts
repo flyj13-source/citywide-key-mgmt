@@ -14,6 +14,7 @@ import { sendCheckoutNotice, sendCheckinNotice, sendSignedReceipt, caraAddress, 
 import { hashSignature } from '../lib/pdf';
 import { generateCustodyReceipt } from '../lib/custodyPdf';
 import { createKeyForm, serializeForm, getKeyForm, EmptyHoldingsError, type FormEventType } from '../lib/keyForm';
+import { SIGNATURE_TTL_MS } from '../lib/signatureLink';
 import { rolesForHolder, hasRoleAtClient, holderKeysAtClient, hasGrid, ROLE_SHORT } from '../lib/roleScope';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { NOT_TEST_ASSIGNMENT } from '../lib/testFixtures';
@@ -31,7 +32,8 @@ import {
 
 const router = Router();
 
-export const SIGNOFF_TTL_MS = 48 * 60 * 60 * 1000;
+// Five days — the one signature-link TTL, owned by signatureLink.ts.
+export const SIGNOFF_TTL_MS = SIGNATURE_TTL_MS;
 
 const frontendBase = (): string => process.env.FRONTEND_URL || 'http://localhost:5173';
 export const signoffLinkFor = (token: string): string => `${frontendBase()}/key-signoff/${token}`;
@@ -520,7 +522,7 @@ function logMail(req: AuthRequest, result: MailResult, kind: 'checkout' | 'check
 }
 
 // ── POST /api/assignments/checkout ───────────────────────────────────────────
-// Multi-key, self-service OR on-behalf. Blocks over-checkout, mints a 48h
+// Multi-key, self-service OR on-behalf. Blocks over-checkout, mints a 5-day
 // sign-off token, emails the holder + Cara, and audits actor AND holder.
 router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) => {
   const body = req.body || {};
@@ -702,7 +704,7 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
 
 // ── POST /api/assignments/checkin ────────────────────────────────────────────
 // Every custody EVENT generates a signature form, returns included: the holder
-// gets a 48h tokenized link asking them to acknowledge that they are RETURNING
+// gets a 5-day tokenized link asking them to acknowledge that they are RETURNING
 // these keys, and the signed PDF goes to the notification recipient.
 //
 // The whole transaction returns by default. When `keys` names a SUBSET of what
@@ -792,7 +794,7 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
 
   // EVERY custody event is signable. A first-time record is still a statement
   // somebody is asserting about keys in their possession, so it gets the same
-  // 48h token and the same link as a return — only the wording differs.
+  // 5-day token and the same link as a return — only the wording differs.
   const { token: recordToken, expires: recordExpires } = mintToken();
   db.prepare(
     'UPDATE key_assignments SET checkin_signoff_token=?, checkin_signoff_expires_at=?, return_reason=COALESCE(return_reason, ?) WHERE id=?'
@@ -1177,7 +1179,7 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
 });
 
 // ── POST /api/assignments/:id/resend-signoff ─────────────────────────────────
-// Re-mints the 48h token and re-sends the notification. Used when the first
+// Re-mints the 5-day token and re-sends the notification. Used when the first
 // send failed (SMTP down) or the link expired unsigned. Works in BOTH
 // directions: `kind` picks the check-out or the check-in signature, defaulting
 // to whichever one this record is still waiting on.

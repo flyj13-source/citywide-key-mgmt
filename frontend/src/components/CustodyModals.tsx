@@ -420,7 +420,7 @@ export function SignNowStep({
   kind: 'checkout' | 'checkin';
   onSigned: (r: { mail: MailOutcome; pdfError: string | null }) => void;
   /** Leaves the record awaiting a signature — never a dead end, because the
-   *  48h link is already minted and the registry flags it. */
+   *  5-day link is already minted and the registry flags it. */
   onSkip: () => void;
   intro?: React.ReactNode;
 }) {
@@ -706,7 +706,7 @@ export function CheckOutModal({
           )}
           {done.link && (
             <div className="text-xs text-cw-muted">
-              Sign-off link (48-hour expiry) — also included in the email:
+              Sign-off link (5-day expiry) — also included in the email:
               <div className="mt-1 font-mono break-all bg-gray-50 border border-cw-border rounded px-2 py-1.5">{done.link}</div>
             </div>
           )}
@@ -1121,7 +1121,7 @@ export function CheckInModal({
           {done.link ? (
             <>
               <div className="text-xs text-cw-muted">
-                Return signature link (48-hour expiry) — also included in the email:
+                Return signature link (5-day expiry) — also included in the email:
                 <div className="mt-1 font-mono break-all bg-gray-50 border border-cw-border rounded px-2 py-1.5">{done.link}</div>
               </div>
               <p className="text-xs text-cw-muted">

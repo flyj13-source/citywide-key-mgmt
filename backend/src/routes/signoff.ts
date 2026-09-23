@@ -14,7 +14,7 @@ const router = Router();
 
 // ── Public key sign-off portal ───────────────────────────────────────────────
 // Reuses the contractor magic-link pattern: a tokenized, login-free URL with a
-// 48h TTL, an HTML5 canvas signature, a SHA-256 hash of the signature, and a
+// 5-day TTL, an HTML5 canvas signature, a SHA-256 hash of the signature, and a
 // branded PDF receipt attached to the assignment record. Applies to BOTH City
 // Wide employees and independent contractors, and to BOTH directions — a
 // check-OUT form says "you are receiving these keys", a check-IN form says

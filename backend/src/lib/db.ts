@@ -395,6 +395,13 @@ for (const [col, def] of [
   // produces both at once — a receipt for the party handing keys over and a
   // holdings statement for the party receiving them.
   ['doc_kind', 'TEXT'],
+  // ── Signature-link lifecycle (see signatureLink.ts) ────────────────────
+  // How many times the link has been renewed automatically, when it last was,
+  // and when the renewal cap stopped it. Expiring-soon / expired are derived
+  // from token_expires_at at read time and never stored.
+  ['link_renewals', 'INTEGER DEFAULT 0'],
+  ['link_renewed_at', 'TEXT'],
+  ['link_exhausted_at', 'TEXT'],
 ] as [string, string][]) {
   if (!formCols.includes(col)) db.exec(`ALTER TABLE key_form_docs ADD COLUMN ${col} ${def}`);
 }

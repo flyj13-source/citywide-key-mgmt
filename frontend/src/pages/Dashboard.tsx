@@ -4,7 +4,7 @@ import Layout from '../components/Layout';
 import Badge from '../components/Badge';
 import TestPill from '../components/TestPill';
 import ManagerModal from '../components/ManagerModal';
-import { getAccounts, getAssignments, getOverdue, getStaff, getAudit, getKeyHolderStats, getStaffManagers, getSignatureGaps, type StaffManager, type SignatureGaps } from '../lib/api';
+import { getAccounts, getAssignments, getOverdue, getStaff, getAudit, getKeyHolderStats, getStaffManagers, getSignatureGaps, getKeyFormDocs, type StaffManager, type SignatureGaps, type LinkStateCounts } from '../lib/api';
 
 interface Metric { label: string; value: string | number; sub?: string; color?: string; footer?: React.ReactNode; }
 
@@ -37,6 +37,13 @@ export default function Dashboard() {
   const loadManagers = () => getStaffManagers().then((d) => setStaffManagers(d.managers)).catch(() => {});
 
   useEffect(() => { getSignatureGaps().then(setGaps).catch(() => setGaps(null)); }, []);
+  // Signature-link states from the Key Forms list. limit=1: only the counts
+  // are wanted, and the request also runs the on-read renewal sweep, so these
+  // are current even if the scheduler missed a tick.
+  const [linkCounts, setLinkCounts] = useState<LinkStateCounts | null>(null);
+  useEffect(() => {
+    getKeyFormDocs({ limit: '1' }).then((d) => setLinkCounts(d.link_counts ?? null)).catch(() => setLinkCounts(null));
+  }, []);
 
 
   useEffect(() => {
@@ -103,7 +110,7 @@ export default function Dashboard() {
         </div>
 
         {/* Metrics */}
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <MetricCard label="IC Vendors" value={icCount} sub="in key registry" />
           <MetricCard
             label="Customers"
@@ -150,6 +157,28 @@ export default function Dashboard() {
                   </Link>
                 : undefined}
           />
+          {/* Signature links — red whenever anything is in either state. No
+              email goes out for these; the dashboard IS the notification. */}
+          {([
+            { key: 'expiring_soon', label: 'Expiring Soon', sub: 'links in their last 24h', none: 'none within 24h' },
+            { key: 'expired', label: 'Expired Links', sub: 'unsigned, link run out', none: 'none expired' },
+          ] as const).map((m) => {
+            const n = linkCounts?.[m.key] ?? 0;
+            return (
+              <MetricCard
+                key={m.key}
+                label={m.label}
+                value={n}
+                sub={n > 0 ? m.sub : m.none}
+                color={n > 0 ? 'text-red-600' : 'text-green-700'}
+                footer={n > 0
+                  ? <Link to={`/registry?tab=keyforms&forms_status=${m.key}`} className="text-xs text-cw-red hover:underline">
+                      Review →
+                    </Link>
+                  : undefined}
+              />
+            );
+          })}
         </div>
 
         {/* Keys Personally Held — by holder column (AM/CCM/IC/Office) */}

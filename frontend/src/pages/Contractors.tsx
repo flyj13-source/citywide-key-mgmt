@@ -289,7 +289,7 @@ export default function Contractors() {
                 ))}
               </div>
             )}
-            <p className="text-xs text-cw-muted">A magic link (48hr TTL) will be generated. The contractor signs via canvas on their device and a PDF is created with their signature and SHA-256 hash.</p>
+            <p className="text-xs text-cw-muted">A magic link (5-day TTL) will be generated. The contractor signs via canvas on their device and a PDF is created with their signature and SHA-256 hash.</p>
             <div className="flex gap-2">
               <button onClick={handleInvite} disabled={saving || !form.name || !form.email} className="btn-primary">
                 {saving ? 'Generating link…' : 'Send Invitation'}

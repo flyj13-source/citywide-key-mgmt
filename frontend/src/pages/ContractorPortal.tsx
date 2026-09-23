@@ -207,7 +207,7 @@ export default function ContractorPortal() {
 
         <p className="text-center text-xs text-cw-muted">
           City Wide Building Services · Boston, MA<br />
-          This link expires 48 hours after issuance.
+          This link expires 5 days after issuance.
         </p>
       </div>
     </div>

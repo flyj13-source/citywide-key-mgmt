@@ -13,8 +13,9 @@ import {
   getKeyFormDocs, generateKeyFormDocs, sendKeyFormDoc, bulkSendKeyFormDocs, retryFailedKeyForms,
   bulkCorrectKeyForms,
   downloadKeyFormDocPdf, regenerateKeyForm, getHolders,
-  type KeyFormDoc, type HolderOption,
+  type KeyFormDoc, type HolderOption, type LinkState, type LinkStateCounts,
 } from '../lib/api';
+import { useSearchParams } from 'react-router-dom';
 
 const EVENT_FILTERS = [
   { key: 'all', label: 'All events' },
@@ -37,10 +38,36 @@ const STATUS_FILTERS = [
   // Not a stored status: a failed send leaves the row 'unsigned', which is
   // also what a never-sent form reads as. The server filters on send_error.
   { key: 'send_failed', label: 'Failed to send' },
+  // Signature-link states — derived from the link's expiry, not stored.
+  { key: 'awaiting', label: 'Awaiting signature' },
+  { key: 'expiring_soon', label: 'Expiring soon' },
+  { key: 'expired', label: 'Expired' },
+];
+
+/** Every value the status filter accepts, for validating a deep-linked one. */
+const STATUS_KEYS = new Set(STATUS_FILTERS.map((f) => f.key));
+
+/**
+ * The four signature states, as chips. Colours match the pills: amber-orange
+ * for a link inside its last 24 hours, red for one that has run out.
+ */
+const LINK_CHIPS: { key: LinkState; label: string; on: string; off: string }[] = [
+  { key: 'signed', label: 'Signed',
+    on: 'bg-[#2d7a3a] border-[#2d7a3a] text-white',
+    off: 'bg-[#e8f5ea] border-[#2d7a3a] text-[#2d7a3a] hover:bg-[#d7eedb]' },
+  { key: 'awaiting', label: 'Awaiting signature',
+    on: 'bg-[#7a5a00] border-[#7a5a00] text-white',
+    off: 'bg-[#fff8e6] border-[#e8cf8a] text-[#7a5a00] hover:bg-[#fdf0cc]' },
+  { key: 'expiring_soon', label: 'Expiring soon',
+    on: 'bg-[#d9730d] border-[#d9730d] text-white',
+    off: 'bg-[#fff1e3] border-[#d9730d] text-[#b35c00] hover:bg-[#ffe3c7]' },
+  { key: 'expired', label: 'Expired',
+    on: 'bg-[#C0272D] border-[#C0272D] text-white',
+    off: 'bg-[#fbeaea] border-[#C0272D] text-[#C0272D] hover:bg-[#f7d9da]' },
 ];
 
 /** Status is the thing an auditor scans for, so it carries real colour. */
-function StatusPill({ status, noEmail }: { status: string; noEmail: boolean }) {
+function StatusPill({ status, noEmail, form }: { status: string; noEmail: boolean; form?: KeyFormDoc }) {
   // Corrections outrank everything else the pill would say — including the
   // no-email warning, which is moot once the form is voided or settled.
   if (status === 'voided') {
@@ -82,11 +109,48 @@ function StatusPill({ status, noEmail }: { status: string; noEmail: boolean }) {
       </span>
     );
   }
+  // Still waiting. WHICH kind of waiting is the link's state: comfortably
+  // open, inside its last 24 hours, or run out.
+  const state = form?.link_state ?? 'awaiting';
+  const expires = form?.link_expires_at ? fmtWhen(form.link_expires_at) : null;
+  const cycle = form && form.link_renewals > 0
+    ? ` · renewed ${form.link_renewals} of ${form.link_max_renewals}` : '';
+  const pill = state === 'expired'
+    ? {
+      label: 'Expired',
+      cls: 'bg-[#fbeaea] text-[#C0272D] border-[#C0272D]',
+      title: form?.link_exhausted_at
+        ? `Link expired unsigned after ${form.link_max_renewals} automatic renewals. `
+          + 'It will not renew again on its own — resend it or follow up with the holder.'
+        : 'Link expired unsigned. A fresh 5-day link is minted automatically.',
+    }
+    : state === 'expiring_soon'
+      ? {
+        label: 'Expiring soon',
+        cls: 'bg-[#fff1e3] text-[#b35c00] border-[#d9730d]',
+        title: `Link expires ${expires ?? 'within 24 hours'}${cycle}`,
+      }
+      : {
+        label: 'Awaiting signature',
+        cls: 'bg-[#fff8e6] text-[#7a5a00] border-[#e8cf8a]',
+        title: expires ? `Link open until ${expires}${cycle}` : undefined,
+      };
   return (
     <span className="inline-flex items-center gap-1 whitespace-nowrap">
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-[#fff8e6] text-[#7a5a00] border-[#e8cf8a]">
-        Awaiting signature
+      <span
+        title={pill.title}
+        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${pill.cls}`}
+      >
+        {pill.label}
       </span>
+      {form?.link_exhausted_at && (
+        <span
+          title="Automatic renewals used up — needs manual attention"
+          className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold border bg-white text-[#C0272D] border-[#C0272D]"
+        >
+          needs attention
+        </span>
+      )}
       {/* A DELIVERY problem, not a missing signature path: the link exists and
           opens on a device handed to the holder. Shown beside the state rather
           than replacing it, so a form is never read as unsignable. */}
@@ -101,6 +165,15 @@ function StatusPill({ status, noEmail }: { status: string; noEmail: boolean }) {
     </span>
   );
 }
+
+/** "Sep 23, 4:05 PM" in Boston time — the moment a link runs out. */
+const fmtWhen = (iso: string): string => {
+  const d = new Date(/[Tt]|[Zz]$/.test(iso) ? iso : `${iso.replace(' ', 'T')}Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('en-US', {
+    timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+};
 
 const fmt = (iso: string | null): string => {
   if (!iso) return '—';
@@ -343,7 +416,14 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
   const [eventType, setEventType] = useState('all');
-  const [status, setStatus] = useState('all');
+  // A deep link (the dashboard's Expiring soon / Expired cards) can open the
+  // tab pre-filtered: /registry?tab=keyforms&forms_status=expired
+  const [searchParams] = useSearchParams();
+  const [status, setStatus] = useState(() => {
+    const s = searchParams.get('forms_status') ?? 'all';
+    return STATUS_KEYS.has(s) ? s : 'all';
+  });
+  const [linkCounts, setLinkCounts] = useState<LinkStateCounts | null>(null);
   // Unfiltered backlog of forms whose last send failed — the chip shows it
   // from any view, because a queue you cannot see is a queue you forget.
   const [failedCount, setFailedCount] = useState(0);
@@ -377,6 +457,7 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
       setForms(d.forms);
       setTotal(d.total);
       setFailedCount(d.failed_count ?? 0);
+      setLinkCounts(d.link_counts ?? null);
     } finally { setLoading(false); }
   }, [debounced, eventType, status, from, to]);
 
@@ -428,6 +509,22 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
         <select className="input w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
           {STATUS_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>
+
+        {/* Signature states — always shown, with live counts, so the backlog is
+            visible from any filter. Click to filter; click again to clear. */}
+        {linkCounts && LINK_CHIPS.map((c) => (
+          <button
+            key={c.key}
+            type="button"
+            onClick={() => setStatus(status === c.key ? 'all' : c.key)}
+            className={`inline-flex items-center gap-1.5 h-[34px] px-3 rounded text-sm font-medium border transition-colors ${
+              status === c.key ? c.on : c.off
+            }`}
+          >
+            {c.label}
+            <span className="tabular-nums font-semibold">{linkCounts[c.key]}</span>
+          </button>
+        ))}
 
         {/* Only present when there is actually a backlog. */}
         {failedCount > 0 && (
@@ -598,7 +695,7 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
                 <td className="px-3 py-3 text-xs text-gray-600 max-w-[180px] truncate" title={f.sent_to.join(', ')}>
                   {f.sent_to.length ? f.sent_to.join(', ') : '—'}
                 </td>
-                <td className="px-3 py-3 text-center"><StatusPill status={f.status} noEmail={f.no_email} /></td>
+                <td className="px-3 py-3 text-center"><StatusPill status={f.status} noEmail={f.no_email} form={f} /></td>
                 <td className="px-3 py-3 text-right whitespace-nowrap">
                   <div className="inline-flex items-center gap-2">
                     <button onClick={() => setViewing(f)} className="text-xs border border-[#1a1a1a] text-[#1a1a1a] rounded px-2 py-1 hover:border-[#C0272D] hover:text-[#C0272D] transition-colors">View</button>

@@ -5,7 +5,7 @@ import { CWLogoSidebar } from '../components/CWLogo';
 import { getSignoffByToken, submitSignoff, type SignoffView } from '../lib/api';
 
 // ── Public key sign-off ──────────────────────────────────────────────────────
-// Reached from the tokenized link in a check-out OR check-in email (48h TTL, no
+// Reached from the tokenized link in a check-out OR check-in email (5-day TTL, no
 // login). Applies to City Wide employees AND independent contractors alike.
 //
 // The two directions are DIFFERENT acts and are worded as such throughout: a
@@ -372,7 +372,7 @@ export default function KeySignoff() {
 
       <p className="text-center text-xs text-cw-muted">
         City Wide Building Services · Boston, MA<br />
-        This link expires 48 hours after it was issued.
+        This link expires 5 days after it was issued.
       </p>
     </Shell>
   );

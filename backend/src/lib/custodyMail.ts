@@ -267,7 +267,7 @@ function signoffBlock(link: string, action: 'checkout' | 'checkin' | 'establishe
   return `<div style="margin-top:24px;padding:18px;border:1px solid ${CW_BORDER};border-left:4px solid ${CW_RED};border-radius:4px;background:${CW_BG}">
          <div style="font-weight:700;color:${CW_CHARCOAL};font-size:14px;margin-bottom:6px">Signature required</div>
          <p style="margin:0 0 14px;font-size:13px;color:${CW_MUTED}">
-           ${esc(line)} No login is needed — the link expires in 48 hours.
+           ${esc(line)} No login is needed — the link expires in 5 days.
          </p>
          <a href="${esc(link)}" style="display:inline-block;padding:12px 22px;background:${CW_RED};color:#ffffff;text-decoration:none;border-radius:4px;font-weight:600;font-size:14px">Sign for these keys</a>
          <p style="margin:14px 0 0;font-size:11px;color:${CW_MUTED};word-break:break-all">${esc(link)}</p>
@@ -444,7 +444,7 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
     '',
     'Keys:',
     ...d.keys.map((k) => `  ${keyPhrase(k)}`),
-    ...(d.signoffLink ? ['', `Sign for these keys (expires in 48 hours): ${d.signoffLink}`] : []),
+    ...(d.signoffLink ? ['', `Sign for these keys (expires in 5 days): ${d.signoffLink}`] : []),
   ].join('\n');
 
   return sendBranded(subject, html, text, [d.holderEmail || '', ...notifyAddresses()]);
@@ -538,7 +538,7 @@ export async function sendCheckinNotice(d: CheckinMail): Promise<MailResult> {
     ...d.keys.map((k) => `  ${keyPhrase(k)}`),
     ...(d.signoffLink
       ? ['', `${recorded ? 'Confirm these keys' : transferredTo ? 'Sign for this transfer' : 'Sign for this return'}`
-           + ` (expires in 48 hours): ${d.signoffLink}`]
+           + ` (expires in 5 days): ${d.signoffLink}`]
       : []),
   ].join('\n');
 
@@ -624,7 +624,7 @@ export async function sendKeyForm(d: KeyFormMail): Promise<MailResult> {
       ? d.lines.map((l) => `  ${l.client}${l.bc_client_number ? ` (BC #${l.bc_client_number})` : ''}: ${l.subtotal}`)
       : ['  None']),
     `  TOTAL: ${d.totalKeys}`,
-    ...(d.signLink && !d.signed ? ['', `Acknowledge this form (expires in 48 hours): ${d.signLink}`] : []),
+    ...(d.signLink && !d.signed ? ['', `Acknowledge this form (expires in 5 days): ${d.signLink}`] : []),
   ].join('\n');
 
   return sendBranded(subject, html, text, d.recipients, d.pdf ? [d.pdf] : undefined);

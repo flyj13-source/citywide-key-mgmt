@@ -138,7 +138,7 @@ function SignaturePill({ a, kind, onResent, onSignInPerson }: {
         } finally { setBusy(false); }
       }}
       className="text-[11px] text-[#C0272D] hover:underline whitespace-nowrap disabled:opacity-50"
-      title="Mint a fresh 48-hour link and email it again"
+      title="Mint a fresh 5-day link and email it again"
     >
       {busy ? '…' : label}
     </button>

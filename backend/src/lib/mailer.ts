@@ -266,7 +266,7 @@ async function sendContractorInviteMail(to: string, name: string, magicLink: str
     html: `
       <h2 style="color:#C0272D">Key Receipt Acknowledgement</h2>
       <p>Hello ${name},</p>
-      <p>Please click the link below to acknowledge receipt of your assigned keys. This link expires in 48 hours.</p>
+      <p>Please click the link below to acknowledge receipt of your assigned keys. This link expires in 5 days.</p>
       <a href="${magicLink}" style="display:inline-block;padding:12px 24px;background:#C0272D;color:#fff;text-decoration:none;border-radius:4px">Acknowledge Key Receipt</a>
       <p style="color:#6b6b68;font-size:12px">City Wide Building Services · Boston, MA</p>
     `,

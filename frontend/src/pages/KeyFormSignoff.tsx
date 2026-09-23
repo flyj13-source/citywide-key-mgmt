@@ -1,5 +1,5 @@
 // ── Public Key Form acknowledgement ──────────────────────────────────────────
-// Opened from a 48h tokenized link. No login. The signer sees every client they
+// Opened from a 5-day tokenized link. No login. The signer sees every client they
 // hold keys at and confirms the whole statement in one signature.
 
 import { useEffect, useRef, useState } from 'react';

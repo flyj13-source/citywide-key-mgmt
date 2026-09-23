@@ -227,7 +227,7 @@ export default function TransferModal({
             <div className="font-semibold">Awaiting signatures ({done.signatures.signed} of {done.signatures.total})</div>
             <p className="mt-1 text-xs">
               The transfer is not complete until both people sign: {done.from.holder} confirms the return,
-              and {done.to.holder} confirms receipt. Each link expires in 48 hours.
+              and {done.to.holder} confirms receipt. Each link expires in 5 days.
             </p>
           </div>
 

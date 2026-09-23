@@ -187,13 +187,13 @@ describe('MULTI-KEY CHECK-OUT', () => {
   });
 
   // ── Sign-off ──────────────────────────────────────────────────────────────
-  it('mints a 48h sign-off link the checkout response exposes', () => {
+  it('mints a 5-day sign-off link the checkout response exposes', () => {
     const row = one('SELECT * FROM key_assignments WHERE id = ?', assignmentId);
     signoffToken = row.signoff_token;
     expect(signoffToken).toMatch(/^[0-9a-f]{64}$/);
     const ttlHours = (new Date(row.signoff_expires_at).getTime() - Date.now()) / 3_600_000;
-    expect(ttlHours).toBeGreaterThan(47.5);
-    expect(ttlHours).toBeLessThan(48.5);
+    expect(ttlHours).toBeGreaterThan(119.5);
+    expect(ttlHours).toBeLessThan(120.5);
   });
 
   it('the public sign-off page loads without a login and shows the key set', async () => {
@@ -426,7 +426,7 @@ describe('CHECK-IN SIGNATURE', () => {
   let outId = 0;
   let checkinToken = '';
 
-  it('a return mints its own 48h token, distinct from the check-out token', async () => {
+  it('a return mints its own 5-day token, distinct from the check-out token', async () => {
     const out = await auth(request(app).post('/api/assignments/checkout')).send({
       account_id: clientId, holder: 'Signback Sam', holder_type: 'employee',
       holder_email: 'sam@example.test', keys: [{ type: 'metal', qty: 1 }],
@@ -447,8 +447,8 @@ describe('CHECK-IN SIGNATURE', () => {
     checkinToken = row.checkin_signoff_token;
 
     const expires = new Date(String(row.checkin_signoff_expires_at)).getTime() - Date.now();
-    expect(expires).toBeGreaterThan(47 * 3600 * 1000);
-    expect(expires).toBeLessThanOrEqual(48 * 3600 * 1000);
+    expect(expires).toBeGreaterThan(119 * 3600 * 1000);
+    expect(expires).toBeLessThanOrEqual(120 * 3600 * 1000);
   });
 
   it('the public form loads as a RETURN, not a receipt', async () => {

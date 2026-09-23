@@ -7,6 +7,7 @@ import path from 'path';
 import db, { DATABASE_FILE } from './lib/db';
 import { buildInfo } from './lib/buildInfo';
 import { autoSeedIfEmpty } from './lib/autoSeed';
+import * as signatureLinks from './lib/signatureLink';
 import authRouter from './routes/auth';
 import importRouter from './routes/import';
 import accountsRouter from './routes/accounts';
@@ -74,6 +75,12 @@ app.get('/api/health', (_req, res) => {
     commit_short: build.commitShort,
     commit_source: build.source,
     built_at: build.builtAt,
+    // Proof the signature-link scheduler is alive in THIS process: when it
+    // last swept and how often it is meant to. null until the first tick.
+    signature_sweep: {
+      last_at: signatureLinks.lastSweepAt,
+      interval_ms: signatureLinks.SWEEP_INTERVAL_MS,
+    },
   });
 });
 
@@ -97,7 +104,7 @@ app.use('/api/claude', claudeRouter);
 app.use('/api/contractors', contractorsRouter);
 // Public contractor routes (no JWT)
 app.use('/api/contractor', contractorsRouter);
-// Public key check-out sign-off portal (no JWT — the 48h token is the credential)
+// Public key check-out sign-off portal (no JWT — the 5-day token is the credential)
 app.use('/api/signoff', signoffRouter);
 app.use('/api/key-forms', keyFormsRouter);
 // Deployed-state diagnostics (JWT + admin only)
@@ -150,6 +157,12 @@ if (require.main === module) {
     }
 
     bootSelfCheck();
+
+    // Signature-link lifecycle: renew expired unsigned links (up to the cap)
+    // every 15 minutes. Started after the seed so it sees the mounted disk.
+    // The Key Forms list also sweeps on read, so a missed tick never leaves a
+    // stale pill on screen.
+    signatureLinks.startSignatureLinkScheduler();
     console.log(`    Login: cara@citywideboston.com / demo1234\n`);
   });
 }
