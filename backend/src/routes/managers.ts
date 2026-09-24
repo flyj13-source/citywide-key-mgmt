@@ -4,7 +4,7 @@ import db from '../lib/db';
 import { logAudit } from '../lib/audit';
 import { generateEventForm } from './assignments';
 import {
-  Role, ROLE_LABEL, clientsFor, staffById, canHoldRole,
+  Role, ROLE_LABEL, ROLE_COLUMN, clientsFor, staffById, canHoldRole,
   performTransfer, performUndo, confirmHandover, clearNoKeyHandovers, staffEmail,
 } from '../lib/reassign';
 import { sendHandoverNotice } from '../lib/handoverMail';
@@ -369,6 +369,69 @@ router.post('/handover/confirm', requireAuth, (req: AuthRequest, res: Response) 
     });
   }
   res.json({ success: true, confirmed: changed });
+});
+
+// ── POST /api/managers/bulk-set ─────────────────────────────────────────────
+// { role: 'am'|'ccm', staffId, accountIds[] } — set the Account Manager or CCM
+// on every selected client directly. Unlike Reassign it does not require the
+// clients to share a current manager, and it works whether or not keys are
+// involved: it changes the name and nothing else. (The role's grid cells
+// belong to the role, so they follow the new name, exactly as in Reassign.)
+// One transaction; one audit entry per client with old → new.
+router.post('/bulk-set', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireBulkPermission(req, res)) return;
+  const role = asRole(req.body?.role);
+  if (!role) return res.status(400).json({ error: "role must be 'am' or 'ccm'" });
+  const ids: number[] = Array.isArray(req.body?.accountIds)
+    ? [...new Set((req.body.accountIds as any[]).map(Number).filter((n) => Number.isInteger(n) && n > 0))]
+    : [];
+  if (!ids.length) return res.status(400).json({ error: 'Select at least one client' });
+  const target = req.body?.staffId != null ? staffById(Number(req.body.staffId)) : null;
+  if (!target) return res.status(404).json({ error: 'Choose the new person from the staff roster' });
+  if (!canHoldRole(target, role)) {
+    return res.status(400).json({
+      error: `${target.name} cannot be ${ROLE_LABEL[role]} — their roster type is "${target.manager_type}".`,
+    });
+  }
+  const col = ROLE_COLUMN[role];
+  const rows = (db.prepare(
+    `SELECT id, ic_company_name, record_type, ${col} AS current FROM accounts WHERE id IN (${ids.map(() => '?').join(',')})`
+  ).all(...ids) as any[]).map((r) => Object.assign({}, r));
+  const missing = ids.filter((id) => !rows.some((r) => r.id === id));
+  if (missing.length) return res.status(404).json({ error: `${missing.length} selected client(s) no longer exist`, client_ids: missing });
+  const notCustomers = rows.filter((r) => r.record_type !== 'customer');
+  if (notCustomers.length) {
+    return res.status(400).json({
+      error: `${ROLE_LABEL[role]} applies to customer sites only — ${notCustomers.length} selected record(s) are IC vendors`,
+      client_ids: notCustomers.map((r) => r.id),
+    });
+  }
+
+  const newName = String(target.name).trim();
+  const same = (v: any) => String(v ?? '').replace(/\u00a0/g, ' ').trim().toLowerCase() === newName.toLowerCase();
+  const changing = rows.filter((r) => !same(r.current));
+  const update = db.prepare(`UPDATE accounts SET ${col} = ? WHERE id = ?`);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const r of changing) update.run(newName, r.id);
+    db.exec('COMMIT');
+  } catch (e: any) {
+    try { db.exec('ROLLBACK'); } catch { /* */ }
+    return res.status(500).json({ error: `Nothing was changed: ${e?.message ?? e}` });
+  }
+  const action = role === 'am' ? 'account_manager_changed' : 'ccm_manager_changed';
+  for (const r of changing) {
+    logAudit(req, action, r.ic_company_name, r.id, {
+      field: col, old: r.current ?? null, new: newName, role_label: ROLE_LABEL[role],
+      summary: `${ROLE_LABEL[role]}: ${r.current ?? '—'} → ${newName}`, bulk: true,
+    });
+  }
+  res.json({
+    success: true, role, to: newName,
+    changed: changing.length,
+    unchanged: rows.length - changing.length,
+    clients: changing.map((r) => ({ id: r.id, name: r.ic_company_name, old: r.current ?? null, new: newName })),
+  });
 });
 
 // ── POST /api/managers/handover/clear-no-keys ───────────────────────────────

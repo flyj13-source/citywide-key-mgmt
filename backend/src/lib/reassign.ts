@@ -44,6 +44,19 @@ export interface ReassignClient {
   pending_handover: boolean;
 }
 
+/**
+ * Does the name stored on a client row match this manager? Compared the way a
+ * person reads it — ignoring case, surrounding spaces and non-breaking spaces
+ * (char 160, which spreadsheet imports carry in and nobody can see).
+ *
+ * An exact '=' here is what let a reassignment silently skip clients: a row
+ * holding "Julie Lynch " is the same person to everyone looking at the
+ * registry, but not to SQL, so it was never offered for transfer and kept the
+ * old name while the rest of the selection moved.
+ */
+export const nameMatches = (col: string): string =>
+  `LOWER(TRIM(REPLACE(COALESCE(${col}, ''), char(160), ' '))) = LOWER(TRIM(REPLACE(?, char(160), ' ')))`;
+
 /** Every client this manager holds in this role, with the keys they hold there. */
 export function clientsFor(managerName: string, role: Role): ReassignClient[] {
   const col = ROLE_COLUMN[role];
@@ -55,7 +68,7 @@ export function clientsFor(managerName: string, role: Role): ReassignClient[] {
            COALESCE(${role}_dispenser,0) AS k_dispenser,
            COALESCE(pending_handover,0)  AS pending_handover
       FROM accounts
-     WHERE ${CLIENT_FILTER} AND ${col} = ?
+     WHERE ${CLIENT_FILTER} AND ${nameMatches(col)}
      ORDER BY ic_company_name ASC
   `).all(managerName) as any[];
 
@@ -131,9 +144,9 @@ export function performTransfer(opts: {
       `UPDATE accounts
           SET ${col} = ?, pending_handover = 1, pending_handover_from = ?,
               pending_handover_to = ?, pending_handover_role = ?, pending_handover_at = ?
-        WHERE id = ? AND ${col} = ?`
+        WHERE id = ? AND ${nameMatches(col)}`
     );
-    const plain = db.prepare(`UPDATE accounts SET ${col} = ? WHERE id = ? AND ${col} = ?`);
+    const plain = db.prepare(`UPDATE accounts SET ${col} = ? WHERE id = ? AND ${nameMatches(col)}`);
 
     const now = new Date().toISOString();
     for (const c of selected) {
@@ -243,7 +256,7 @@ export function performUndo(opts: {
       `UPDATE accounts
           SET ${col} = ?, pending_handover = 0, pending_handover_from = NULL,
               pending_handover_to = NULL, pending_handover_role = NULL, pending_handover_at = NULL
-        WHERE id = ? AND ${col} = ?`
+        WHERE id = ? AND ${nameMatches(col)}`
     );
     for (const id of clientIds) {
       const row = read.get(id) as any;

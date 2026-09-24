@@ -1577,6 +1577,13 @@ export interface PendingHandover {
 export const getPendingHandovers = () =>
   req<{ pending: PendingHandover[]; count: number }>('/managers/handover/pending');
 
+/** Set the AM or CCM on every selected client directly — one transaction, audited per client. */
+export const bulkSetManager = (role: 'am' | 'ccm', staffId: number, accountIds: number[]) =>
+  req<{
+    success: true; role: 'am' | 'ccm'; to: string; changed: number; unchanged: number;
+    clients: { id: number; name: string; old: string | null; new: string }[];
+  }>('/managers/bulk-set', { method: 'POST', body: JSON.stringify({ role, staffId, accountIds }) });
+
 export const confirmHandover = (clientIds: number[]) =>
   req<{ success: true; confirmed: number }>('/managers/handover/confirm', {
     method: 'POST', body: JSON.stringify({ clientIds }),

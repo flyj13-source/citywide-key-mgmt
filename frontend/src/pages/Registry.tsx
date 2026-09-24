@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, memo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
+import BulkManagerModal from '../components/BulkManagerModal';
 import DataQuality from '../components/DataQuality';
 import ImportModal from '../components/ImportModal';
 import { getManager } from '../lib/auth';
@@ -1143,6 +1144,7 @@ export default function Registry() {
   const [handoverCount, setHandoverCount] = useState(0);
   // Bulk confirm: the selected clients that have a handover open.
   const [handoverConfirm, setHandoverConfirm] = useState<{ id: number; name: string }[] | null>(null);
+  const [bulkManagerRole, setBulkManagerRole] = useState<'am' | 'ccm' | null>(null);
   // Read-only data-quality review. Deliberately a VIEW, not an action: it can
   // only ever tell you what looks wrong, never change it.
   const [showDuplicates, setShowDuplicates] = useState(false);
@@ -2132,6 +2134,7 @@ export default function Registry() {
                 onArchive={() => { setBulkArchiveError(''); setBulkArchiveOpen(true); }}
                 canConfirmHandover={canDelete || isAdmin}
                 onConfirmHandover={(items) => setHandoverConfirm(items)}
+                onChangeManager={(r) => setBulkManagerRole(r)}
               />
             )}
             {/* In bulk mode with nothing picked yet, still say what mode this
@@ -2190,6 +2193,18 @@ export default function Registry() {
 
       {showImport && (
         <ImportModal onClose={() => setShowImport(false)} onDone={() => { loadRows(); refreshCounts(); }} />
+      )}
+
+      {bulkManagerRole && (
+        <BulkManagerModal
+          role={bulkManagerRole}
+          clients={bulk.selectedItems.map((i) => ({
+            id: i.id, name: i.ic_company_name,
+            current: bulkManagerRole === 'am' ? i.account_manager : i.ccm_manager,
+          }))}
+          onClose={() => setBulkManagerRole(null)}
+          onDone={(msg) => { setNotice(msg); bulk.clear(); loadRows(); refreshCounts(); }}
+        />
       )}
 
       {handoverConfirm && (
@@ -2313,6 +2328,7 @@ export default function Registry() {
           sourceName={reassign.name ?? undefined}
           role={reassign.name ? reassign.role : undefined}
           presetClientIds={reassign.clientIds}
+          presetClientNames={Object.fromEntries(bulk.selectedItems.map((i) => [i.id, i.ic_company_name]))}
           onClose={() => setReassign(null)}
           onDone={() => { loadRoster(); refreshCounts(); }}
         />

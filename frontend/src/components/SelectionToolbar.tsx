@@ -94,7 +94,7 @@ export default function SelectionToolbar({
   count, total, pageCount, allMatching, items, canDelete,
   promoting, promoteError,
   onPromote, onClear, onExport, onReassign, onCheckOut, onArchive,
-  canConfirmHandover = false, onConfirmHandover,
+  canConfirmHandover = false, onConfirmHandover, onChangeManager,
 }: {
   count: number;
   total: number;
@@ -113,6 +113,8 @@ export default function SelectionToolbar({
   canConfirmHandover?: boolean;
   /** Receives only the selected clients that actually have a handover open. */
   onConfirmHandover?: (items: { id: number; name: string }[]) => void;
+  /** Set the AM / CCM field directly on the whole selection. */
+  onChangeManager?: (role: 'am' | 'ccm') => void;
 }) {
   const cap = selectionCapabilities(items);
   const pendingHandover = items.filter((i) => !!i.pending_handover);
@@ -160,6 +162,16 @@ export default function SelectionToolbar({
             onClick={() => onReassign(cap.reassign.shared)}
             disabled={!cap.reassign.ok} reason={cap.reassign.reason}
           />
+          {canConfirmHandover && onChangeManager && (['am', 'ccm'] as const).map((r) => (
+            <BarButton
+              key={r}
+              icon={<IconReassign size={14} />}
+              label={r === 'am' ? 'Change Account Manager' : 'Change CCM'}
+              onClick={() => onChangeManager(r)}
+              disabled={!cap.allCustomers}
+              reason={count === 0 ? 'Select a customer first' : 'Applies to customer sites only'}
+            />
+          ))}
           {canConfirmHandover && onConfirmHandover && (
             <BarButton
               icon={<IconReassign size={14} />}

@@ -34,7 +34,7 @@ function KeyPills({ keys }: { keys: ReassignClient['keys'] }) {
 }
 
 export default function ReassignModal({
-  staffId, sourceName, role: initialRole, presetClientIds, onClose, onDone,
+  staffId, sourceName, role: initialRole, presetClientIds, presetClientNames, onClose, onDone,
 }: {
   /** Known when launched from a roster row (via name). Absent from the
    *  registry header, where the source manager is chosen inside the modal. */
@@ -44,6 +44,8 @@ export default function ReassignModal({
   /** Launched from a bulk selection — tick exactly these clients instead of
    *  the usual "all". Ids outside this manager's book are simply not present. */
   presetClientIds?: number[];
+  /** Names for the preset ids, so any that cannot move are named, not dropped. */
+  presetClientNames?: Record<number, string>;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -124,6 +126,16 @@ export default function ReassignModal({
       .catch((e) => setLoadError(e?.message || 'Could not load this manager’s clients'))
       .finally(() => setLoading(false));
   }, [resolvedId, role, presetClientIds]);
+
+  // Ticked in the registry but not assigned to this manager in this role, so
+  // they cannot move. Said out loud — silently leaving them behind is how a
+  // reassignment "didn't apply" to some of the selection.
+  const leftBehind = useMemo(() => {
+    if (!data || !presetClientIds?.length) return [];
+    const have = new Set(data.clients.map((c) => c.id));
+    return presetClientIds.filter((id) => !have.has(id))
+      .map((id) => presetClientNames?.[id] ?? `Client #${id}`);
+  }, [data, presetClientIds, presetClientNames]);
 
   const selected = useMemo(
     () => (data?.clients ?? []).filter((c) => checked[c.id]),
@@ -255,6 +267,14 @@ export default function ReassignModal({
         <p className="text-sm text-[#C0272D] bg-[#fbeaea] border border-[#f0c9cb] rounded px-3 py-2">{loadError}</p>
       ) : !data ? null : (
         <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
+          {leftBehind.length > 0 && (
+            <div className="text-sm text-[#7a5a00] bg-[#fff8e6] border border-[#e8cf8a] rounded px-3 py-2">
+              <strong>{leftBehind.length} selected client{leftBehind.length === 1 ? ' is' : 's are'} not
+              assigned to {data.source?.name ?? 'this manager'} as {data.role_label ?? 'this role'}</strong> and
+              will not move: {leftBehind.slice(0, 5).join(', ')}{leftBehind.length > 5 ? `, +${leftBehind.length - 5} more` : ''}.
+              To set their manager directly, use <em>Change Account Manager</em> / <em>Change CCM</em> in Select mode.
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <SectionLabel>From</SectionLabel>
