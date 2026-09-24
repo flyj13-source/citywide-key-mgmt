@@ -94,6 +94,7 @@ export default function SelectionToolbar({
   count, total, pageCount, allMatching, items, canDelete,
   promoting, promoteError,
   onPromote, onClear, onExport, onReassign, onCheckOut, onArchive,
+  canConfirmHandover = false, onConfirmHandover,
 }: {
   count: number;
   total: number;
@@ -109,8 +110,12 @@ export default function SelectionToolbar({
   onReassign: (sharedManager: string | null) => void;
   onCheckOut: () => void;
   onArchive: () => void;
+  canConfirmHandover?: boolean;
+  /** Receives only the selected clients that actually have a handover open. */
+  onConfirmHandover?: (items: { id: number; name: string }[]) => void;
 }) {
   const cap = selectionCapabilities(items);
+  const pendingHandover = items.filter((i) => !!i.pending_handover);
   // Offer the promotion only when the whole loaded page is taken and there is
   // genuinely more behind it.
   const offerPromotion = !allMatching && count > 0 && count >= pageCount && total > pageCount;
@@ -155,6 +160,15 @@ export default function SelectionToolbar({
             onClick={() => onReassign(cap.reassign.shared)}
             disabled={!cap.reassign.ok} reason={cap.reassign.reason}
           />
+          {canConfirmHandover && onConfirmHandover && (
+            <BarButton
+              icon={<IconReassign size={14} />}
+              label={pendingHandover.length ? `Confirm handover (${pendingHandover.length})` : 'Confirm handover'}
+              onClick={() => onConfirmHandover(pendingHandover.map((i) => ({ id: i.id, name: i.ic_company_name })))}
+              disabled={!pendingHandover.length}
+              reason="None of the selected clients has a handover pending"
+            />
+          )}
           {canDelete && (
             <BarButton
               icon={<IconDelete size={14} />} label="Archive"

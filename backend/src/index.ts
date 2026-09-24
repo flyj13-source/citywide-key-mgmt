@@ -8,6 +8,7 @@ import db, { DATABASE_FILE } from './lib/db';
 import { buildInfo } from './lib/buildInfo';
 import { autoSeedIfEmpty } from './lib/autoSeed';
 import * as signatureLinks from './lib/signatureLink';
+import { clearNoKeyHandovers } from './lib/reassign';
 import authRouter from './routes/auth';
 import importRouter from './routes/import';
 import accountsRouter from './routes/accounts';
@@ -163,6 +164,16 @@ if (require.main === module) {
     // The Key Forms list also sweeps on read, so a missed tick never leaves a
     // stale pill on screen.
     signatureLinks.startSignatureLinkScheduler();
+
+    // Handover flags left on clients where the reassigned role holds no keys
+    // (reassignments made before the zero-keys rule). Idempotent: a clean
+    // registry clears nothing. Each one is audited 'handover_cleared_no_keys'.
+    try {
+      const cleared = clearNoKeyHandovers();
+      console.log(`    Handover flags cleared (no keys to hand over): ${cleared.length}`);
+    } catch (err) {
+      console.error('[handover] cleanup failed:', err);
+    }
     console.log(`    Login: cara@citywideboston.com / demo1234\n`);
   });
 }

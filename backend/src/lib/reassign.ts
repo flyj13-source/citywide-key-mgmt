@@ -98,6 +98,8 @@ export interface TransferResult {
   totalClients: number;
   totalKeys: number;
   keyTypesAffected: string[];
+  /** Clients flagged for physical handover — only those where the role held keys. */
+  handoverFlagged: number[];
 }
 
 /**
@@ -122,24 +124,30 @@ export function performTransfer(opts: {
   const typesAffected = new Set<string>();
   for (const c of selected) for (const k of c.keys) typesAffected.add(k.label);
 
+  const flagged: number[] = [];
   db.exec('BEGIN IMMEDIATE');
   try {
-    const update = markHandover
-      ? db.prepare(
-          `UPDATE accounts
-              SET ${col} = ?, pending_handover = 1, pending_handover_from = ?,
-                  pending_handover_to = ?, pending_handover_role = ?, pending_handover_at = ?
-            WHERE id = ? AND ${col} = ?`
-        )
-      : db.prepare(`UPDATE accounts SET ${col} = ? WHERE id = ? AND ${col} = ?`);
+    const flag = db.prepare(
+      `UPDATE accounts
+          SET ${col} = ?, pending_handover = 1, pending_handover_from = ?,
+              pending_handover_to = ?, pending_handover_role = ?, pending_handover_at = ?
+        WHERE id = ? AND ${col} = ?`
+    );
+    const plain = db.prepare(`UPDATE accounts SET ${col} = ? WHERE id = ? AND ${col} = ?`);
 
     const now = new Date().toISOString();
     for (const c of selected) {
       // NOTE: the ${role}_* grid cells are intentionally NOT touched. They belong
       // to the ROLE; re-pointing the role's name re-attributes them.
-      const res: any = markHandover
-        ? update.run(toName, fromName, toName, role, now, c.id, fromName)
-        : update.run(toName, c.id, fromName);
+      //
+      // The handover flag means "keys must physically change hands". If the
+      // outgoing manager's role holds nothing at this client there is nothing
+      // to hand over, and a flag would be noise Cara has to clear by hand.
+      const needsHandover = markHandover && c.total_keys > 0;
+      if (needsHandover) flagged.push(c.id);
+      const res: any = needsHandover
+        ? flag.run(toName, fromName, toName, role, now, c.id, fromName)
+        : plain.run(toName, c.id, fromName);
       if (res.changes !== 1) {
         // The row changed under us (someone else reassigned it first). Abort the
         // whole batch rather than commit a half-applied transfer.
@@ -160,7 +168,56 @@ export function performTransfer(opts: {
     totalClients: selected.length,
     totalKeys: selected.reduce((n, c) => n + c.total_keys, 0),
     keyTypesAffected: [...typesAffected],
+    handoverFlagged: flagged,
   };
+}
+
+/**
+ * Clear handover flags on clients where the reassigned role holds no keys —
+ * the noise left by reassignments made before the zero-keys rule. Returns one
+ * entry per client cleared, for the audit trail.
+ *
+ * Flags written before pending_handover_role was recorded name no role; those
+ * are cleared only when BOTH manager roles hold nothing, so a real handover is
+ * never dropped on a guess.
+ */
+export function clearNoKeyHandovers(): { id: number; name: string; role: string | null; from: string | null; to: string | null }[] {
+  const sum = (r: 'am' | 'ccm') => KEY_TYPES.map((t) => `COALESCE(${r}_${t}, 0)`).join(' + ');
+  const rows = (db.prepare(`
+    SELECT id, ic_company_name, pending_handover_role, pending_handover_from, pending_handover_to
+      FROM accounts
+     WHERE COALESCE(pending_handover, 0) = 1
+       AND CASE pending_handover_role
+             WHEN 'am'  THEN (${sum('am')}) = 0
+             WHEN 'ccm' THEN (${sum('ccm')}) = 0
+             ELSE (${sum('am')}) = 0 AND (${sum('ccm')}) = 0
+           END
+  `).all() as any[]).map((r) => Object.assign({}, r));
+  if (!rows.length) return [];
+  const clear = db.prepare(`
+    UPDATE accounts
+       SET pending_handover = 0, pending_handover_from = NULL, pending_handover_to = NULL,
+           pending_handover_role = NULL, pending_handover_at = NULL
+     WHERE id = ? AND COALESCE(pending_handover, 0) = 1
+  `);
+  const audit = db.prepare(
+    'INSERT INTO audit_log (action, account_name, account_id, manager, metadata) VALUES (?, ?, ?, ?, ?)'
+  );
+  const out: ReturnType<typeof clearNoKeyHandovers> = [];
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const r of rows) {
+      if (Number((clear.run(r.id) as any).changes) !== 1) continue;
+      audit.run('handover_cleared_no_keys', r.ic_company_name, r.id, 'System', JSON.stringify({
+        role: r.pending_handover_role ?? null, from: r.pending_handover_from, to: r.pending_handover_to,
+        reason: 'The reassigned role holds no keys at this client — nothing to hand over',
+      }));
+      out.push({ id: r.id, name: r.ic_company_name, role: r.pending_handover_role ?? null,
+        from: r.pending_handover_from, to: r.pending_handover_to });
+    }
+    db.exec('COMMIT');
+  } catch (e) { try { db.exec('ROLLBACK'); } catch { /* */ } throw e; }
+  return out;
 }
 
 /**

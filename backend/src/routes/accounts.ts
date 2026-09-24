@@ -19,7 +19,7 @@ export function buildAccountFilter(q: Record<string, string>): { where: string; 
   const {
     search = '', status = '', type = 'all', exclude_test = '',
     account_manager = '', ccm_manager = '', office_keys = '', archived = '0',
-    include_test = '',
+    include_test = '', handover_pending = '',
   } = q;
 
   let whereClauses = '1=1';
@@ -48,6 +48,8 @@ export function buildAccountFilter(q: Record<string, string>): { where: string; 
     whereClauses += ' AND (ic_company_name LIKE ? OR notes LIKE ? OR bc_vendor_number LIKE ? OR bc_client_number LIKE ? OR ic_name LIKE ? OR account_manager LIKE ?)';
     params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
+  // Every client still waiting on a physical key handover after a reassignment.
+  if (handover_pending === '1') whereClauses += ' AND COALESCE(pending_handover, 0) = 1';
   if (status) {
     whereClauses += ' AND status = ?';
     params.push(status);

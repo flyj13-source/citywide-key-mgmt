@@ -5,7 +5,7 @@ import { logAudit } from '../lib/audit';
 import { generateEventForm } from './assignments';
 import {
   Role, ROLE_LABEL, clientsFor, staffById, canHoldRole,
-  performTransfer, performUndo, confirmHandover, staffEmail,
+  performTransfer, performUndo, confirmHandover, clearNoKeyHandovers, staffEmail,
 } from '../lib/reassign';
 import { sendHandoverNotice } from '../lib/handoverMail';
 
@@ -225,7 +225,10 @@ router.post('/reassign', requireAuth, async (req: AuthRequest, res: Response) =>
     key_types_affected: result.keyTypesAffected,
     client_ids: result.moved.map((c) => c.id),
     clients: result.moved.map((c) => ({ id: c.id, name: c.name, keys_transferred: c.keys_transferred })),
-    pending_handover: markHandover,
+    // Only clients where the role actually held keys get the flag.
+    pending_handover: result.handoverFlagged.length > 0,
+    handover_flagged: result.handoverFlagged,
+    handover_skipped_no_keys: result.moved.filter((c) => !result.handoverFlagged.includes(c.id)).map((c) => c.id),
     actor: req.manager?.name ?? 'System',
   });
   const summaryId = Number(
@@ -277,7 +280,7 @@ router.post('/reassign', requireAuth, async (req: AuthRequest, res: Response) =>
     to: target.name,
     role,
     ...result,
-    pending_handover: markHandover,
+    pending_handover: result.handoverFlagged.length > 0,
     email,
   });
 });
@@ -366,6 +369,15 @@ router.post('/handover/confirm', requireAuth, (req: AuthRequest, res: Response) 
     });
   }
   res.json({ success: true, confirmed: changed });
+});
+
+// ── POST /api/managers/handover/clear-no-keys ───────────────────────────────
+// Clears handover flags where the reassigned role holds no keys — nothing to
+// hand over. Also runs on every boot; this lets it be re-run and its count seen.
+router.post('/handover/clear-no-keys', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!requireBulkPermission(req, res)) return;
+  const cleared = clearNoKeyHandovers();
+  res.json({ cleared: cleared.length, clients: cleared });
 });
 
 // ── GET /api/managers/handover/pending ──────────────────────────────────────

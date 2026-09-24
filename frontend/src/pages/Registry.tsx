@@ -160,7 +160,8 @@ function RevealCell({ accountId, type, hasCode }: { accountId: number; type: 'do
 function HandoverPill({ from, to }: { from?: string | null; to?: string | null }) {
   return (
     <span
-      title={from && to ? `Keys still with ${from} — to be handed to ${to}` : 'Physical handover pending'}
+      title={`Manager reassigned — confirm once keys have physically changed hands.${
+        from && to ? `\nKeys still with ${from}, to be handed to ${to}.` : ''}`}
       className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-[#fff8e6] text-[#7a5a00] border border-[#e8cf8a]"
     >
       Handover pending
@@ -1137,6 +1138,11 @@ export default function Registry() {
   // exercise them. They are unmistakable — charcoal TEST pill, tinted row —
   // so showing them costs nothing, and the counts still exclude them.
   const [showTest, setShowTest] = useState(true);
+  // Customers tab: only clients still waiting on a physical key handover.
+  const [handoverOnly, setHandoverOnly] = useState(false);
+  const [handoverCount, setHandoverCount] = useState(0);
+  // Bulk confirm: the selected clients that have a handover open.
+  const [handoverConfirm, setHandoverConfirm] = useState<{ id: number; name: string }[] | null>(null);
   // Read-only data-quality review. Deliberately a VIEW, not an action: it can
   // only ever tell you what looks wrong, never change it.
   const [showDuplicates, setShowDuplicates] = useState(false);
@@ -1262,9 +1268,10 @@ export default function Registry() {
       params.office_keys = '1';
     } else {
       params.type = tab;
+      if (tab === 'customer' && handoverOnly) params.handover_pending = '1';
     }
     return params;
-  }, [debouncedSearch, tab, drill, showTest]);
+  }, [debouncedSearch, tab, drill, showTest, handoverOnly]);
 
   const loadRows = useCallback(async () => {
     setLoading(true);
@@ -1387,6 +1394,30 @@ export default function Registry() {
   }, []);
 
   useEffect(() => { refreshCounts(); }, [refreshCounts]);
+
+  // Open handovers, counted the same way the list shows them.
+  const refreshHandoverCount = useCallback(() => {
+    getAccounts({ limit: '1', type: 'customer', handover_pending: '1', ...(showTest ? { include_test: '1' } : {}) })
+      .then((d) => setHandoverCount(d.total))
+      .catch(() => setHandoverCount(0));
+  }, [showTest]);
+  useEffect(() => { refreshHandoverCount(); }, [refreshHandoverCount]);
+
+  const doBulkConfirmHandover = async () => {
+    if (!handoverConfirm?.length) return;
+    setBusy(true);
+    try {
+      // One request; the server audits 'handover_confirmed' per client.
+      const r = await confirmHandover(handoverConfirm.map((c) => c.id));
+      setNotice(`Physical handover confirmed for ${r.confirmed} client${r.confirmed === 1 ? '' : 's'}.`);
+      setHandoverConfirm(null);
+      bulk.clear();
+      loadRows();
+      refreshHandoverCount();
+    } catch (err: any) {
+      setNotice(err?.message || 'Could not confirm the handovers');
+    } finally { setBusy(false); }
+  };
 
   // Just the number for the button — the view itself loads on open.
   useEffect(() => {
@@ -1575,6 +1606,7 @@ export default function Registry() {
       await confirmHandover([selectedAccount.id]);
       setNotice(`Physical handover confirmed for ${selectedAccount.ic_company_name}.`);
       loadRows();
+      refreshHandoverCount();
     } catch (err: any) {
       setNotice(err?.message || 'Could not confirm the handover');
     } finally { setBusy(false); }
@@ -1899,6 +1931,23 @@ export default function Registry() {
           </div>
         )}
 
+        {/* Every open handover in one list. Shown while any exist, or while on. */}
+        {tab === 'customer' && !drill && (handoverCount > 0 || handoverOnly) && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => { setHandoverOnly((v) => !v); setPage(1); }}
+              title="Manager reassigned — confirm once keys have physically changed hands."
+              className={`px-3 py-1.5 text-xs font-medium rounded border transition-colors ${
+                handoverOnly
+                  ? 'bg-[#7a5a00] text-white border-[#7a5a00]'
+                  : 'bg-[#fff8e6] text-[#7a5a00] border-[#e8cf8a] hover:border-[#7a5a00]'
+              }`}
+            >
+              Handover pending ({handoverCount})
+            </button>
+          </div>
+        )}
+
         {/* Correction / triage chips. One row, one place to work through the
             backlog: what is late, what is unsigned, and what has been settled. */}
         {isCustodyTab && tab === 'checkedout' && correctionCounts && (
@@ -2081,6 +2130,8 @@ export default function Registry() {
                 onReassign={doBulkReassign}
                 onCheckOut={doBulkCheckOut}
                 onArchive={() => { setBulkArchiveError(''); setBulkArchiveOpen(true); }}
+                canConfirmHandover={canDelete || isAdmin}
+                onConfirmHandover={(items) => setHandoverConfirm(items)}
               />
             )}
             {/* In bulk mode with nothing picked yet, still say what mode this
@@ -2139,6 +2190,27 @@ export default function Registry() {
 
       {showImport && (
         <ImportModal onClose={() => setShowImport(false)} onDone={() => { loadRows(); refreshCounts(); }} />
+      )}
+
+      {handoverConfirm && (
+        <Modal title="Confirm handover" onClose={() => setHandoverConfirm(null)} width="max-w-md">
+          <div className="space-y-4">
+            <p className="text-sm text-[#1a1a1a]">
+              Confirm the physical key handover for <strong>{handoverConfirm.length} client
+              {handoverConfirm.length === 1 ? '' : 's'}</strong>? Only confirm once the keys have actually
+              changed hands.
+            </p>
+            <ul className="text-xs text-cw-muted max-h-40 overflow-y-auto border border-cw-border rounded divide-y divide-gray-100">
+              {handoverConfirm.map((c) => <li key={c.id} className="px-3 py-1.5">{c.name}</li>)}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setHandoverConfirm(null)} className="btn-secondary">Cancel</button>
+              <button onClick={doBulkConfirmHandover} disabled={busy} className="btn-primary">
+                {busy ? 'Confirming…' : `Confirm ${handoverConfirm.length} handover${handoverConfirm.length === 1 ? '' : 's'}`}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {bulkArchiveOpen && (
