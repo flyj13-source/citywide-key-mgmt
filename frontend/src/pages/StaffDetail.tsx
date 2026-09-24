@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/Layout';
+import KeyFormsTab from '../components/KeyFormsTab';
 import Modal from '../components/Modal';
 import ExportMenu from '../components/ExportMenu';
 import { getStaffMember, updateStaffMember, exportEmployee, type StaffDetail as StaffDetailType } from '../lib/api';
@@ -139,6 +140,7 @@ export default function StaffDetail() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [formNotice, setFormNotice] = useState('');
 
   const load = () => {
     setLoading(true);
@@ -303,6 +305,13 @@ export default function StaffDetail() {
               </tbody>
             </table>
           </div>
+        </div>
+
+        {/* Every Key Form this person has held — archived forms included. */}
+        <div>
+          <h2 className="text-sm font-semibold text-[#1a1a1a] mb-2">Key Forms</h2>
+          {formNotice && <p className="text-sm text-cw-muted mb-2">{formNotice}</p>}
+          <KeyFormsTab notify={setFormNotice} fixedHolder={staff.name} />
         </div>
       </div>
 

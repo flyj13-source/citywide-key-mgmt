@@ -12,7 +12,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { drawBrandedHeader, drawFooter, embedLogo } from './pdfBrand';
 import {
   FORM_EVENT_LABEL, FORM_COLUMNS, parseScope, isReturnReceipt,
-  docTitleFor, docTableHeadingFor, docTotalLabelFor, docKindOf, type FormEventType,
+  docTitleFor, docTableHeadingFor, docTotalLabelFor, docKindOf, ackVariantOf, type FormEventType,
 } from './keyForm';
 import { receiptDir } from './custodyPdf';
 
@@ -67,6 +67,19 @@ const RETURN_ACKNOWLEDGEMENT = (dateText: string, counterparty?: string | null):
       'any discrepancy to City Wide Boston immediately.',
     ]
 );
+
+/**
+ * An ISSUE — check-in (City Wide's word for handing keys over) or the receiving
+ * side of a transfer. The form lists only the keys handed over in this event,
+ * so the signer attests to receiving THOSE, and makes no claim about anything
+ * else they hold.
+ */
+const RECEIVED_ACKNOWLEDGEMENT = (dateText: string, from?: string | null): string[] => [
+  `I confirm I have received the keys listed above${from ? ` from ${from}` : ''} on behalf of City Wide`,
+  `Boston on ${dateText}. I agree to: (1) safeguard all keys and access credentials, (2) not duplicate`,
+  'or share keys with unauthorized personnel, (3) return all keys immediately upon request or upon',
+  'termination of my assignment/contract, and (4) report any lost or stolen key within 24 hours.',
+];
 
 /** Trim a string to fit a column, so a long client name never overruns. */
 function fit(s: string, font: any, size: number, max: number): string {
@@ -219,12 +232,12 @@ export async function generateKeyFormPdf(row: any): Promise<string> {
   if (y < 200) { page = doc.addPage([612, 792]); y = 740; }
   page.drawText('ACKNOWLEDGEMENT', { x: 36, y, size: 9, font: bold, color: CW_CHARCOAL });
   y -= 14;
+  const ackDate = fmt(row.signed_at ?? row.created_at).split(',').slice(0, 2).join(',').trim();
   const ackLines = isReturn
-    ? RETURN_ACKNOWLEDGEMENT(
-        fmt(row.signed_at ?? row.created_at).split(',').slice(0, 2).join(',').trim(),
-        transferredTo,
-      )
-    : ACKNOWLEDGEMENT;
+    ? RETURN_ACKNOWLEDGEMENT(ackDate, transferredTo)
+    : ackVariantOf(row) === 'received'
+      ? RECEIVED_ACKNOWLEDGEMENT(ackDate, row.event_type === 'transfer' ? row.counterparty_name : null)
+      : ACKNOWLEDGEMENT;
   for (const line of ackLines) {
     page.drawText(line, { x: 36, y, size: 8.5, font: regular, color: CW_CHARCOAL });
     y -= 11;

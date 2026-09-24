@@ -570,6 +570,8 @@ export interface KeyFormMail {
   pdf: MailAttachment | null;
   /** Explicit recipients — the holder, Cara, and any custom audit address. */
   recipients: string[];
+  /** The form's own total label, e.g. "Total keys in this transaction". */
+  totalLabel?: string;
 }
 
 export async function sendKeyForm(d: KeyFormMail): Promise<MailResult> {
@@ -602,7 +604,7 @@ export async function sendKeyForm(d: KeyFormMail): Promise<MailResult> {
        </tr>
        ${clientRows}
        <tr style="background:${CW_BG}">
-         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};font-weight:700;color:${CW_CHARCOAL}">Total keys held</td>
+         <td style="padding:10px 14px;border-top:2px solid ${CW_RED};font-weight:700;color:${CW_CHARCOAL}">${esc(d.totalLabel ?? 'Total keys held')}</td>
          <td align="right" style="padding:10px 14px;border-top:2px solid ${CW_RED};font-weight:700;color:${CW_RED}">${d.totalKeys}</td>
        </tr>
      </table>

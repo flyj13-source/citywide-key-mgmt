@@ -472,6 +472,7 @@ export async function generateEventForm(
     sourceKind?: string | null; sourceRef?: string | null; counterpartyName?: string | null;
     lines?: any[];
     docKind?: 'holdings' | 'return_receipt';
+    coverage?: 'transaction' | 'full' | 'client';
   },
 ): Promise<any | null> {
   try {
@@ -483,6 +484,7 @@ export async function generateEventForm(
       holderId: input.holderId ?? null,
       lines: input.lines,
       docKind: input.docKind,
+      coverage: input.coverage,
       eventNote: input.eventNote ?? null,
       generatedBy: req.manager?.name ?? 'System',
       sourceKind: input.sourceKind ?? null,
@@ -682,6 +684,11 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
   const keyForm = await generateEventForm(req, {
     eventType: 'checkout', holderName: holder, holderType: holder_type,
     holderEmail: holder_email || null, holderId: holder_id,
+    // Only the keys handed over in THIS event, at this client — not the
+    // holder's whole position. The holder signs for what they received.
+    lines: returnedFormLines(
+      { account_id, account_name }, lines, bcNumberFor(account), 'Issued in this transaction',
+    ),
     eventNote: `Checked in at ${account_name}: ${summarizeKeys(lines)}`,
     sourceKind: 'assignment', sourceRef: String(id),
   });
@@ -1552,7 +1559,7 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   const { rows: sourceRows, keys: heldKeys } = openHoldingsFor(account_id, from_holder);
   if (movesKeys && !sourceRows.length) {
     return res.status(409).json({
-      error: `${from_holder} has no keys on record at ${account_name}. If they already hold keys, record a check-out first — or choose "Accounts only" to move the assignment without the keys.`,
+      error: `${from_holder} has no keys on record at ${account_name}. If they already hold keys, put them on record first with Check In → Record Keys Held — or choose "Accounts only" to move the assignment without the keys.`,
       code: 'NO_KEYS_ON_RECORD',
     });
   }
@@ -1781,16 +1788,22 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
             `Transferred to ${to_holder}`,
           ),
         }
-      : {}),
+      // Accounts only: no keys moved, so there is no transaction to list. The
+      // form documents where the reassignment leaves them, in full.
+      : { coverage: 'full' as const }),
     eventNote: `Transferred OUT to ${to_holder}: ${movedNote}`,
     sourceKind: 'transfer', sourceRef: transferId, counterpartyName: to_holder,
   });
-  // The INCOMING side signs for what they now hold — the keys just received
-  // included — so this stays a holdings statement, snapshotted fresh.
+  // The INCOMING side signs for the keys it received in this transfer — only
+  // those. An accounts-only transfer moved none, so that side documents its
+  // position in full instead.
   const toForm = await generateEventForm(req, {
     eventType: 'transfer', holderName: to_holder,
     holderType: to_holder_type, holderEmail: to_holder_email, holderId: to_holder_id,
     docKind: 'holdings',
+    ...(movesKeys
+      ? { lines: returnedFormLines({ account_id, account_name }, lines, bcNumber, `Received from ${from_holder}`) }
+      : { coverage: 'full' as const }),
     eventNote: `Received IN from ${from_holder}: ${movedNote}`,
     sourceKind: 'transfer', sourceRef: transferId, counterpartyName: from_holder,
   });

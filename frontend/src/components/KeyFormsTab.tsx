@@ -12,10 +12,11 @@ import { getManager } from '../lib/auth';
 import {
   getKeyFormDocs, generateKeyFormDocs, sendKeyFormDoc, bulkSendKeyFormDocs, retryFailedKeyForms,
   bulkCorrectKeyForms,
-  downloadKeyFormDocPdf, regenerateKeyForm, getHolders,
+  downloadKeyFormDocPdf, regenerateKeyForm, getHolders, exportKeyFormDocs, getHolderFormClients,
   type KeyFormDoc, type HolderOption, type LinkState, type LinkStateCounts,
 } from '../lib/api';
 import { useSearchParams } from 'react-router-dom';
+import AccountPicker, { type PickedAccount } from './AccountPicker';
 
 const EVENT_FILTERS = [
   { key: 'all', label: 'All events' },
@@ -42,6 +43,8 @@ const STATUS_FILTERS = [
   { key: 'awaiting', label: 'Awaiting signature' },
   { key: 'expiring_soon', label: 'Expiring soon' },
   { key: 'expired', label: 'Expired' },
+  // Retention: older than 12 months and not tied to open custody. Never deleted.
+  { key: 'archived', label: 'Archived forms' },
 ];
 
 /** Every value the status filter accepts, for validating a deep-linked one. */
@@ -192,6 +195,11 @@ function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (n: n
   const [picked, setPicked] = useState<Record<string, HolderOption>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Full picture (default): one form each, every client. Client by client:
+  // one form per selected client, each separately signable.
+  const [coverage, setCoverage] = useState<'full' | 'client'>('full');
+  const [clientOpts, setClientOpts] = useState<{ account_id: number; client: string; bc_client_number: string | null; keys: number }[]>([]);
+  const [pickedClients, setPickedClients] = useState<Set<number>>(new Set());
 
   useEffect(() => { getHolders().then(setOptions).catch(() => {}); }, []);
 
@@ -210,12 +218,39 @@ function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (n: n
   });
 
   const chosen = Object.values(picked);
+  const chosenKey = chosen.map(keyOf).sort().join('|');
+
+  // The clients the chosen holder(s) have keys at — only those can produce a
+  // form, so only those are offered.
+  useEffect(() => {
+    if (coverage !== 'client' || !chosen.length) { setClientOpts([]); return; }
+    let cancelled = false;
+    Promise.all(chosen.map((o) => getHolderFormClients(o.name, o.type).catch(() => ({ clients: [] }))))
+      .then((rs) => {
+        if (cancelled) return;
+        const by = new Map<number, { account_id: number; client: string; bc_client_number: string | null; keys: number }>();
+        for (const r of rs) for (const c of r.clients) {
+          const prev = by.get(c.account_id);
+          by.set(c.account_id, prev ? { ...prev, keys: prev.keys + c.keys } : c);
+        }
+        const list = [...by.values()].sort((a, b) => a.client.localeCompare(b.client));
+        setClientOpts(list);
+        setPickedClients((p) => new Set([...p].filter((id) => by.has(id))));
+      });
+    return () => { cancelled = true; };
+  }, [coverage, chosenKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const formsToMake = coverage === 'client' ? chosen.length * pickedClients.size : chosen.length;
+  const canRun = chosen.length > 0 && (coverage === 'full' || pickedClients.size > 0);
 
   const run = async () => {
-    if (!chosen.length) return;
+    if (!canRun) return;
     setBusy(true); setError('');
     try {
-      const r = await generateKeyFormDocs(chosen.map((o) => ({ name: o.name, type: o.type, email: o.email })));
+      const r = await generateKeyFormDocs(
+        chosen.map((o) => ({ name: o.name, type: o.type, email: o.email })),
+        coverage === 'client' ? { coverage: 'client', account_ids: [...pickedClients] } : { coverage: 'full' },
+      );
       onDone(r.count, r.skipped ?? []);
       onClose();
     } catch (e: any) { setError(e?.message || 'Could not generate'); }
@@ -225,10 +260,25 @@ function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (n: n
   return (
     <Modal title="Generate Key Form" onClose={onClose} width="max-w-lg">
       <div className="space-y-4">
-        <p className="text-sm text-cw-muted">
-          Each person selected gets their own form listing every key they currently hold.
-          Anyone holding nothing is skipped — a holdings form with no keys on it has
-          nothing to sign. Record a return receipt for them instead.
+        <div className="space-y-2">
+          {([
+            ['full', 'Full picture', 'One form per person, covering every client they hold keys at.'],
+            ['client', 'Client by client', 'Pick one or more clients; one form per client, each signed separately.'],
+          ] as const).map(([k, label, hint]) => (
+            <label key={k} className="flex items-start gap-2.5 text-sm cursor-pointer">
+              <input
+                type="radio" name="coverage" className="mt-0.5 accent-[#C0272D]"
+                checked={coverage === k} onChange={() => setCoverage(k)}
+              />
+              <span>
+                <span className="font-medium text-[#1a1a1a]">{label}</span>
+                <span className="block text-xs text-cw-muted">{hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-cw-muted">
+          Anyone holding nothing is skipped — a holdings form with no keys on it has nothing to sign.
         </p>
         <input
           className="input focus:ring-[#C0272D] focus:border-[#C0272D]"
@@ -254,13 +304,46 @@ function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (n: n
             </label>
           ))}
         </div>
+        {coverage === 'client' && (
+          <div>
+            <div className="text-xs font-semibold text-[#1a1a1a] mb-1">
+              Clients {chosen.length > 1 && <span className="font-normal text-cw-muted">— a form for each person at each client</span>}
+            </div>
+            {!chosen.length ? (
+              <p className="text-xs text-cw-muted">Choose a person above to list the clients they hold keys at.</p>
+            ) : clientOpts.length === 0 ? (
+              <p className="text-xs text-cw-muted">No keys on record at any client.</p>
+            ) : (
+              <div className="border border-cw-border rounded max-h-44 overflow-y-auto divide-y divide-gray-100">
+                {clientOpts.map((c) => (
+                  <label key={c.account_id} className="flex items-center gap-3 px-3 py-2 text-sm cursor-pointer hover:bg-[#faf9f8]">
+                    <input
+                      type="checkbox" className="h-4 w-4 accent-[#C0272D]"
+                      checked={pickedClients.has(c.account_id)}
+                      onChange={() => setPickedClients((p) => {
+                        const n = new Set(p);
+                        if (n.has(c.account_id)) n.delete(c.account_id); else n.add(c.account_id);
+                        return n;
+                      })}
+                    />
+                    <span className="font-medium text-[#1a1a1a]">{c.client}</span>
+                    {c.bc_client_number && <span className="text-xs text-cw-muted font-mono">{c.bc_client_number}</span>}
+                    <span className="ml-auto text-xs text-cw-muted">{c.keys} key{c.keys === 1 ? '' : 's'}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {error && <div className="rounded border border-[#C0272D] bg-[#fbeaea] px-3 py-2 text-sm text-[#C0272D]">{error}</div>}
         <div className="flex items-center justify-between pt-1">
-          <span className="text-xs text-cw-muted">{chosen.length} selected</span>
+          <span className="text-xs text-cw-muted">
+            {chosen.length} selected{coverage === 'client' && pickedClients.size ? ` · ${pickedClients.size} client${pickedClients.size === 1 ? '' : 's'}` : ''}
+          </span>
           <div className="flex gap-2">
             <button onClick={onClose} className="btn-secondary">Cancel</button>
-            <button onClick={run} disabled={!chosen.length || busy} className="btn-primary">
-              {busy ? 'Generating…' : `Generate ${chosen.length || ''}`.trim()}
+            <button onClick={run} disabled={!canRun || busy} className="btn-primary">
+              {busy ? 'Generating…' : `Generate ${formsToMake || ''} form${formsToMake === 1 ? '' : 's'}`.replace('  ', ' ')}
             </button>
           </div>
         </div>
@@ -328,7 +411,7 @@ function ViewModal({ form, onClose }: { form: KeyFormDoc; onClose: () => void })
               ))}
               <tr className="border-t-2 border-[#C0272D] bg-[#f4f4f2]">
                 <td colSpan={7} className="px-3 py-2 font-bold">
-                  {form.doc_kind === 'return_receipt' ? 'Total keys returned' : 'Total keys held'}
+                  {form.total_label.toLowerCase().replace(/^./, (c) => c.toUpperCase())}
                 </td>
                 <td className="px-3 py-2 text-center font-bold text-[#C0272D]">{form.total_keys}</td>
               </tr>
@@ -409,7 +492,22 @@ function SendModal({
   );
 }
 
-export default function KeyFormsTab({ notify }: { notify: (m: string) => void }) {
+export default function KeyFormsTab({
+  notify, fixedAccountId, fixedHolder,
+}: {
+  notify: (m: string) => void;
+  /**
+   * Contextual use: pinned to one client (client detail page) or one holder
+   * (IC / staff detail). Shows the complete history — archived forms included —
+   * and hides Generate, which belongs to the main tab.
+   */
+  fixedAccountId?: number;
+  fixedHolder?: string;
+}) {
+  const embedded = fixedAccountId != null || !!fixedHolder;
+  const [client, setClient] = useState<PickedAccount | null>(null);
+  const [archivedCount, setArchivedCount] = useState(0);
+  const [exporting, setExporting] = useState(false);
   const [forms, setForms] = useState<KeyFormDoc[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -444,26 +542,37 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
     return () => clearTimeout(t);
   }, [search]);
 
+  // One builder, so the table and its Excel export can never disagree.
+  const params = useMemo(() => {
+    const p: Record<string, string> = {};
+    if (debounced) p.search = debounced;
+    if (eventType !== 'all') p.event_type = eventType;
+    if (status !== 'all') p.status = status;
+    if (from) p.from = from;
+    if (to) p.to = to;
+    const acct = fixedAccountId ?? client?.id;
+    if (acct) p.account_id = String(acct);
+    if (fixedHolder) p.holder = fixedHolder;
+    // A client's or holder's own page shows the whole history, archived too.
+    if (embedded && status !== 'archived') p.archived = 'all';
+    return p;
+  }, [debounced, eventType, status, from, to, client, fixedAccountId, fixedHolder, embedded]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params: Record<string, string> = { limit: '100' };
-      if (debounced) params.search = debounced;
-      if (eventType !== 'all') params.event_type = eventType;
-      if (status !== 'all') params.status = status;
-      if (from) params.from = from;
-      if (to) params.to = to;
-      const d = await getKeyFormDocs(params);
+      const d = await getKeyFormDocs({ ...params, limit: '100' });
       setForms(d.forms);
       setTotal(d.total);
       setFailedCount(d.failed_count ?? 0);
       setLinkCounts(d.link_counts ?? null);
+      setArchivedCount(d.archived_count ?? 0);
     } finally { setLoading(false); }
-  }, [debounced, eventType, status, from, to]);
+  }, [params]);
 
   useEffect(() => { load(); }, [load]);
   // A filter change must never leave a stale tick behind on a hidden row.
-  useEffect(() => { setSelected(new Set()); }, [debounced, eventType, status, from, to]);
+  useEffect(() => { setSelected(new Set()); }, [params]);
 
   const toggle = (id: number) => setSelected((p) => {
     const n = new Set(p);
@@ -499,14 +608,19 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
       <div className="flex flex-wrap items-center gap-2">
         <input
           className="input max-w-xs focus:ring-[#C0272D] focus:border-[#C0272D]"
-          placeholder="Search holder, client or form #…"
+          placeholder="Search form #, holder, IC, client, BC Client # or BC Vendor #…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <select className="input w-auto" value={eventType} onChange={(e) => setEventType(e.target.value)}>
+        {fixedAccountId == null && (
+          <div className="w-72">
+            <AccountPicker value={client} onSelect={setClient} placeholder="Client — any" />
+          </div>
+        )}
+        <select className="input !w-auto" value={eventType} onChange={(e) => setEventType(e.target.value)}>
           {EVENT_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>
-        <select className="input w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select className="input !w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
           {STATUS_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>
 
@@ -571,8 +685,8 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
             </button>
           </>
         )}
-        <input type="date" className="input w-auto" value={from} onChange={(e) => setFrom(e.target.value)} title="Generated from" />
-        <input type="date" className="input w-auto" value={to} onChange={(e) => setTo(e.target.value)} title="Generated to" />
+        <input type="date" className="input !w-auto" value={from} onChange={(e) => setFrom(e.target.value)} title="Generated from" />
+        <input type="date" className="input !w-auto" value={to} onChange={(e) => setTo(e.target.value)} title="Generated to" />
         <span className="flex-1" />
         {selected.size > 0 && (
           <button
@@ -598,9 +712,40 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
             </button>
           </>
         )}
-        <button onClick={() => setShowGenerate(true)} className="px-3 h-[34px] rounded text-sm font-medium bg-[#C0272D] text-white hover:bg-[#a82227] transition-colors">
-          Generate Key Form
+        {/* Retention: forms past 12 months live here — never deleted. */}
+        {archivedCount > 0 && !embedded && (
+          <button
+            type="button"
+            onClick={() => setStatus(status === 'archived' ? 'all' : 'archived')}
+            className={`inline-flex items-center gap-1.5 h-[34px] px-3 rounded text-sm font-medium border transition-colors ${
+              status === 'archived'
+                ? 'bg-[#6b6b68] border-[#6b6b68] text-white'
+                : 'bg-[#eeeeec] border-[#d5d5d1] text-[#6b6b68] hover:bg-[#e4e4e1]'
+            }`}
+            title="Older than 12 months and not tied to open custody. Still searchable and downloadable."
+          >
+            Archived forms <span className="tabular-nums font-semibold">{archivedCount}</span>
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={exporting || total === 0}
+          onClick={async () => {
+            setExporting(true);
+            try { await exportKeyFormDocs(params); }
+            catch (e: any) { notify(e?.message || 'Could not export'); }
+            finally { setExporting(false); }
+          }}
+          className="px-3 h-[34px] rounded text-sm font-medium border border-[#1a1a1a] text-[#1a1a1a] hover:bg-gray-50 disabled:opacity-50 transition-colors"
+          title="Every form matching these filters, not just this page"
+        >
+          {exporting ? 'Exporting…' : `Export ${total} to Excel`}
         </button>
+        {!embedded && (
+          <button onClick={() => setShowGenerate(true)} className="px-3 h-[34px] rounded text-sm font-medium bg-[#C0272D] text-white hover:bg-[#a82227] transition-colors">
+            Generate Key Form
+          </button>
+        )}
       </div>
 
       {correcting && (
@@ -655,6 +800,7 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
               </th>
               <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Form ID</th>
               <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Holder</th>
+              <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Client</th>
               <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Type</th>
               <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Clients</th>
               <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Total Keys</th>
@@ -666,9 +812,9 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={10} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
             ) : forms.length === 0 ? (
-              <tr><td colSpan={10} className="px-4 py-8 text-center text-cw-muted">
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-cw-muted">
                 No key forms yet. One is generated on every check-out, check-in, transfer and
                 reassignment — or generate a current-state form above.
               </td></tr>
@@ -688,7 +834,30 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
                   <div className="font-medium text-[#1a1a1a] whitespace-nowrap">{f.holder_name}</div>
                   <div className="text-[11px] text-cw-muted">{f.holder_role}</div>
                 </td>
-                <td className="px-3 py-3 whitespace-nowrap">{f.event_label}</td>
+                <td className="px-3 py-3 max-w-[220px]">
+                  {f.clients.length === 1 ? (
+                    <>
+                      <div className="truncate" title={f.clients[0].client}>{f.clients[0].client}</div>
+                      {f.clients[0].bc_client_number && (
+                        <div className="text-[11px] text-cw-muted font-mono">{f.clients[0].bc_client_number}</div>
+                      )}
+                    </>
+                  ) : f.clients.length > 1 ? (
+                    <span
+                      className="underline decoration-dotted cursor-help whitespace-nowrap"
+                      title={f.clients.map((c) => c.client).join('\n')}
+                    >
+                      {f.clients.length} clients
+                    </span>
+                  ) : <span className="text-gray-300">—</span>}
+                  {f.archived && (
+                    <span className="ml-1 inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#eeeeec] text-[#6b6b68]">archived</span>
+                  )}
+                </td>
+                <td className="px-3 py-3 whitespace-nowrap">
+                  {f.event_label}
+                  {f.form_coverage === 'client' && <div className="text-[11px] text-cw-muted">one client</div>}
+                </td>
                 <td className="px-3 py-3 text-center">{f.clients_covered}</td>
                 <td className="px-3 py-3 text-center font-bold">{f.total_keys}</td>
                 <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{fmt(f.generated_at)}</td>

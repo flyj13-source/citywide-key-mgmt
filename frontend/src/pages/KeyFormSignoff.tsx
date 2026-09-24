@@ -90,6 +90,10 @@ export default function KeyFormSignoff() {
   // A receipt is signed for the keys that left this person's hands and for
   // nothing else — no claim about what they still hold elsewhere.
   const isReturn = data.doc_kind === 'return_receipt';
+  // An issue form lists only what was handed over in this event; the signer
+  // attests to receiving those keys and nothing else.
+  const isReceipt = data.ack_variant === 'received';
+  const fromWhom: string | null = isReceipt && data.event_type === 'transfer' ? (data.counterparty_name || null) : null;
   const toWhom: string | null = isReturn ? (data.counterparty_name || null) : null;
 
   return shell(
@@ -103,15 +107,20 @@ export default function KeyFormSignoff() {
             <>Hello <strong>{data.holder}</strong>, please confirm you have
             {toWhom ? <> transferred the keys listed below to <strong>{toWhom}</strong></>
                     : <> returned the keys listed below to City Wide Boston</>}.</>
+          ) : isReceipt ? (
+            <>Hello <strong>{data.holder}</strong>, please confirm you have received the keys listed
+            below{fromWhom ? <> from <strong>{fromWhom}</strong></> : ''} on behalf of City Wide Boston.</>
           ) : (
             <>Hello <strong>{data.holder}</strong>, please confirm the keys below are the ones you
             currently hold for City Wide Boston.</>
           )}
         </p>
         <p className="mt-3 text-sm font-semibold text-[#C0272D]">
-          {isReturn
+          {isReturn || isReceipt || data.form_coverage === 'transaction'
             ? 'You are signing only for the keys listed below.'
-            : 'This is a statement of everything on record in your name.'}
+            : data.form_coverage === 'client'
+              ? 'This is a statement of the keys on record in your name at this client.'
+              : 'This is a statement of everything on record in your name.'}
         </p>
       </div>
 
@@ -152,7 +161,9 @@ export default function KeyFormSignoff() {
               ))}
               <tr className="border-t-2 border-cw-red bg-[#f4f4f2]">
                 <td colSpan={7} className="px-4 py-2.5 font-bold">
-                  {isReturn ? 'Total keys returned' : 'Total keys held'}
+                  {data.total_label
+                    ? data.total_label.toLowerCase().replace(/^./, (c: string) => c.toUpperCase())
+                    : isReturn ? 'Total keys returned' : 'Total keys held'}
                 </td>
                 <td className="px-3 py-2.5 text-center font-bold text-cw-red">{grand}</td>
               </tr>
@@ -181,6 +192,17 @@ export default function KeyFormSignoff() {
                   I have handed back every key listed above · I have retained no copies or
                   duplicates of them · I no longer hold access to the client site by means of
                   these keys · I will report any discrepancy to City Wide Boston immediately.
+                </span>
+              </>
+            ) : isReceipt ? (
+              <>
+                <strong>
+                  I confirm I have received the keys listed above{fromWhom ? ` from ${fromWhom}` : ''}.
+                </strong>
+                <span className="block text-xs text-cw-muted mt-1">
+                  I will safeguard all keys and access credentials · I will not duplicate or share keys
+                  with unauthorized personnel · I will return all keys immediately upon request or at the
+                  end of my assignment · I will report any lost or stolen keys within 24 hours.
                 </span>
               </>
             ) : (

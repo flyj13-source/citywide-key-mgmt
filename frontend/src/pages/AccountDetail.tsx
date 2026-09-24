@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/Layout';
+import KeyFormsTab from '../components/KeyFormsTab';
 import Badge from '../components/Badge';
 import YesNo from '../components/YesNo';
 import { getAccount, revealCode, getAccessCodes, revealAccessCode, type AccessCode } from '../lib/api';
@@ -400,6 +401,15 @@ export default function AccountDetail() {
             </div>
           </div>
         )}
+
+        {/* Every Key Form for this account — a customer's by the client it covers,
+            an IC vendor's by the IC as holder. Archived forms included. */}
+        <div>
+          <h2 className="text-sm font-semibold text-cw-muted uppercase tracking-wide mb-3">Key Forms</h2>
+          {account.record_type === 'customer'
+            ? <KeyFormsTab notify={setNotice} fixedAccountId={account.id} />
+            : <KeyFormsTab notify={setNotice} fixedHolder={account.ic_company_name} />}
+        </div>
       </div>
     </Layout>
   );

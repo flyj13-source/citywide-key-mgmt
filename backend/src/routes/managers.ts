@@ -236,12 +236,16 @@ router.post('/reassign', requireAuth, async (req: AuthRequest, res: Response) =>
   const reassignForms = {
     from: await generateEventForm(req, {
       eventType: 'reassignment', holderName: source.name, holderType: 'employee',
+      // A reassignment moves responsibility, not keys in hand — there is no
+      // transaction to list, so each side gets its full position.
+      coverage: 'full',
       holderEmail: source.email ?? staffEmail(source.name),
       eventNote: `${result.totalClients} client(s) reassigned OUT to ${target.name} (${ROLE_LABEL[role]})`,
       sourceKind: 'reassignment', sourceRef: String(summaryId), counterpartyName: target.name,
     }),
     to: await generateEventForm(req, {
       eventType: 'reassignment', holderName: target.name, holderType: 'employee',
+      coverage: 'full',
       holderEmail: target.email ?? staffEmail(target.name),
       eventNote: `${result.totalClients} client(s) reassigned IN from ${source.name} (${ROLE_LABEL[role]})`,
       sourceKind: 'reassignment', sourceRef: String(summaryId), counterpartyName: source.name,

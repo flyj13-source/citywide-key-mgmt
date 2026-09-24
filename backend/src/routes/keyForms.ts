@@ -15,10 +15,11 @@ import { hashSignature } from '../lib/pdf';
 import {
   createKeyForm, getKeyForm, getKeyFormByToken, listKeyForms, markSent,
   parseScope, serializeForm, snapshotHolder, FORM_EVENT_LABEL, EmptyHoldingsError,
-  docKindOf, docTitleFor, docTableHeadingFor, docTotalLabelFor,
+  docKindOf, docTitleFor, docTableHeadingFor, docTotalLabelFor, formCoverageOf, ackVariantOf,
   type FormEventType,
 } from '../lib/keyForm';
-import { failedSendCount, failedSendIds, correctionFormCounts } from '../lib/keyForm';
+import { failedSendCount, failedSendIds, correctionFormCounts, archivedFormCount } from '../lib/keyForm';
+import ExcelJS from 'exceljs';
 import { checkReason, voidKeyForm, acknowledgeKeyForm, MIN_REASON_LENGTH } from '../lib/corrections';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { readKeyLines, bcNumberForAssignment } from '../lib/custody';
@@ -60,11 +61,32 @@ async function refreshPdf(id: number): Promise<string | null> {
  * for a document somebody signs would be worse than refusing.
  */
 function receiptLinesFromSource(form: any, viaOverride?: string): any[] {
-  if (form.source_kind !== 'assignment' || !form.source_ref) return [];
-  const raw = db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(Number(form.source_ref)) as any;
+  if (!form.source_ref) return [];
+  // A transfer's keys are on its receiving record; both sides moved the same set.
+  const raw = form.source_kind === 'assignment'
+    ? db.prepare('SELECT * FROM key_assignments WHERE id = ?').get(Number(form.source_ref)) as any
+    : form.source_kind === 'transfer'
+      ? db.prepare("SELECT * FROM key_assignments WHERE transfer_id = ? AND transfer_role = 'to' ORDER BY id LIMIT 1")
+        .get(String(form.source_ref)) as any
+      : null;
   if (!raw) return [];
   const rec = Object.assign({}, raw);
-  const keys = readKeyLines(rec);
+  let keys = readKeyLines(rec);
+  // An ISSUE is rebuilt from what was issued. The custody row is not a
+  // reliable record of that: a partial return splits it and shrinks its key
+  // list to what is still out. The check-out's own audit entry was written at
+  // the moment of issue and carries the exact set, so it is preferred.
+  if (form.event_type === 'checkout' && form.source_kind === 'assignment') {
+    const a = db.prepare(`
+      SELECT metadata FROM audit_log
+       WHERE action = 'key_checked_out' AND json_extract(metadata, '$.assignment_id') = ?
+       ORDER BY id ASC LIMIT 1
+    `).get(Number(form.source_ref)) as any;
+    try {
+      const issued = a ? JSON.parse(Object.assign({}, a).metadata).keys : null;
+      if (Array.isArray(issued) && issued.length) keys = readKeyLines({ keys_json: JSON.stringify(issued) });
+    } catch { /* fall back to the custody row */ }
+  }
   const total = keys.reduce((n, k) => n + k.qty, 0);
   if (!total) return [];
 
@@ -101,6 +123,22 @@ function rederiveDocKind(form: any): 'holdings' | 'return_receipt' {
   return docKindOf(form);
 }
 
+/** The list filters, parsed once so the tab and its Excel export agree exactly. */
+function filtersFrom(q: Record<string, string>) {
+  const accountId = Number(q.account_id);
+  const archived = q.archived === 'all' || q.archived === 'archived' ? q.archived : undefined;
+  return {
+    search: cleanText(q.search) || undefined,
+    event_type: cleanText(q.event_type) || undefined,
+    status: cleanText(q.status) || undefined,
+    from: cleanText(q.from) || undefined,
+    to: cleanText(q.to) || undefined,
+    holder: cleanText(q.holder) || undefined,
+    account_id: Number.isInteger(accountId) && accountId > 0 ? accountId : undefined,
+    archived: archived as 'all' | 'archived' | undefined,
+  };
+}
+
 // ── GET /api/key-forms — the Forms tab ───────────────────────────────────────
 router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   const q = req.query as Record<string, string>;
@@ -112,16 +150,7 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
   // deploy, a crash. The sweep is idempotent; running it here costs one query
   // when nothing is due.
   runSweepSafely();
-  const { rows, total } = listKeyForms({
-    search: cleanText(q.search) || undefined,
-    event_type: cleanText(q.event_type) || undefined,
-    status: cleanText(q.status) || undefined,
-    from: cleanText(q.from) || undefined,
-    to: cleanText(q.to) || undefined,
-    holder: cleanText(q.holder) || undefined,
-    limit,
-    offset: (page - 1) * limit,
-  });
+  const { rows, total } = listKeyForms({ ...filtersFrom(q), limit, offset: (page - 1) * limit });
   // Always returned, regardless of the active filter — the chip has to show
   // the backlog even while the list is filtered to something else.
   res.json({
@@ -129,6 +158,72 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
     failed_count: failedSendCount(),
     ...correctionFormCounts(),
     link_counts: linkStateCounts(),
+    archived_count: archivedFormCount(),
+  });
+});
+
+// ── GET /api/key-forms/export — the filtered list, as Excel ──────────────────
+// Exactly the rows the tab is showing for these filters (not just the current
+// page), one per form, with its clients spelled out.
+router.get('/export', requireAuth, async (req: AuthRequest, res: Response) => {
+  const { rows, total } = listKeyForms({ ...filtersFrom(req.query as Record<string, string>), limit: 10000, offset: 0 });
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'City Wide Boston — Key Management';
+  const ws = wb.addWorksheet('Key Forms');
+  ws.columns = [
+    { header: 'Form #', key: 'form_no', width: 11 },
+    { header: 'Generated', key: 'generated', width: 20 },
+    { header: 'Event', key: 'event', width: 14 },
+    { header: 'Document', key: 'doc', width: 22 },
+    { header: 'Covers', key: 'coverage', width: 13 },
+    { header: 'Holder', key: 'holder', width: 28 },
+    { header: 'Role', key: 'role', width: 10 },
+    { header: 'Client(s)', key: 'clients', width: 44 },
+    { header: 'BC #', key: 'bc', width: 24 },
+    { header: 'Total keys', key: 'total', width: 10 },
+    { header: 'Status', key: 'status', width: 18 },
+    { header: 'Signed', key: 'signed', width: 20 },
+    { header: 'Archived', key: 'archived', width: 9 },
+  ];
+  ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A1A1A' } };
+  const COVER: Record<string, string> = { transaction: 'Transaction', full: 'Full picture', client: 'One client' };
+  for (const f of rows) {
+    ws.addRow({
+      form_no: f.form_no, generated: f.generated_at, event: f.event_label, doc: f.doc_title,
+      coverage: COVER[f.form_coverage] ?? f.form_coverage,
+      holder: f.holder_name, role: f.holder_role ?? '',
+      clients: f.clients.map((c: any) => c.client).join('; '),
+      bc: f.clients.map((c: any) => c.bc_client_number).filter(Boolean).join('; '),
+      total: f.total_keys,
+      status: f.status === 'signed' ? 'Signed' : f.link_state === 'expired' ? 'Expired'
+        : f.link_state === 'expiring_soon' ? 'Expiring soon' : f.link_state ? 'Awaiting signature' : f.status,
+      signed: f.signed_at ?? '', archived: f.archived ? 'Yes' : '',
+    });
+  }
+  ws.autoFilter = { from: 'A1', to: 'M1' };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  logAudit(req, 'key_forms_exported', null, null, {
+    rows: total, filters: filtersFrom(req.query as Record<string, string>),
+  });
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="CityWide-KeyForms-${stamp}.xlsx"`);
+  res.send(Buffer.from(await wb.xlsx.writeBuffer()));
+});
+
+// ── GET /api/key-forms/holder-clients — for the client-by-client picker ──────
+// The clients a holder has keys at right now, with how many — the same source
+// a full-picture form snapshots, so the picker never offers a client that
+// would produce an empty form.
+router.get('/holder-clients', requireAuth, (req: AuthRequest, res: Response) => {
+  const name = cleanText(req.query.holder as string);
+  if (!name) return res.json({ clients: [] });
+  const type = req.query.holder_type === 'ic' ? 'ic' : 'employee';
+  res.json({
+    clients: snapshotHolder(name, type)
+      .filter((l) => l.account_id != null && l.subtotal > 0)
+      .map((l) => ({ account_id: l.account_id, client: l.client, bc_client_number: l.bc_client_number, keys: l.subtotal })),
   });
 });
 
@@ -172,12 +267,25 @@ router.post('/generate', requireAuth, async (req: AuthRequest, res: Response) =>
   if (!clean.length) return res.status(400).json({ error: 'Select at least one holder' });
 
   const eventType: FormEventType = 'audit';
+  // Full picture (default): one form per holder covering every client they
+  // hold keys at. Client by client: one form per holder PER selected client,
+  // each separately signable, each found in search under its single client.
+  const byClient = body.coverage === 'client';
+  const accountIds: number[] = byClient && Array.isArray(body.account_ids)
+    ? [...new Set((body.account_ids as any[]).map(Number).filter((n) => Number.isInteger(n) && n > 0))]
+    : [];
+  if (byClient && !accountIds.length) {
+    return res.status(400).json({ error: 'Choose at least one client for client-by-client forms' });
+  }
   const created: any[] = [];
   // Holders with nothing on record. Collected rather than thrown on, so a
   // multi-select generating ten forms still produces the nine that have
   // content and reports the one that does not.
   const empty: string[] = [];
-  for (const h of clean) {
+  const jobs = clean.flatMap((h) => (byClient
+    ? accountIds.map((accountId) => ({ h, accountId }))
+    : [{ h, accountId: null as number | null }]));
+  for (const { h, accountId } of jobs) {
     let row: any;
     try {
       row = createKeyForm({
@@ -187,9 +295,19 @@ router.post('/generate', requireAuth, async (req: AuthRequest, res: Response) =>
         holderEmail: h.email || null,
         generatedBy: actor,
         sourceKind: 'manual',
+        coverage: accountId ? 'client' : 'full',
+        clientAccountId: accountId,
       });
     } catch (e) {
-      if (e instanceof EmptyHoldingsError) { empty.push(e.holder); continue; }
+      if (e instanceof EmptyHoldingsError) {
+        // Named with the client in client-by-client mode, so the reply says
+        // WHICH client they hold nothing at.
+        if (accountId) {
+          const a = db.prepare('SELECT ic_company_name FROM accounts WHERE id = ?').get(accountId) as any;
+          empty.push(`${e.holder} at ${a ? Object.assign({}, a).ic_company_name : `client #${accountId}`}`);
+        } else empty.push(e.holder);
+        continue;
+      }
       throw e;
     }
     await refreshPdf(row.id);
@@ -256,6 +374,7 @@ export async function deliverKeyForm(
     lines: scope.lines,
     signLink: row.token ? keyFormLinkFor(row.token) : null,
     signed: !!row.signed_at,
+    totalLabel: docTotalLabelFor(row).toLowerCase().replace(/^./, (c) => c.toUpperCase()),
     pdf: row.pdf_path && fs.existsSync(row.pdf_path)
       ? { filename: path.basename(row.pdf_path), content: fs.readFileSync(row.pdf_path) }
       : null,
@@ -324,6 +443,37 @@ router.post('/:id(\\d+)/regenerate', requireAuth, async (req: AuthRequest, res: 
   // stored the post-return snapshot (and so read "holds no keys") regenerates
   // into the receipt it should always have been.
   let receiptLines: any[] | undefined;
+  // What the NEW form covers. Regenerating is how an old full-snapshot event
+  // form becomes the transaction form it would be today; an Audit keeps the
+  // coverage it was generated with.
+  let coverage: 'transaction' | 'full' | 'client' = 'transaction';
+  let clientAccountId: number | null = null;
+  if (old.event_type === 'audit') {
+    coverage = formCoverageOf(old) === 'client' ? 'client' : 'full';
+    if (coverage === 'client') {
+      const c = db.prepare('SELECT account_id FROM form_clients WHERE form_id = ? LIMIT 1').get(id) as any;
+      clientAccountId = c ? Number(Object.assign({}, c).account_id) : null;
+    }
+  } else if (old.event_type === 'reassignment') {
+    coverage = 'full';
+  } else if (kind === 'holdings' && (old.event_type === 'checkout' || old.event_type === 'transfer')) {
+    receiptLines = receiptLinesFromSource(
+      old,
+      old.event_type === 'checkout' ? 'Issued in this transaction'
+        : `Received from ${old.counterparty_name ?? 'the previous holder'}`,
+    );
+    // An accounts-only transfer moved no keys; it keeps its full statement.
+    if (!receiptLines.length) {
+      if (old.event_type === 'transfer') { coverage = 'full'; receiptLines = undefined; }
+      else {
+        return res.status(409).json({
+          error: `${old.form_no} cannot be rebuilt — the custody record it was generated from is `
+            + 'no longer available, so the keys it covered cannot be established.',
+          code: 'RECEIPT_SOURCE_MISSING',
+        });
+      }
+    }
+  }
   // A reconciled check-in states what the holder HAS, but it still lists the
   // keys that were recorded rather than a fresh snapshot — the record is of
   // that moment. Same source, different assertion.
@@ -360,6 +510,8 @@ router.post('/:id(\\d+)/regenerate', requireAuth, async (req: AuthRequest, res: 
       holderId: old.holder_id ?? null,
       docKind: kind,
       lines: receiptLines,
+      coverage,
+      clientAccountId,
       eventNote: old.event_type === 'audit' ? null : `Regenerated from ${old.form_no}`,
       // Carried through so a rebuilt transfer receipt keeps naming the person
       // the keys went to — which is what makes it a transfer and not a return.
@@ -598,6 +750,10 @@ router.get('/token/:token', (req: Request, res: Response) => {
     doc_title: docTitleFor(row),
     table_heading: docTableHeadingFor(row),
     total_label: docTotalLabelFor(row),
+    // What the form covers and what the signer attests to — decided once,
+    // server-side, so the page never re-derives the wording.
+    form_coverage: formCoverageOf(row),
+    ack_variant: ackVariantOf(row),
     // Set on a transfer receipt: the person the keys went to.
     counterparty_name: row.counterparty_name ?? null,
     returned_keys: row.returned_keys ?? 0,

@@ -3,7 +3,10 @@ import fs from 'fs';
 
 // The tables whose row counts define "the data survived". accounts is the
 // headline number Cara cares about; the rest round out the integrity check.
-export const COUNTED_TABLES = ['accounts', 'managers', 'key_assignments', 'staff_key_holders', 'audit_log'];
+// key_form_docs + form_clients: forms are never deleted, and archived ones (past
+// the 12-month retention window) live in the same table — counting them here
+// is what shows every backup actually carried them.
+export const COUNTED_TABLES = ['accounts', 'managers', 'key_assignments', 'staff_key_holders', 'audit_log', 'key_form_docs', 'form_clients'];
 
 export interface SnapshotResult {
   path: string;

@@ -438,6 +438,22 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* Key Form retention — a policy statement, not a setting: forms are
+            never deleted, only moved out of the default view. */}
+        <div className="card overflow-hidden">
+          <div className="px-5 py-3 bg-cw-black">
+            <h2 className="text-white font-semibold text-sm">Key Forms</h2>
+          </div>
+          <div className="px-5 py-4 space-y-1.5">
+            <p className="text-sm font-medium text-[#1a1a1a]">Form retention: 12 months active, then archived.</p>
+            <p className="text-xs text-cw-muted">
+              Archived forms leave the default Key Forms view for the <em>Archived forms</em> filter. They stay
+              searchable and downloadable, are included in every nightly backup, and are never deleted. A form
+              tied to keys that are still checked in stays active at any age.
+            </p>
+          </div>
+        </div>
+
         {/* Default due window */}
         <div className="card overflow-hidden">
           <div className="px-5 py-3 bg-cw-black">

@@ -114,6 +114,50 @@ export function docKindOf(row: { doc_kind?: string | null; event_type?: string }
   return DOC_KIND_BY_EVENT[row?.event_type as FormEventType] ?? 'holdings';
 }
 
+/**
+ * What a form COVERS, independent of what it asserts.
+ *
+ *   transaction  only the keys one custody event moved, at that one client
+ *   full         every client the holder has keys at — the Audit statement
+ *   client       an Audit statement for ONE chosen client
+ *
+ * Forms written before coverage was stored are inferred: a receipt only ever
+ * listed what moved; a holdings statement was a full snapshot, except the
+ * first-time record, which listed the keys it recorded.
+ */
+export type FormCoverage = 'transaction' | 'full' | 'client';
+
+export function formCoverageOf(row: any): FormCoverage {
+  const c = row?.form_coverage;
+  if (c === 'transaction' || c === 'full' || c === 'client') return c;
+  if (docKindOf(row) === 'return_receipt') return 'transaction';
+  if (row?.event_type === 'checkin') return 'transaction';
+  return 'full';
+}
+
+/**
+ * Which acknowledgement a signer is asked to make. One place, so the PDF, the
+ * signing page and the list can never word the same form differently.
+ *
+ *   received     "I have received the keys listed above" — an issue, or the
+ *                receiving side of a transfer, listing only what was handed over
+ *   held         "the keys listed above are in my possession" — an audit
+ *                statement, or a first-time record of keys already held
+ *   returned     a return receipt
+ *   transferred  the giving side of a transfer
+ */
+export type AckVariant = 'received' | 'held' | 'returned' | 'transferred';
+
+export function ackVariantOf(row: any): AckVariant {
+  if (docKindOf(row) === 'return_receipt') {
+    return row?.counterparty_name && String(row.counterparty_name).trim() ? 'transferred' : 'returned';
+  }
+  if (formCoverageOf(row) === 'transaction' && (row?.event_type === 'checkout' || row?.event_type === 'transfer')) {
+    return 'received';
+  }
+  return 'held';
+}
+
 export function isReturnReceipt(row: { doc_kind?: string | null; event_type?: string } | null | undefined): boolean {
   return docKindOf(row) === 'return_receipt';
 }
@@ -148,6 +192,9 @@ export function docTableHeadingFor(row: LabelRow): string {
 
 /** The label on the footing total. */
 export function docTotalLabelFor(row: LabelRow): string {
+  // A transaction form lists ONE event's keys; calling that "keys held" would
+  // read as the holder's whole position.
+  if (formCoverageOf(row) === 'transaction') return 'TOTAL KEYS IN THIS TRANSACTION';
   if (docKindOf(row) === 'holdings') return 'TOTAL KEYS HELD';
   return receiptIsTransfer(row) ? 'TOTAL KEYS TRANSFERRED' : 'TOTAL KEYS RETURNED';
 }
@@ -410,6 +457,14 @@ export interface CreateFormInput {
   counterpartyName?: string | null;
   /** Set when this form replaces an earlier one. */
   supersedes?: number | null;
+  /**
+   * What the form covers. Defaults to 'transaction' for every custody event
+   * and 'full' for an Audit. A transaction form MUST be given its lines — it
+   * lists what moved, and there is no snapshot to fall back on.
+   */
+  coverage?: FormCoverage;
+  /** For coverage 'client': the one account the audit statement covers. */
+  clientAccountId?: number | null;
 }
 
 /**
@@ -427,9 +482,18 @@ export function createKeyForm(input: CreateFormInput): any {
   // A receipt's lines are the keys that moved and must be supplied — there is
   // no current state to fall back on, and snapshotting here is exactly the bug
   // that made a return read as "you hold nothing".
-  const lines = docKind === 'return_receipt'
-    ? (input.lines ?? [])
-    : (input.lines ?? snapshotHolder(input.holderName, input.holderType));
+  const coverage: FormCoverage = input.coverage
+    ?? (input.eventType === 'audit' ? 'full' : 'transaction');
+  if (coverage === 'transaction' && !input.lines) {
+    // A programming error, not a user one: a custody event that forgot to say
+    // what moved would otherwise silently print the holder's whole position.
+    throw new Error(`A ${input.eventType} form lists only the keys it moved — lines are required.`);
+  }
+  const lines = input.lines
+    ?? (coverage === 'client'
+      ? snapshotHolder(input.holderName, input.holderType)
+        .filter((l) => Number(l.account_id) === Number(input.clientAccountId))
+      : snapshotHolder(input.holderName, input.holderType));
 
   // Neither kind is ever built empty: a holdings statement with no holdings and
   // a receipt for no keys are both a blank to sign. Enforced here, at the one
@@ -465,8 +529,8 @@ export function createKeyForm(input: CreateFormInput): any {
       (event_type, holder_name, holder_type, holder_role, holder_id,
        holder_email, holder_phone, scope_json, clients_covered, total_keys,
        status, token, token_expires_at, generated_by, source_kind, source_ref,
-       counterparty_name, no_email, data_version, supersedes, returned_keys, doc_kind)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       counterparty_name, no_email, data_version, supersedes, returned_keys, doc_kind, form_coverage)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.eventType, input.holderName, input.holderType ?? 'employee',
     profile.role, input.holderId ?? profile.id,
@@ -474,9 +538,13 @@ export function createKeyForm(input: CreateFormInput): any {
     token, expires, input.generatedBy,
     input.sourceKind ?? null, input.sourceRef ?? null,
     input.counterpartyName ?? null, hasEmail ? 0 : 1,
-    dataVersion, input.supersedes ?? null, returnedKeys, docKind,
+    dataVersion, input.supersedes ?? null, returnedKeys, docKind, coverage,
   );
   const id = Number(r.lastInsertRowid);
+  // Which clients this form covers, as rows — the search and the Client filter
+  // read these rather than the scope blob.
+  const link = db.prepare('INSERT OR IGNORE INTO form_clients (form_id, account_id) VALUES (?, ?)');
+  for (const l of lines) if (l.account_id != null) link.run(id, Number(l.account_id));
   // Human-readable identifier, assigned after insert so it matches the row id.
   db.prepare('UPDATE key_form_docs SET form_no = ? WHERE id = ?').run(`KF-${String(id).padStart(5, '0')}`, id);
   return getKeyForm(id);
@@ -521,6 +589,10 @@ export function serializeForm(row: any): any {
     doc_title: docTitleFor(row),
     table_heading: docTableHeadingFor(row),
     total_label: docTotalLabelFor(row),
+    form_coverage: formCoverageOf(row),
+    ack_variant: ackVariantOf(row),
+    // Past the 12-month retention window and not tied to open custody.
+    archived: !!row.is_archived,
     holder_name: row.holder_name,
     holder_type: row.holder_type,
     holder_role: row.holder_role,
@@ -567,8 +639,46 @@ export function serializeForm(row: any): any {
   };
 }
 
+// ── Retention ─────────────────────────────────────────────────────────────────
+// Forms are NEVER deleted. After 12 months a form leaves the default Key Forms
+// view for the "Archived forms" filter — still searchable, still downloadable,
+// still in every backup (it is the same row in the same table; archiving is a
+// query, not a move). A form tied to custody that is still open stays active
+// at any age: those keys are still out, and so is the document about them.
+export const RETENTION_MONTHS = 12;
+
+/** SQL: is this key_form_docs row tied to custody that is still open? */
+const TIED_TO_OPEN_CUSTODY = `(
+  (key_form_docs.source_kind = 'assignment' AND EXISTS (
+     SELECT 1 FROM key_assignments ka
+      WHERE ka.id = CAST(key_form_docs.source_ref AS INTEGER) AND ka.status = 'checked_out'))
+  OR (key_form_docs.source_kind = 'transfer' AND EXISTS (
+     SELECT 1 FROM key_assignments ka
+      WHERE ka.transfer_id = key_form_docs.source_ref AND ka.transfer_role = 'to'
+        AND ka.status = 'checked_out'))
+  OR (key_form_docs.event_type IN ('audit', 'reassignment') AND EXISTS (
+     SELECT 1 FROM key_assignments ka
+       JOIN form_clients fc ON fc.account_id = ka.account_id
+      WHERE fc.form_id = key_form_docs.id AND ka.status = 'checked_out'
+        AND LOWER(TRIM(ka.assignee)) = LOWER(TRIM(key_form_docs.holder_name))))
+)`;
+
+/** SQL: this row is archived — past retention AND not tied to open custody. */
+export const FORM_ARCHIVED_SQL = `(
+  datetime(key_form_docs.created_at) < datetime('now', '-${RETENTION_MONTHS} months')
+  AND NOT ${TIED_TO_OPEN_CUSTODY}
+)`;
+
 export interface FormFilters {
   search?: string;
+  /** Only forms covering this client (via form_clients). */
+  account_id?: number;
+  /**
+   * 'active' (default) hides archived forms; 'archived' shows only them; 'all'
+   * shows both — the contextual lists on a client or holder page use 'all', so
+   * the history there is never cut off at 12 months.
+   */
+  archived?: 'active' | 'archived' | 'all';
   event_type?: string;
   status?: string;
   from?: string;
@@ -583,12 +693,32 @@ export function listKeyForms(f: FormFilters): { rows: any[]; total: number } {
   const params: any[] = [];
 
   if (f.search) {
-    // Holder OR any client named in the snapshot — the scope blob is searched
-    // as text so "Ridgeway" finds every form covering that site.
-    where += ' AND (holder_name LIKE ? OR scope_json LIKE ? OR form_no LIKE ?)';
-    const s = `%${f.search}%`;
-    params.push(s, s, s);
+    // ONE box, any of: form ID, holder name, IC company, client name, BC
+    // Client #, BC Vendor #. Clients are matched through form_clients →
+    // accounts, so a renamed client or a BC number (which never appears in
+    // the scope blob) still finds its forms. scope_json is kept as a fallback
+    // for older lines that could not be linked to an account.
+    const s = `%${f.search.trim()}%`;
+    const digits = f.search.replace(/\D/g, '');
+    where += ` AND (
+      form_no LIKE ? OR CAST(key_form_docs.id AS TEXT) = ? OR holder_name LIKE ? OR scope_json LIKE ?
+      OR key_form_docs.id IN (
+        SELECT fc.form_id FROM form_clients fc JOIN accounts a ON a.id = fc.account_id
+         WHERE a.ic_company_name LIKE ? OR a.ic_name LIKE ?
+            OR a.bc_client_number LIKE ? OR a.bc_vendor_number LIKE ?)
+      OR LOWER(TRIM(holder_name)) IN (
+        SELECT LOWER(TRIM(ic_company_name)) FROM accounts
+         WHERE (record_type = 'ic' OR record_type IS NULL) AND bc_vendor_number LIKE ?)
+    )`;
+    params.push(s, digits || f.search.trim(), s, s, s, s, s, s, s);
   }
+  if (f.account_id) {
+    where += ' AND key_form_docs.id IN (SELECT form_id FROM form_clients WHERE account_id = ?)';
+    params.push(f.account_id);
+  }
+  const arch = f.archived ?? (f.status === 'archived' ? 'archived' : 'active');
+  if (arch === 'active') where += ` AND NOT ${FORM_ARCHIVED_SQL}`;
+  else if (arch === 'archived') where += ` AND ${FORM_ARCHIVED_SQL}`;
   if (f.holder) { where += ' AND LOWER(TRIM(holder_name)) = LOWER(TRIM(?))'; params.push(f.holder); }
   if (f.event_type && f.event_type !== 'all') { where += ' AND event_type = ?'; params.push(f.event_type); }
   // 'send_failed' is not a stored status — a failed send leaves the form
@@ -602,6 +732,8 @@ export function listKeyForms(f: FormFilters): { rows: any[]; total: number } {
     params.push(...linkStateParams(st));
   } else if (f.status === 'send_failed') {
     where += " AND send_error IS NOT NULL AND TRIM(send_error) <> ''";
+  } else if (f.status === 'archived') {
+    // Handled above as a retention filter, not a stored status.
   } else if (f.status && f.status !== 'all') {
     where += ' AND status = ?'; params.push(f.status);
   } else {
@@ -614,13 +746,21 @@ export function listKeyForms(f: FormFilters): { rows: any[]; total: number } {
 
   const countRow = db.prepare(`SELECT COUNT(*) AS c FROM key_form_docs WHERE ${where}`).get(...params) as any;
   const rows = db.prepare(
-    `SELECT * FROM key_form_docs WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`
+    `SELECT *, ${FORM_ARCHIVED_SQL} AS is_archived FROM key_form_docs WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`
   ).all(...params, f.limit ?? 50, f.offset ?? 0) as any[];
 
   return {
     rows: rows.map((r) => serializeForm(Object.assign({}, r))),
     total: Object.assign({}, countRow).c as number,
   };
+}
+
+/** How many forms sit in the Archived filter right now. */
+export function archivedFormCount(): number {
+  try {
+    const r = db.prepare(`SELECT COUNT(*) AS c FROM key_form_docs WHERE ${FORM_ARCHIVED_SQL}`).get() as any;
+    return Number(Object.assign({}, r).c) || 0;
+  } catch { return 0; }
 }
 
 /** Voided and acknowledged form counts, for the filter chips. */

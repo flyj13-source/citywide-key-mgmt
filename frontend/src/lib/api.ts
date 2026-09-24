@@ -772,6 +772,11 @@ export interface KeyFormDoc {
   doc_title: string;
   table_heading: string;
   total_label: string;
+  /** transaction = one event's keys at one client; full = audit, every client; client = audit, one client. */
+  form_coverage: 'transaction' | 'full' | 'client';
+  ack_variant: 'received' | 'held' | 'returned' | 'transferred';
+  /** Past the 12-month retention window and not tied to open custody. */
+  archived: boolean;
   /** How many keys the receipt covers; 0 on a holdings statement. */
   returned_keys: number;
   holder_name: string;
@@ -817,10 +822,23 @@ export interface KeyFormDoc {
 export const getKeyFormDocs = (params: Record<string, string>) =>
   req<{
     forms: KeyFormDoc[]; total: number; page: number; limit: number; failed_count: number;
-    link_counts: LinkStateCounts;
+    link_counts: LinkStateCounts; archived_count: number;
   }>(
     `/key-forms?${new URLSearchParams(params)}`
   );
+
+/** The clients a holder has keys at now — for the client-by-client picker. */
+export const getHolderFormClients = (holder: string, type: 'employee' | 'ic') =>
+  req<{ clients: { account_id: number; client: string; bc_client_number: string | null; keys: number }[] }>(
+    `/key-forms/holder-clients?${new URLSearchParams({ holder, holder_type: type })}`,
+  );
+
+/** The filtered Key Forms list — every matching row, not just the page — as Excel. */
+export const exportKeyFormDocs = async (params: Record<string, string>) => {
+  const res = await reqRaw(`/key-forms/export?${new URLSearchParams(params)}`);
+  if (!res.ok) throw new Error('Could not export');
+  await saveResponseAsFile(res, `CityWide-KeyForms-${new Date().toISOString().slice(0, 10)}.xlsx`);
+};
 
 /** Replay every form whose last send failed — the post-fix drain. */
 export const retryFailedKeyForms = () =>
@@ -831,12 +849,16 @@ export const retryFailedKeyForms = () =>
   }>('/key-forms/retry-failed', { method: 'POST', body: '{}' });
 
 /** One form per holder, each carrying that person's CURRENT state. */
-export const generateKeyFormDocs = (holders: { name: string; type: 'employee' | 'ic'; email?: string | null }[]) =>
+export const generateKeyFormDocs = (
+  holders: { name: string; type: 'employee' | 'ic'; email?: string | null }[],
+  /** Full picture (default) or one form per selected client. */
+  opts: { coverage?: 'full' | 'client'; account_ids?: number[] } = {},
+) =>
   // `skipped` names holders with no keys on record. A holdings form states a
   // position and cannot be built without one, so they are reported rather than
   // issued as a blank — see the 409 when NOBODY in the selection has keys.
   req<{ forms: KeyFormDoc[]; count: number; skipped: string[] }>('/key-forms/generate', {
-    method: 'POST', body: JSON.stringify({ holders }),
+    method: 'POST', body: JSON.stringify({ holders, ...opts }),
   });
 
 /** Send or resend. `to` routes a copy anywhere during an audit. */

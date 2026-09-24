@@ -402,12 +402,79 @@ for (const [col, def] of [
   ['link_renewals', 'INTEGER DEFAULT 0'],
   ['link_renewed_at', 'TEXT'],
   ['link_exhausted_at', 'TEXT'],
+  // What the form COVERS: 'transaction' (only the keys one event moved, at
+  // one client), 'full' (every client the holder has keys at — the audit
+  // statement) or 'client' (an audit statement for one chosen client).
+  // NULL on forms written before this existed; keyForm.formCoverageOf()
+  // infers those from their kind.
+  ['form_coverage', 'TEXT'],
 ] as [string, string][]) {
   if (!formCols.includes(col)) db.exec(`ALTER TABLE key_form_docs ADD COLUMN ${col} ${def}`);
 }
 
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_form_docs_token ON key_form_docs(token)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_key_form_docs_holder ON key_form_docs(holder_name)');
+
+// ── form_clients: which client(s) each Key Form covers ─────────────────────
+// A form's clients live inside its scope_json blob, which cannot be indexed or
+// joined. This link table makes "every form for this account" a lookup, and is
+// what the Key Forms search and Client filter read. Written by createKeyForm;
+// existing forms are backfilled from their line items below.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS form_clients (
+    -- No foreign keys, deliberately. Forms are never deleted and must outlive
+    -- the account they name: purging a client cannot be allowed to fail on,
+    -- or cascade into, the signed documents about its keys.
+    form_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    PRIMARY KEY (form_id, account_id)
+  )
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_form_clients_account ON form_clients(account_id)');
+
+/**
+ * Backfill form_clients for forms that have no rows yet. A line carries an
+ * account_id on every form written since line items had one; older lines are
+ * matched on the client name, exactly as it was printed. Idempotent: a form
+ * that already has rows is skipped, and INSERT OR IGNORE absorbs overlap.
+ */
+export function backfillFormClients(): { forms: number; links: number } {
+  const pending = (db.prepare(`
+    SELECT id, scope_json FROM key_form_docs
+     WHERE id NOT IN (SELECT form_id FROM form_clients)
+  `).all() as any[]).map((r) => Object.assign({}, r));
+  if (!pending.length) return { forms: 0, links: 0 };
+  const exists = db.prepare('SELECT id FROM accounts WHERE id = ?');
+  const byName = db.prepare('SELECT id FROM accounts WHERE LOWER(TRIM(ic_company_name)) = LOWER(TRIM(?)) LIMIT 1');
+  const insert = db.prepare('INSERT OR IGNORE INTO form_clients (form_id, account_id) VALUES (?, ?)');
+  let links = 0; let forms = 0;
+  db.exec('BEGIN');
+  try {
+    for (const f of pending) {
+      let lines: any[] = [];
+      try { lines = JSON.parse(f.scope_json || '{}').lines ?? []; } catch { lines = []; }
+      let any = false;
+      for (const l of lines) {
+        let id: number | null = null;
+        if (l?.account_id != null && exists.get(Number(l.account_id))) id = Number(l.account_id);
+        else if (l?.client) {
+          const m = byName.get(String(l.client)) as any;
+          if (m) id = Number(Object.assign({}, m).id);
+        }
+        if (id != null) { links += Number(insert.run(f.id, id).changes); any = true; }
+      }
+      if (any) forms++;
+    }
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  return { forms, links };
+}
+try {
+  const r = backfillFormClients();
+  if (r.links) console.log(`✓ [forms] form_clients backfilled: ${r.links} link(s) across ${r.forms} form(s)`);
+} catch (e: any) {
+  console.error('✗ [forms] form_clients backfill failed:', e?.message ?? e);
+}
 
 // ── Key custody columns on key_assignments ──────────────────────────────────
 // Multi-key transactions (keys_json), holder identity/type, the ACTOR who

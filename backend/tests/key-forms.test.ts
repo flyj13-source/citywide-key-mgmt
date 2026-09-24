@@ -248,19 +248,23 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
       doc_kind: 'return_receipt',
       doc_title: 'Key Transfer Receipt',
       table_heading: 'Keys transferred',
-      total_label: 'TOTAL KEYS TRANSFERRED',
+      total_label: 'TOTAL KEYS IN THIS TRANSACTION',
+      form_coverage: 'transaction', ack_variant: 'transferred',
     });
     expect(res.body.key_forms.from.total_keys).toBe(2);
     expect(res.body.key_forms.from.clients[0].metal).toBe(2);
     expect(res.body.key_forms.from.clients[0].via).toBe('Transferred to To Person');
 
-    // INCOMING side signs a HOLDINGS statement covering what they now have,
-    // the 2 just received included.
+    // INCOMING side signs for the keys it RECEIVED in this transfer — only those.
     expect(res.body.key_forms.to).toMatchObject({
       event_type: 'transfer', holder_name: 'To Person', counterparty_name: 'From Person',
       doc_kind: 'holdings', doc_title: 'Key Form',
+      form_coverage: 'transaction', ack_variant: 'received',
+      total_label: 'TOTAL KEYS IN THIS TRANSACTION',
     });
     expect(res.body.key_forms.to.total_keys).toBe(2);
+    expect(res.body.key_forms.to.clients).toHaveLength(1);
+    expect(res.body.key_forms.to.clients[0].via).toBe('Received from From Person');
   });
 
   it('manager reassignment produces a form for both managers', async () => {
@@ -307,15 +311,29 @@ describe('§2 A KEY FORM IS GENERATED ON EVERY CUSTODY EVENT', () => {
     expect(res.body.key_forms.from.total_keys).toBe(1);   // CLIENT B only
   });
 
-  it('a form lists EVERY client the holder has keys at, not just the event', async () => {
+  it('a check-in (issue) form lists ONLY the transaction, at that one client', async () => {
     const a = site('SITE A');
     const b = site('SITE B');
     addStaff('Multi Holder', 'multi@cw.test');
     await checkout({ account_id: a, holder: 'Multi Holder', holder_email: 'multi@cw.test', holder_type: 'employee', keys: [{ type: 'metal', qty: 2 }] });
     const res = await checkout({ account_id: b, holder: 'Multi Holder', holder_email: 'multi@cw.test', holder_type: 'employee', keys: [{ type: 'card', qty: 1 }] });
-    expect(res.body.key_form.clients_covered).toBe(2);
-    expect(res.body.key_form.total_keys).toBe(3);
-    expect(res.body.key_form.clients.map((c: any) => c.client).sort()).toEqual(['SITE A', 'SITE B']);
+    expect(res.body.key_form).toMatchObject({
+      clients_covered: 1, total_keys: 1, form_coverage: 'transaction', ack_variant: 'received',
+      total_label: 'TOTAL KEYS IN THIS TRANSACTION',
+    });
+    expect(res.body.key_form.clients).toEqual([expect.objectContaining({ client: 'SITE B', card: 1, metal: 0 })]);
+  });
+
+  it('the Audit form is the full picture — EVERY client the holder has keys at', async () => {
+    const a = site('SITE A');
+    const b = site('SITE B');
+    addStaff('Multi Holder', 'multi@cw.test');
+    await checkout({ account_id: a, holder: 'Multi Holder', holder_email: 'multi@cw.test', holder_type: 'employee', keys: [{ type: 'metal', qty: 2 }] });
+    await checkout({ account_id: b, holder: 'Multi Holder', holder_email: 'multi@cw.test', holder_type: 'employee', keys: [{ type: 'card', qty: 1 }] });
+    const res = await auth(request(app).post('/api/key-forms/generate')).send({ holder: 'Multi Holder', holder_type: 'employee' });
+    const form = res.body.forms[0];
+    expect(form).toMatchObject({ event_type: 'audit', clients_covered: 2, total_keys: 3, form_coverage: 'full', ack_variant: 'held' });
+    expect(form.clients.map((c: any) => c.client).sort()).toEqual(['SITE A', 'SITE B']);
   });
 
   it('NEVER carries a door or alarm code', async () => {
@@ -795,7 +813,9 @@ describe('FIRST-TIME CUSTODY RECORD vs GENUINE RETURN', () => {
     expect(form.doc_kind).toBe('holdings');
     expect(form.doc_title).toBe('Key Form');
     expect(form.table_heading).toBe('Keys held');
-    expect(form.total_label).toBe('TOTAL KEYS HELD');
+    // A transaction form's total; the acknowledgement stays "in my possession".
+    expect(form.total_label).toBe('TOTAL KEYS IN THIS TRANSACTION');
+    expect(form.ack_variant).toBe('held');
     expect(form.total_keys).toBe(1);
     expect(form.clients[0]).toMatchObject({ client: 'ATENEA SERVICES', metal: 1 });
     expect(form.clients[0].via).toBe('Recorded as held');
@@ -901,7 +921,7 @@ describe('TRANSFER WORDING', () => {
     const { from } = await setup();
     expect(from.doc_title).toBe('Key Transfer Receipt');
     expect(from.table_heading).toBe('Keys transferred');
-    expect(from.total_label).toBe('TOTAL KEYS TRANSFERRED');
+    expect(from.total_label).toBe('TOTAL KEYS IN THIS TRANSACTION');
     expect(from.counterparty_name).toBe('ZZ Test AM Two');
     expect(from.total_keys).toBe(2);
     expect(JSON.stringify(from)).not.toMatch(/Keys returned|Key Return Receipt|TOTAL KEYS RETURNED/);
@@ -948,12 +968,14 @@ describe('TRANSFER WORDING', () => {
     expect(text).not.toMatch(/currently in my possession/);
   });
 
-  it('the TO PDF is the holdings acknowledgement', async () => {
+  it('the TO PDF acknowledges RECEIVING the transferred keys — only those', async () => {
     const { to } = await setup();
     const text = pdfText((await auth(request(app).get(`/api/key-forms/${to.id}/pdf`))).body as Buffer);
     expect(text).toContain('Key Form');
-    expect(text).toContain('KEYS HELD');
-    expect(text).toContain('currently in my possession');
+    expect(text).toContain('TOTAL KEYS IN THIS TRANSACTION');
+    expect(text).toContain('I confirm I have received the keys listed above from ZZ Test AM One');
+    // A claim about their whole position would be false on a one-transaction form.
+    expect(text).not.toMatch(/currently in my possession/);
     expect(text).not.toMatch(/transferred the keys listed above/);
   });
 });
