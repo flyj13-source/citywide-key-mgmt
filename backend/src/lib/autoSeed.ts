@@ -4,6 +4,7 @@ import { encrypt } from './crypto';
 import { backfillStaffManagers } from './backfillStaffManagers';
 import { seedTestFixtures } from './testFixtures';
 import { applyMailboxUpdates, CARA_NEW_EMAIL } from './mailboxUpdates';
+import { applyManagerChanges202609 } from './managerChanges202609';
 import { migrateAccountCodesToAccessCodes } from './accessCodeMigration';
 
 // Runs at every server startup. Idempotent — only writes when rows are missing.
@@ -31,6 +32,26 @@ function seedFixtures(): void {
   } catch (e) {
     // A fixture failure must never stop the app from booting.
     console.error('[seed] Test fixtures could not be seeded:', (e as Error).message);
+  }
+}
+
+/**
+ * One-time manager changes (Sept 2026): Jeremiah Williams → AM, Brooks Pond →
+ * Jeremiah, Odvin Rivas's CCM accounts → Fallon Medrano. Guarded per part; the
+ * full report goes to the Audit Log and /api/_diag.
+ */
+function applyManagerChanges(): void {
+  try {
+    const r = applyManagerChanges202609();
+    const bp = r.brooks_pond.accounts.filter((a) => a.result === 'changed').length;
+    console.log(
+      `✓ [seed] Manager changes 2026-09 — Jeremiah: ${r.jeremiah.status}; `
+      + `Brooks Pond: ${r.brooks_pond.status} (${bp} changed); `
+      + `Odvin→Fallon CCM: ${r.odvin_to_fallon.status} (${r.odvin_to_fallon.count} accounts, `
+      + `${r.odvin_to_fallon.with_ccm_keys.length} with CCM keys)`,
+    );
+  } catch (e) {
+    console.error('[seed] Manager changes 2026-09 failed:', (e as Error).message);
   }
 }
 
@@ -132,6 +153,7 @@ export function autoSeedIfEmpty(): void {
     console.log(`✓ [seed] Accounts table has ${count} rows — skipping demo data`);
     seedStaffManagerRoster();
     applyMailboxChanges();
+    applyManagerChanges();
     migrateAccessCodes();
     seedFixtures();
     return;

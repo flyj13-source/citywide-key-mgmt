@@ -10,6 +10,7 @@ import {
 } from '../lib/testFixtures';
 import { logAudit } from '../lib/audit';
 import { mailboxUpdateState } from '../lib/mailboxUpdates';
+import { managerChanges202609State } from '../lib/managerChanges202609';
 
 const router = Router();
 
@@ -208,6 +209,8 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
     // Cara's mailbox move — checkable from outside, since the update can only
     // run at boot and "the code shipped" is not "the rows changed".
     mailbox: mailboxUpdateState(),
+    // Sept 2026 manager changes — the full before/after, readable from outside at /api/_diag.
+    manager_changes_2026_09: managerChanges202609State(),
 
     holder_grid: {
       expected: gridCells.length,
