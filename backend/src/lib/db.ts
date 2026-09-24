@@ -432,6 +432,21 @@ db.exec(`
 `);
 db.exec('CREATE INDEX IF NOT EXISTS idx_form_clients_account ON form_clients(account_id)');
 
+// ── custody_sign_links: which custody signature each Key Form stands for ─────
+// One transaction, one signature: a form is the document for one or more
+// custody rows' signature SLOTS ('checkout' = issued, 'checkin' = returned /
+// recorded). Signing any of them signs all — see signatureSync.ts. No foreign
+// keys, for the same reason as form_clients: these records are never deleted.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS custody_sign_links (
+    form_id INTEGER NOT NULL,
+    assignment_id INTEGER NOT NULL,
+    slot TEXT NOT NULL CHECK (slot IN ('checkout', 'checkin')),
+    PRIMARY KEY (form_id, assignment_id, slot)
+  )
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_custody_sign_links_assignment ON custody_sign_links(assignment_id, slot)');
+
 /**
  * Backfill form_clients for forms that have no rows yet. A line carries an
  * account_id on every form written since line items had one; older lines are

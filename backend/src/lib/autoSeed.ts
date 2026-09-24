@@ -5,6 +5,7 @@ import { backfillStaffManagers } from './backfillStaffManagers';
 import { seedTestFixtures } from './testFixtures';
 import { applyMailboxUpdates, CARA_NEW_EMAIL } from './mailboxUpdates';
 import { applyManagerChanges202609 } from './managerChanges202609';
+import { backfillSignatures } from './signatureSync';
 import { migrateAccountCodesToAccessCodes } from './accessCodeMigration';
 
 // Runs at every server startup. Idempotent — only writes when rows are missing.
@@ -32,6 +33,20 @@ function seedFixtures(): void {
   } catch (e) {
     // A fixture failure must never stop the app from booting.
     console.error('[seed] Test fixtures could not be seeded:', (e as Error).message);
+  }
+}
+
+/**
+ * Signed on one record, unsigned on another of the same transaction — copy the
+ * stored signature (with its original signed_at) across. Idempotent; nothing
+ * is re-sent. Audited per record and summarised.
+ */
+function repairSignatures(): void {
+  try {
+    const r = backfillSignatures();
+    console.log(`✓ [seed] Signature backfill: ${r.fixed.length} record(s) set to Signed, ${r.links_added} form↔custody link(s) added`);
+  } catch (e) {
+    console.error('[seed] Signature backfill failed:', (e as Error).message);
   }
 }
 
@@ -154,6 +169,7 @@ export function autoSeedIfEmpty(): void {
     seedStaffManagerRoster();
     applyMailboxChanges();
     applyManagerChanges();
+    repairSignatures();
     migrateAccessCodes();
     seedFixtures();
     return;

@@ -24,6 +24,7 @@ import { checkReason, voidKeyForm, acknowledgeKeyForm, MIN_REASON_LENGTH } from 
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { readKeyLines, bcNumberForAssignment } from '../lib/custody';
 import { sendKeyForm, caraAddress, notifyAddresses } from '../lib/custodyMail';
+import { propagateSignature, refreshFormPdfs } from '../lib/signatureSync';
 import { runSweepSafely, linkStateCounts, reviveLinkForManualSend } from '../lib/signatureLink';
 
 /** Same base the custody sign-off links use. */
@@ -785,16 +786,38 @@ router.post('/token/:token/sign', async (req: Request, res: Response) => {
 
   const signedAt = new Date().toISOString();
   const hash = hashSignature(signature_data);
-  db.prepare(`
-    UPDATE key_form_docs
-       SET signed_at = ?, signature_data = ?, signature_hash = ?, signature_typed_name = ?,
-           status = 'signed', token = NULL
-     WHERE id = ?
-  `).run(signedAt, signature_data, hash, typed_name, row.id);
+  // One transaction: this form AND every custody record it stands for (the
+  // registry row(s), and any other form of the same event) become Signed
+  // together, or nothing does.
+  let synced = { forms: [] as number[], slots: [] as { assignmentId: number; slot: 'checkout' | 'checkin' }[] };
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(`
+      UPDATE key_form_docs
+         SET signed_at = ?, signature_data = ?, signature_hash = ?, signature_typed_name = ?,
+             status = 'signed', token = NULL
+       WHERE id = ?
+    `).run(signedAt, signature_data, hash, typed_name, row.id);
+    synced = propagateSignature({ formId: row.id }, {
+      signed_at: signedAt, signature_data, signature_hash: hash, typed_name, pdf_path: null,
+    });
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch { /* */ }
+    throw e;
+  }
 
   // Regenerate so the stored PDF carries the signature.
   await refreshPdf(row.id);
+  await refreshFormPdfs(synced.forms.filter((f) => f !== row.id));
   const signed = getKeyForm(row.id);
+  // The custody rows it closed point at this signed document as their receipt.
+  for (const sl of synced.slots) {
+    db.prepare(sl.slot === 'checkout'
+      ? 'UPDATE key_assignments SET pdf_path = COALESCE(pdf_path, ?) WHERE id = ?'
+      : 'UPDATE key_assignments SET checkin_pdf_path = COALESCE(checkin_pdf_path, ?) WHERE id = ?',
+    ).run(signed.pdf_path ?? null, sl.assignmentId);
+  }
   const scope = parseScope(signed);
 
   // Back to the signer, Cara, and anywhere this form was routed during an audit.
@@ -821,6 +844,8 @@ router.post('/token/:token/sign', async (req: Request, res: Response) => {
       form_id: signed.id, form_no: signed.form_no, holder: signed.holder_name,
       total_keys: signed.total_keys, clients: signed.clients_covered,
       hash: hash.slice(0, 16), typed_name,
+      // The other records of this transaction closed by the same signature.
+      synced_custody_records: synced.slots, synced_forms: synced.forms.filter((f) => f !== signed.id),
       receipt_recipients: mail.recipients, receipt_error: mail.error,
     }),
   );

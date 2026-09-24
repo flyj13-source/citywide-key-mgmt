@@ -16,6 +16,7 @@ import { generateCustodyReceipt } from '../lib/custodyPdf';
 import { createKeyForm, serializeForm, getKeyForm, EmptyHoldingsError, type FormEventType } from '../lib/keyForm';
 import { SIGNATURE_TTL_MS } from '../lib/signatureLink';
 import { backwardsAudit } from '../lib/backwardsAudit';
+import { linkFormToCustody, propagateSignature, refreshFormPdfs } from '../lib/signatureSync';
 import { rolesForHolder, hasRoleAtClient, holderKeysAtClient, hasGrid, ROLE_SHORT } from '../lib/roleScope';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { NOT_TEST_ASSIGNMENT } from '../lib/testFixtures';
@@ -473,6 +474,11 @@ export async function generateEventForm(
     lines?: any[];
     docKind?: 'holdings' | 'return_receipt';
     coverage?: 'transaction' | 'full' | 'client';
+    /**
+     * The custody signature(s) this form stands for. Signing the form signs
+     * these; signing any of these signs the form (signatureSync.ts).
+     */
+    signs?: { assignmentId: number; slot: 'checkout' | 'checkin' }[];
   },
 ): Promise<any | null> {
   try {
@@ -491,6 +497,7 @@ export async function generateEventForm(
       sourceRef: input.sourceRef ?? null,
       counterpartyName: input.counterpartyName ?? null,
     });
+    if (input.signs?.length) linkFormToCustody(row.id, input.signs);
     try {
       const pdf = await generateKeyFormPdf(row);
       db.prepare('UPDATE key_form_docs SET pdf_path = ? WHERE id = ?').run(pdf, row.id);
@@ -682,6 +689,7 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
   }
 
   const keyForm = await generateEventForm(req, {
+    signs: [{ assignmentId: id, slot: 'checkout' }],
     eventType: 'checkout', holderName: holder, holderType: holder_type,
     holderEmail: holder_email || null, holderId: holder_id,
     // Only the keys handed over in THIS event, at this client — not the
@@ -810,6 +818,7 @@ async function reconcileCheckin(req: AuthRequest, res: Response) {
   const recordSignoffLink = signoffLinkFor(recordToken);
 
   const form = await generateEventForm(req, {
+    signs: [{ assignmentId: newId, slot: 'checkin' }],
     eventType: 'checkin', holderName: holder, holderType: holder_type,
     holderEmail: holder_email || null, holderId: holder_id,
     // A HOLDINGS assertion, not a receipt. Nothing was handed back, so
@@ -984,6 +993,8 @@ async function multiRecordCheckin(req: AuthRequest, res: Response, records: Open
   if (!signInPerson) logMail(req, mail, 'checkin', accountName, accountId, holder);
 
   const keyForm = await generateEventForm(req, {
+    // Every row this one return closed — signing any link closes them all.
+    signs: returnedIds.map((rid) => ({ assignmentId: rid, slot: 'checkin' as const })),
     eventType: 'checkin', holderName: holder,
     holderType: (first.holder_type as 'employee' | 'ic') ?? 'employee',
     holderEmail: first.assignee_email ?? null, holderId: first.holder_id ?? null,
@@ -1158,6 +1169,7 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
   if (!signInPerson) logMail(req, mail, 'checkin', assignment.account_name, assignment.account_id, holder);
 
   const keyForm = await generateEventForm(req, {
+    signs: [{ assignmentId: returnedId, slot: 'checkin' }],
     eventType: 'checkin', holderName: holder,
     holderType: (assignment.holder_type as 'employee' | 'ic') ?? 'employee',
     holderEmail: assignment.assignee_email ?? null, holderId: assignment.holder_id ?? null,
@@ -1778,6 +1790,7 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   // that side falls back to a holdings statement documenting where the account
   // reassignment leaves them, and is skipped entirely if they hold nothing.
   const fromForm = await generateEventForm(req, {
+    signs: movesKeys ? fromIds.map((id) => ({ assignmentId: id, slot: 'checkin' as const })) : [],
     eventType: 'transfer', holderName: from_holder,
     holderType: from_holder_type ?? 'employee', holderEmail: from_holder_email,
     ...(movesKeys
@@ -1798,6 +1811,7 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   // those. An accounts-only transfer moved none, so that side documents its
   // position in full instead.
   const toForm = await generateEventForm(req, {
+    signs: movesKeys && toId ? [{ assignmentId: toId, slot: 'checkout' as const }] : [],
     eventType: 'transfer', holderName: to_holder,
     holderType: to_holder_type, holderEmail: to_holder_email, holderId: to_holder_id,
     docKind: 'holdings',
@@ -1923,7 +1937,7 @@ router.post('/:id/sign-in-person', requireAuth, async (req: AuthRequest, res: Re
     pdfError = err?.message || 'PDF generation failed';
   }
 
-  db.prepare(
+  const closeInPerson = db.prepare(
     kind === 'checkin'
       ? `UPDATE key_assignments
             SET checkin_signed_at = ?, checkin_signature_data = ?, checkin_signature_hash = ?,
@@ -1933,7 +1947,25 @@ router.post('/:id/sign-in-person', requireAuth, async (req: AuthRequest, res: Re
             SET signed_at = ?, signature_data = ?, signature_hash = ?, pdf_path = ?,
                 signed_in_person_by = ?, signature_status = 'signed', signoff_token = NULL
           WHERE id = ?`
-  ).run(signedAt, signature_data, hash, pdfPath, witness, a.id);
+  );
+  // One transaction: this row, its Key Form and any sibling rows of the same
+  // event are Signed together.
+  let synced = { forms: [] as number[], slots: [] as { assignmentId: number; slot: 'checkout' | 'checkin' }[] };
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    closeInPerson.run(signedAt, signature_data, hash, pdfPath, witness, a.id);
+    if (kind === 'checkin') {
+      db.prepare("UPDATE key_assignments SET signature_status = 'signed' WHERE id = ? AND origin = 'reconciled'").run(a.id);
+    }
+    synced = propagateSignature({ assignmentId: a.id, slot: kind === 'checkin' ? 'checkin' : 'checkout' }, {
+      signed_at: signedAt, signature_data, signature_hash: hash, typed_name: a.assignee ?? null, pdf_path: pdfPath,
+    });
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch { /* */ }
+    throw e;
+  }
+  await refreshFormPdfs(synced.forms);
 
   logAudit(req, 'checkout_signed_in_person', a.account_name, a.account_id, {
     assignment_id: a.id, kind, holder: a.assignee, witnessed_by: witness,

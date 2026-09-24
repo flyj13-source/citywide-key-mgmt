@@ -11,6 +11,7 @@ import {
 import { logAudit } from '../lib/audit';
 import { mailboxUpdateState } from '../lib/mailboxUpdates';
 import { managerChanges202609State } from '../lib/managerChanges202609';
+import { signatureBackfillState } from '../lib/signatureSync';
 
 const router = Router();
 
@@ -211,6 +212,8 @@ router.get('/', requireAuth, (req: AuthRequest, res: Response) => {
     mailbox: mailboxUpdateState(),
     // Sept 2026 manager changes — the full before/after, readable from outside at /api/_diag.
     manager_changes_2026_09: managerChanges202609State(),
+    // Signatures repaired across linked records: count and list.
+    signature_backfill: signatureBackfillState(),
 
     holder_grid: {
       expected: gridCells.length,

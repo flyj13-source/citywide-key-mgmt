@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import db from '../lib/db';
+import { propagateSignature, refreshFormPdfs } from '../lib/signatureSync';
 import {
   readKeyLines, totalQty, bcNumberForAssignment, transferSignatureState,
 } from '../lib/custody';
@@ -245,9 +246,29 @@ router.post('/:token/sign', async (req: Request, res: Response) => {
   // the signature closes every row in the group. Closing only the matched row
   // would leave the rest looking unsigned forever.
   const covered = slot === 'checkin' ? [row] : groupRows(row);
-  for (const r of covered) {
-    closeSignature.run(signedAt, signature_data, hash, typed_name, pdfPath, r.id);
+  // The same transaction closes every other record of this custody event —
+  // its Key Form, and any sibling rows the same return closed — so the Key
+  // Forms tab, the registry and the dashboard can never disagree about it.
+  let synced = { forms: [] as number[], slots: [] as { assignmentId: number; slot: 'checkout' | 'checkin' }[] };
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const r of covered) {
+      closeSignature.run(signedAt, signature_data, hash, typed_name, pdfPath, r.id);
+      // A signed first-time record expects no other signature: it is Signed.
+      if (slot === 'checkin') {
+        db.prepare("UPDATE key_assignments SET signature_status = 'signed' WHERE id = ? AND origin = 'reconciled'").run(r.id);
+      }
+      const t = propagateSignature({ assignmentId: r.id, slot }, {
+        signed_at: signedAt, signature_data, signature_hash: hash, typed_name, pdf_path: pdfPath,
+      });
+      synced = { forms: [...synced.forms, ...t.forms], slots: [...synced.slots, ...t.slots] };
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch { /* */ }
+    throw e;
   }
+  await refreshFormPdfs(synced.forms);
 
   // Email the signed PDF to THREE parties: the signer (their own proof), the
   // custody notification recipient from Settings, and — on a person-to-person
