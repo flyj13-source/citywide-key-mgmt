@@ -72,7 +72,7 @@ function SignaturePill({ row }: { row: CustodyReportRow }) {
     ? 'bg-[#eaf5ec] text-[#2d7a3a] border-[#c9e4d0]'
     : 'bg-[#fff8e6] text-[#7a5a00] border-[#e8cf8a]';
   const title = [
-    row.signed_out_at ? `Check-out signed ${fmtDateTime(row.signed_out_at)}` : 'Check-out not signed',
+    row.signed_out_at ? `Check-in signed ${fmtDateTime(row.signed_out_at)}` : 'Check-in not signed',
     row.status === 'returned'
       ? (row.signed_in_at ? `Return signed ${fmtDateTime(row.signed_in_at)}` : 'Return not signed')
       : null,
@@ -244,7 +244,7 @@ export default function CustodyReport() {
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Client</th>
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">BC #</th>
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Keys</th>
-                <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Checked Out</th>
+                <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Checked In</th>
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Due</th>
                 <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Returned</th>
                 <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Status</th>

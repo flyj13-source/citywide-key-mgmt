@@ -311,7 +311,7 @@ export const REPORT_COLUMNS: ReportColumn[] = [
   { header: 'Client', width: 32, pdfWidth: 106, value: (r) => r.client },
   { header: 'BC #', width: 16, pdfWidth: 52, value: (r) => r.bc_number || '' },
   { header: 'Keys', width: 34, pdfWidth: 98, value: (r) => r.keys_summary },
-  { header: 'Checked Out', width: 20, pdfWidth: 88, value: (r) => fmtStamp(r.checked_out_at) },
+  { header: 'Checked In', width: 20, pdfWidth: 88, value: (r) => fmtStamp(r.checked_out_at) },
   { header: 'Due', width: 15, pdfWidth: 49, value: (r) => fmtDay(r.due_at) },
   { header: 'Returned', width: 20, pdfWidth: 88, value: (r) => fmtStamp(r.returned_at) },
   { header: 'Status', width: 13, pdfWidth: 42, value: (r) => r.status_label },
@@ -447,7 +447,7 @@ export async function reportToPdf(
 
   const newPage = (): { page: PDFPage; y: number } => {
     const page = doc.addPage(PAGE);
-    let y = drawBrandedHeader(page, { bold, regular }, logo, 'Key Custody Report', 'BOSTON — Check-out / check-in custody history');
+    let y = drawBrandedHeader(page, { bold, regular }, logo, 'Key Custody Report', 'BOSTON — Check-in / check-out custody history');
     page.drawText(fit(describeFilters(f), regular, 9, PDF_USABLE), {
       x: MARGIN, y, size: 9, font: regular, color: CW_GRAY,
     });

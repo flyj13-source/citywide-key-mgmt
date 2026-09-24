@@ -295,7 +295,7 @@ export function CheckedOutTable({
             <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Type</th>
             <SortHeader label="Client" sortKey="account_name" sort={sort} onSort={onSort} />
             <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Keys</th>
-            <SortHeader label="Checked Out" sortKey="checked_out_at" sort={sort} onSort={onSort} />
+            <SortHeader label="Checked In" sortKey="checked_out_at" sort={sort} onSort={onSort} />
             <SortHeader label="Due" sortKey="due_at" sort={sort} onSort={onSort} />
             <th className="text-center px-3 py-3 font-medium whitespace-nowrap">Status</th>
             <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Signature</th>
@@ -350,7 +350,7 @@ export function CheckedOutTable({
                     onClick={() => onCheckIn(a)}
                     className="text-xs border border-[#1a1a1a] text-[#1a1a1a] rounded px-2.5 py-1 hover:border-[#C0272D] hover:text-[#C0272D] transition-colors"
                   >
-                    Check In
+                    Check Out
                   </button>
                   <button
                     onClick={() => onTransfer(a)}
@@ -421,7 +421,7 @@ export function CheckedInTable({
             <SortHeader label="Holder" sortKey="holder" sort={sort} onSort={onSort} />
             <SortHeader label="Client" sortKey="account_name" sort={sort} onSort={onSort} />
             <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Keys</th>
-            <SortHeader label="Checked Out" sortKey="checked_out_at" sort={sort} onSort={onSort} />
+            <SortHeader label="Checked In" sortKey="checked_out_at" sort={sort} onSort={onSort} />
             <SortHeader label="Returned" sortKey="returned_at" sort={sort} onSort={onSort} />
             <SortHeader label="Condition" sortKey="condition" sort={sort} onSort={onSort} />
             <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Signature</th>

@@ -228,7 +228,7 @@ export default function Settings() {
           </div>
           <form onSubmit={handleSaveNotify} className="px-5 py-4 space-y-4">
             <p className="text-sm text-cw-muted">
-              Every key check-out, check-in, transfer and signed receipt is emailed to the holder <em>and</em> to the
+              Every key check-in, check-out, transfer and signed receipt is emailed to the holder <em>and</em> to the
               address below. Separate multiple recipients with commas.
             </p>
 
@@ -441,11 +441,11 @@ export default function Settings() {
         {/* Default due window */}
         <div className="card overflow-hidden">
           <div className="px-5 py-3 bg-cw-black">
-            <h2 className="text-white font-semibold text-sm">Key Check-Out Defaults</h2>
+            <h2 className="text-white font-semibold text-sm">Key Check-In Defaults</h2>
           </div>
           <form onSubmit={handleSaveDue} className="px-5 py-4 space-y-4">
             <p className="text-sm text-cw-muted">
-              Every check-out opens with a due date already filled in — today plus this many days. It stays
+              Every check-in opens with a due date already filled in — today plus this many days. It stays
               editable on each transaction; this only sets where it starts.
             </p>
 
@@ -476,7 +476,7 @@ export default function Settings() {
 
             {due && (
               <p className="text-xs text-cw-muted">
-                A check-out started now would be due{' '}
+                A check-in started now would be due{' '}
                 <span className="font-semibold text-[#1a1a1a]">{due.example_due_at}</span>
                 {due.is_default && <span className="ml-1 text-gray-400">(built-in default of {due.fallback_due_days} days)</span>}
                 {due.updated_at && due.updated_by && <> · last changed by {due.updated_by} on {fmtWhen(due.updated_at)}</>}
@@ -488,7 +488,7 @@ export default function Settings() {
             )}
             {dueToast && (
               <p className="text-sm text-green-800 bg-green-50 border border-green-200 rounded px-3 py-2">
-                ✓ Saved — the next check-out opens with this due date.
+                ✓ Saved — the next check-in opens with this due date.
               </p>
             )}
           </form>

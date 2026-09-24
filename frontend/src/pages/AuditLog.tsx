@@ -4,10 +4,11 @@ import Badge from '../components/Badge';
 import TestPill from '../components/TestPill';
 import { getAudit, downloadExcel, undoReassignment } from '../lib/api';
 import { getManager } from '../lib/auth';
+import { toCityWideWording } from '../lib/custodyWording';
 
 const ACTION_LABELS: Record<string, { label: string; variant: 'red' | 'green' | 'gray' | 'yellow' | 'blue' }> = {
-  key_checked_out: { label: 'Check Out', variant: 'yellow' },
-  key_checked_in: { label: 'Check In', variant: 'green' },
+  key_checked_out: { label: 'Check In', variant: 'yellow' },
+  key_checked_in: { label: 'Check Out', variant: 'green' },
   vault_revealed: { label: 'Vault Reveal', variant: 'red' },
   account_created: { label: 'Account Created', variant: 'blue' },
   account_updated: { label: 'Account Updated', variant: 'gray' },
@@ -174,7 +175,8 @@ export default function AuditLog() {
                         .map(([k, v]) => (
                           <span key={k} className="mr-2">
                             <span className="font-medium">{k}:</span>{' '}
-                            {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
+                            {/* Stored in the old custody words; shown in City Wide's. */}
+                            {toCityWideWording(typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v))}
                           </span>
                         ))}
                       {log.action === 'bulk_manager_reassignment' && (

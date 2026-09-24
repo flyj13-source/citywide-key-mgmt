@@ -25,8 +25,8 @@ export type FormStatus =
   | 'superseded';
 
 export const FORM_EVENT_LABEL: Record<FormEventType, string> = {
-  checkin: 'Check-in',
-  checkout: 'Check-out',
+  checkin: 'Check-out',
+  checkout: 'Check-in',
   transfer: 'Transfer',
   reassignment: 'Reassignment',
   audit: 'Audit',
@@ -316,7 +316,7 @@ export function snapshotHolder(holderName: string, holderType?: string | null): 
     line.metal += t.metal; line.card += t.card; line.fob += t.fob;
     line.dispenser += t.dispenser; line.office += t.office;
     line.subtotal += t.subtotal; line.checked_out += t.subtotal;
-    addVia(line, 'Checked out');
+    addVia(line, 'Checked in');
   }
 
   return [...byClient.values()].sort((a, b) => a.client.localeCompare(b.client));

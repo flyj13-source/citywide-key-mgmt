@@ -19,8 +19,8 @@ import { useSearchParams } from 'react-router-dom';
 
 const EVENT_FILTERS = [
   { key: 'all', label: 'All events' },
-  { key: 'checkin', label: 'Check-in' },
-  { key: 'checkout', label: 'Check-out' },
+  { key: 'checkin', label: 'Check-out' },
+  { key: 'checkout', label: 'Check-in' },
   { key: 'transfer', label: 'Transfer' },
   { key: 'reassignment', label: 'Reassignment' },
   { key: 'audit', label: 'Audit' },
@@ -669,7 +669,7 @@ export default function KeyFormsTab({ notify }: { notify: (m: string) => void })
               <tr><td colSpan={10} className="px-4 py-8 text-center text-cw-muted">Loading…</td></tr>
             ) : forms.length === 0 ? (
               <tr><td colSpan={10} className="px-4 py-8 text-center text-cw-muted">
-                No key forms yet. One is generated on every check-in, check-out, transfer and
+                No key forms yet. One is generated on every check-out, check-in, transfer and
                 reassignment — or generate a current-state form above.
               </td></tr>
             ) : forms.map((f, i) => (

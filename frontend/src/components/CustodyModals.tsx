@@ -43,7 +43,7 @@ export function MailBanner({ mail, kind }: { mail: MailOutcome; kind: 'checkout'
   if (mail.ok) {
     return (
       <div className="text-sm bg-green-50 border border-green-200 text-green-800 rounded px-3 py-2">
-        ✓ {kind === 'checkout' ? 'Check-out' : 'Return'} email sent to {mail.recipients.join(', ')}
+        ✓ {kind === 'checkout' ? 'Check-in' : 'Return'} email sent to {mail.recipients.join(', ')}
       </div>
     );
   }
@@ -510,12 +510,51 @@ export function SignNowStep({
 
 // ── Check Out modal ──────────────────────────────────────────────────────────
 
-export function CheckOutModal({
-  presetAccount, onClose, onDone,
+/**
+ * "Check In" in City Wide's usage: the action that ISSUES keys. It has two
+ * modes — hand keys over, or record keys somebody already holds. The second
+ * submits to the return endpoint's first-time-record path (origin
+ * 'reconciled'), which is where that record has always been written; only the
+ * button it lives behind moved, because it is not a return.
+ *
+ * Internal names (CheckOutModal, checkout(), 'checked_out') are unchanged —
+ * the labels were swapped, the records and routes were not.
+ */
+export function CheckOutModal(props: {
+  presetAccount: { id: number; name: string } | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [recordHeld, setRecordHeld] = useState(false);
+  const modeSwitch = (
+    <div className="flex rounded border border-gray-300 overflow-hidden text-xs font-medium w-fit">
+      {([['issue', 'Issue keys'], ['record', 'Record Keys Held']] as const).map(([k, label]) => {
+        const on = (k === 'record') === recordHeld;
+        return (
+          <button
+            key={k}
+            type="button"
+            onClick={() => setRecordHeld(k === 'record')}
+            className={`px-3 py-1.5 transition-colors ${on ? 'bg-[#1a1a1a] text-white' : 'bg-white text-[#1a1a1a] hover:bg-gray-50'}`}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+  return recordHeld
+    ? <CheckInModal {...props} intent="record" modeSwitch={modeSwitch} />
+    : <IssueKeysModal {...props} modeSwitch={modeSwitch} />;
+}
+
+function IssueKeysModal({
+  presetAccount, onClose, onDone, modeSwitch,
 }: {
   presetAccount: { id: number; name: string } | null;
   onClose: () => void;
   onDone: () => void;
+  modeSwitch?: React.ReactNode;
 }) {
   const me = getManager();
   const myEmail = useMyEmail();
@@ -634,7 +673,7 @@ export function CheckOutModal({
         setDone({ mail: r.email, link: r.signoff_link, holder: holderName, status: r.signature_status });
       }
     } catch (e: any) {
-      setError(e?.message || 'Check-out failed');
+      setError(e?.message || 'Check-in failed');
     } finally {
       setSaving(false);
     }
@@ -683,10 +722,10 @@ export function CheckOutModal({
 
   if (done) {
     return (
-      <Modal title={done.signed ? 'Signed and checked out' : 'Keys checked out'} onClose={onClose} width="max-w-lg">
+      <Modal title={done.signed ? 'Signed and checked in' : 'Keys checked in'} onClose={onClose} width="max-w-lg">
         <div className="space-y-4">
           <div className="text-sm text-cw-text">
-            <span className="font-semibold">{totalKeys}</span> key{totalKeys === 1 ? '' : 's'} checked out to{' '}
+            <span className="font-semibold">{totalKeys}</span> key{totalKeys === 1 ? '' : 's'} checked in to{' '}
             <span className="font-semibold">{done.holder}</span> for <span className="font-semibold">{account?.name}</span>
             {done.signed ? ', signed on this device.' : '.'}
           </div>
@@ -719,8 +758,9 @@ export function CheckOutModal({
   }
 
   return (
-    <Modal title="Check Out Keys" onClose={onClose} width="max-w-lg">
+    <Modal title="Check In Keys" onClose={onClose} width="max-w-lg">
       <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
+        {modeSwitch}
         <div>
           <SectionLabel>Client</SectionLabel>
           <AccountPicker value={account} onSelect={setAccount} autoFocus />
@@ -749,7 +789,7 @@ export function CheckOutModal({
                 emptyNote="No key inventory recorded for this client."
               />
               <p className="text-[11px] text-gray-400 mt-2">
-                Available = the client-site total minus what is already checked out. A type with 0 left cannot be taken.
+                Available = the client-site total minus what is already checked in. A type with 0 left cannot be taken.
               </p>
             </>
           )}
@@ -848,7 +888,7 @@ export function CheckOutModal({
         )}
       <div className="flex items-center gap-2">
         <button onClick={submit} disabled={!canSubmit} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-          {saving ? 'Checking out…' : `Check Out${totalKeys ? ` ${totalKeys} Key${totalKeys === 1 ? '' : 's'}` : ''}`}
+          {saving ? 'Checking in…' : `Check In${totalKeys ? ` ${totalKeys} Key${totalKeys === 1 ? '' : 's'}` : ''}`}
         </button>
         <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
         <span className="text-[11px] text-gray-400 ml-auto">
@@ -899,12 +939,20 @@ function useMyEmail(): string {
 // them gets a warning.
 
 export function CheckInModal({
-  presetAccount, presetAssignmentId, onClose, onDone,
+  presetAccount, presetAssignmentId, onClose, onDone, intent = 'return', modeSwitch,
 }: {
   presetAccount: { id: number; name: string } | null;
   presetAssignmentId?: number | null;
   onClose: () => void;
   onDone: () => void;
+  /**
+   * 'return' — the "Check Out" button: keys coming back against an open record.
+   * 'record' — Check In → Record Keys Held: keys already held, nothing open.
+   * Each refuses the other's case rather than silently doing it, which is
+   * exactly how entries ended up recorded backwards.
+   */
+  intent?: 'return' | 'record';
+  modeSwitch?: React.ReactNode;
 }) {
   const me = getManager();
   const myEmail = useMyEmail();
@@ -1021,13 +1069,23 @@ export function CheckInModal({
    * nothing to say and the modal should not claim either mode.
    */
   const contextKnown = !!account && !!holderName && ctx !== null;
-  const recordingHeld = contextKnown && !hasPrior;
+  const recordingHeld = intent === 'record';
+  // Each mode refuses the other's case. A "Check Out" with nothing checked in
+  // is not a return; a "Record Keys Held" for someone who already has an open
+  // record here is a return in disguise, and would close that record.
+  const wrongMode: string | null = !contextKnown ? null
+    : intent === 'return' && !hasPrior
+      ? `Nothing is checked in to ${holderName} at this client, so there is nothing to check out. `
+        + 'To put keys they already hold on record, use Check In → Record Keys Held.'
+      : intent === 'record' && hasPrior
+        ? `${holderName} already has keys checked in at this client. To take keys back, use Check Out.`
+        : null;
   const totalOut = hasPrior ? ctx!.keys.reduce((n, k) => n + k.qty, 0) : 0;
   const isPartial = hasPrior && totalReturning < totalOut;
 
   // A return is a fact worth recording even when nobody can be told about it,
   // so there is no email gate here — only a note that the link cannot be sent.
-  const canSubmit = !saving && !!account && !!holderName && lines.length > 0 && !noRole;
+  const canSubmit = !saving && !!account && !!holderName && lines.length > 0 && !noRole && !wrongMode;
 
   const submit = async () => {
     if (!canSubmit || !account) return;
@@ -1060,7 +1118,7 @@ export function CheckInModal({
         form: (r as any).key_form ?? null,
       });
     } catch (e: any) {
-      setError(e?.message || 'Check-in failed');
+      setError(e?.message || 'Check-out failed');
     } finally {
       setSaving(false);
     }
@@ -1107,8 +1165,8 @@ export function CheckInModal({
         <div className="space-y-4">
           <div className="text-sm text-cw-text">
             {done.partial
-              ? <>Partial return recorded for <span className="font-semibold">{done.holder}</span>. The remaining keys stay checked out.</>
-              : <>All keys returned by <span className="font-semibold">{done.holder}</span>. The record moved to Checked In.</>}
+              ? <>Partial return recorded for <span className="font-semibold">{done.holder}</span>. The remaining keys stay checked in.</>
+              : <>All keys returned by <span className="font-semibold">{done.holder}</span>. The record moved to Checked Out.</>}
           </div>
           {done.form && (
             <div className="rounded border border-cw-border bg-white px-3 py-2 text-sm text-cw-text">
@@ -1139,14 +1197,16 @@ export function CheckInModal({
 
   return (
     <Modal
-      title={recordingHeld ? 'Record Keys Held' : 'Check In Keys'}
+      title={recordingHeld ? 'Record Keys Held' : 'Check Out Keys'}
       onClose={onClose}
       width="max-w-lg"
     >
       <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1">
-        {recordingHeld && (
+        {modeSwitch}
+        {wrongMode && <ErrorBanner>{wrongMode}</ErrorBanner>}
+        {recordingHeld && !wrongMode && contextKnown && (
           <div className="rounded border border-[#e8cf8a] bg-[#fff8e6] px-3 py-2 text-xs text-[#7a5a00]">
-            <strong>Recording keys already held.</strong> {holderName} has no open check-out at
+            <strong>Recording keys already held.</strong> {holderName} has no open check-in at
             this client, so nothing is being returned — this puts the keys below on record as
             theirs. The notification and the form will say <em>recorded</em>, not returned.
           </div>
@@ -1159,7 +1219,7 @@ export function CheckInModal({
 
         {/* 2 — Who is returning */}
         <div>
-          <SectionLabel>Who is returning the keys</SectionLabel>
+          <SectionLabel>{recordingHeld ? 'Who holds the keys' : 'Who is returning the keys'}</SectionLabel>
           <HolderPicker
             mode={mode} setMode={setMode}
             holder={holder} setHolder={setHolder}
@@ -1181,7 +1241,7 @@ export function CheckInModal({
 
         {/* 3 — Keys */}
         <div>
-          <SectionLabel>Keys being returned</SectionLabel>
+          <SectionLabel>{recordingHeld ? 'Keys they hold' : 'Keys being returned'}</SectionLabel>
           {!account ? (
             <p className="text-sm text-cw-muted">Choose a client above to list its key types.</p>
           ) : ctxLoading ? (
@@ -1196,7 +1256,7 @@ export function CheckInModal({
               picks={picks}
               setPicks={setPicks}
               availableLabel={
-                hasPrior ? 'checked out'
+                hasPrior ? 'checked in'
                   : scope?.summary ? `on record for ${scope.summary} at this client`
                   : 'on record at this client'
               }
@@ -1209,14 +1269,14 @@ export function CheckInModal({
               path now, and a warning about the normal path is just noise. */}
           {hasPrior && ctx!.since && (
             <p className="text-[11px] text-cw-muted mt-2">
-              Returning against check-out from {parseStamp(ctx!.since)?.toLocaleDateString(undefined, {
+              Returning against check-in from {parseStamp(ctx!.since)?.toLocaleDateString(undefined, {
                 month: 'short', day: 'numeric', year: 'numeric',
               }) ?? '—'}
             </p>
           )}
           {isPartial && (
             <p className="text-[11px] text-[#7a5a00] bg-[#fff8e6] border border-[#e8cf8a] rounded px-2 py-1.5 mt-2">
-              Partial return — {totalOut - totalReturning} key{totalOut - totalReturning === 1 ? '' : 's'} will stay checked out to {holderName}.
+              Partial return — {totalOut - totalReturning} key{totalOut - totalReturning === 1 ? '' : 's'} will stay checked in to {holderName}.
             </p>
           )}
         </div>
@@ -1297,10 +1357,10 @@ export function CheckInModal({
         <div className="flex items-center gap-2">
           <button onClick={submit} disabled={!canSubmit} className="px-4 py-2 bg-[#C0272D] text-white text-sm font-medium rounded hover:bg-[#a82227] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
             {saving
-              ? (recordingHeld ? 'Recording…' : 'Checking in…')
+              ? (recordingHeld ? 'Recording…' : 'Checking out…')
               : recordingHeld
                 ? `Record ${totalReturning || ''} Key${totalReturning === 1 ? '' : 's'} Held`.replace('  ', ' ')
-                : `Check In${totalReturning ? ` ${totalReturning} Key${totalReturning === 1 ? '' : 's'}` : ''}`}
+                : `Check Out${totalReturning ? ` ${totalReturning} Key${totalReturning === 1 ? '' : 's'}` : ''}`}
           </button>
           <button onClick={onClose} className="px-4 py-2 border border-[#1a1a1a] text-[#1a1a1a] text-sm font-medium rounded hover:bg-gray-50 transition-colors">Cancel</button>
         </div>

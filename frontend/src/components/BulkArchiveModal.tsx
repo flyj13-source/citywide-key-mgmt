@@ -70,7 +70,7 @@ export default function BulkArchiveModal({
         )}
 
         <div className="text-xs text-cw-muted">
-          Any record still holding checked-out keys is refused and named back — archiving one
+          Any record still holding checked-in keys is refused and named back — archiving one
           would orphan live custody.
         </div>
 

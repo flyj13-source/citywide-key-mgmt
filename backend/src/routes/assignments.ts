@@ -15,6 +15,7 @@ import { hashSignature } from '../lib/pdf';
 import { generateCustodyReceipt } from '../lib/custodyPdf';
 import { createKeyForm, serializeForm, getKeyForm, EmptyHoldingsError, type FormEventType } from '../lib/keyForm';
 import { SIGNATURE_TTL_MS } from '../lib/signatureLink';
+import { backwardsAudit } from '../lib/backwardsAudit';
 import { rolesForHolder, hasRoleAtClient, holderKeysAtClient, hasGrid, ROLE_SHORT } from '../lib/roleScope';
 import { generateKeyFormPdf } from '../lib/keyFormPdf';
 import { NOT_TEST_ASSIGNMENT } from '../lib/testFixtures';
@@ -681,7 +682,7 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response) =>
   const keyForm = await generateEventForm(req, {
     eventType: 'checkout', holderName: holder, holderType: holder_type,
     holderEmail: holder_email || null, holderId: holder_id,
-    eventNote: `Checked out at ${account_name}: ${summarizeKeys(lines)}`,
+    eventNote: `Checked in at ${account_name}: ${summarizeKeys(lines)}`,
     sourceKind: 'assignment', sourceRef: String(id),
   });
 
@@ -1047,7 +1048,7 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
   if (!raw) return res.status(404).json({ error: 'Assignment not found' });
   const assignment = Object.assign({}, raw);
   if (assignment.status === 'returned') {
-    return res.status(409).json({ error: 'These keys have already been checked in' });
+    return res.status(409).json({ error: 'These keys have already been checked out' });
   }
 
   const actor = req.manager?.name ?? 'System';
@@ -1068,9 +1069,9 @@ router.post('/checkin', requireAuth, async (req: AuthRequest, res: Response) => 
     if (parsed.error) return res.status(400).json({ error: parsed.error });
     for (const line of parsed.lines) {
       const held = outstanding.find((o) => o.type === line.type);
-      if (!held) return res.status(400).json({ error: `${line.label} is not part of this check-out` });
+      if (!held) return res.status(400).json({ error: `${line.label} is not part of this check-in` });
       if (line.qty > held.qty) {
-        return res.status(400).json({ error: `Only ${held.qty} ${held.label}${held.qty === 1 ? '' : 's'} are checked out — cannot return ${line.qty}.` });
+        return res.status(400).json({ error: `Only ${held.qty} ${held.label}${held.qty === 1 ? '' : 's'} are checked in — cannot return ${line.qty}.` });
       }
     }
     returning = parsed.lines;
@@ -1198,7 +1199,7 @@ router.post('/:id/resend-signoff', requireAuth, async (req: AuthRequest, res: Re
   }
   if (kind === 'checkin') {
     if (a.status !== 'returned') {
-      return res.status(409).json({ error: 'This record has not been checked in yet' });
+      return res.status(409).json({ error: 'This record has not been checked out yet' });
     }
     if (a.checkin_signed_at) {
       return res.status(409).json({ error: 'This return has already been signed for' });
@@ -1280,7 +1281,7 @@ router.get('/:id/receipt', requireAuth, (req: AuthRequest, res: Response) => {
   const file = kind === 'checkin' ? a.checkin_pdf_path : a.pdf_path;
   if (!file) {
     return res.status(404).json({
-      error: kind === 'checkin' ? 'No signed return receipt for this record' : 'No signed receipt for this check-out',
+      error: kind === 'checkin' ? 'No signed return receipt for this record' : 'No signed receipt for this check-in',
     });
   }
   if (!fs.existsSync(file)) return res.status(404).json({ error: 'Receipt file not found' });
@@ -1551,7 +1552,7 @@ router.post('/transfer', requireAuth, async (req: AuthRequest, res: Response) =>
   const { rows: sourceRows, keys: heldKeys } = openHoldingsFor(account_id, from_holder);
   if (movesKeys && !sourceRows.length) {
     return res.status(409).json({
-      error: `${from_holder} has no keys on record at ${account_name}. If they already hold keys, record a check-in first — or choose "Accounts only" to move the assignment without the keys.`,
+      error: `${from_holder} has no keys on record at ${account_name}. If they already hold keys, record a check-out first — or choose "Accounts only" to move the assignment without the keys.`,
       code: 'NO_KEYS_ON_RECORD',
     });
   }
@@ -1965,6 +1966,13 @@ router.post('/:id/sign-in-person', requireAuth, async (req: AuthRequest, res: Re
 // ── GET /api/assignments/signature-gaps — the systemic view ─────────────────
 // Feeds the dashboard card and the Custody Report summary. Counts only OPEN
 // custody, since a returned record's missing signature is history, not a task.
+// ── GET /api/assignments/backwards-audit — READ ONLY ─────────────────────────
+// Entries likely recorded with the custody buttons reversed (see
+// lib/backwardsAudit.ts). A list for review; nothing is changed.
+router.get('/backwards-audit', requireAuth, (req: AuthRequest, res: Response) => {
+  res.json(backwardsAudit({ includeTest: req.query.include_test === '1' }));
+});
+
 router.get('/signature-gaps', requireAuth, (_req: AuthRequest, res: Response) => {
   const count = (clause: string): number => {
     const row = db.prepare(

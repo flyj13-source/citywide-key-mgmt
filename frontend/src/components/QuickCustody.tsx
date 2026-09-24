@@ -75,12 +75,12 @@ export function QuickCustodyButtons({
         sign_mode: 'in_person',
         // A holder with no address cannot be sent a link, and the quick path
         // has no field to type a reason into — say plainly what happened.
-        no_email_reason: h.email ? null : 'One-click check-out; no address on file for this holder.',
+        no_email_reason: h.email ? null : 'One-click check-in; no address on file for this holder.',
       });
       onDone();
       setPending({ kind: 'checkout', assignment: r.assignment });
     } catch (e: any) {
-      onError(e?.message || 'Check-out failed');
+      onError(e?.message || 'Check-in failed');
     } finally { setBusy(false); }
   };
 
@@ -97,7 +97,7 @@ export function QuickCustodyButtons({
       if (r.assignment) setPending({ kind: 'checkin', assignment: r.assignment });
       else setResult({ text: 'Keys returned.' });
     } catch (e: any) {
-      onError(e?.message || 'Check-in failed');
+      onError(e?.message || 'Check-out failed');
     } finally { setBusy(false); }
   };
 
@@ -125,7 +125,7 @@ export function QuickCustodyButtons({
         <ActionButton
           weight="primary"
           icon={<IconCheckOut />}
-          label={`Check out to ${short(checkoutCtx.suggested_holder.name)}`}
+          label={`Check in to ${short(checkoutCtx.suggested_holder.name)}`}
           disabled={busy}
           onClick={quickCheckout}
           title={
@@ -139,7 +139,7 @@ export function QuickCustodyButtons({
         <ActionButton
           weight="primary"
           icon={<IconCheckIn />}
-          label={`Check in from ${short(checkinCtx.suggested_holder.name)}`}
+          label={`Check out from ${short(checkinCtx.suggested_holder.name)}`}
           disabled={busy}
           onClick={quickCheckin}
           title={`Return everything ${checkinCtx.suggested_holder.name} has out at this client, in good condition.`}

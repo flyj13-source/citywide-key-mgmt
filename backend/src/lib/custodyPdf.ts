@@ -105,7 +105,7 @@ const COPY: Record<CustodyAction, {
   title: string; subtitle: string; label: string; ack: string[]; sigCaption: string; file: string;
 }> = {
   checkout: {
-    title: 'Key Check-Out Receipt',
+    title: 'Key Check-In Receipt',
     subtitle: 'BOSTON — Signed acknowledgement of key custody',
     label: 'Receipt',
     ack: RECEIVE_ACKNOWLEDGEMENT,
@@ -113,7 +113,7 @@ const COPY: Record<CustodyAction, {
     file: 'keycheckout',
   },
   checkin: {
-    title: 'Key Check-In Receipt',
+    title: 'Key Check-Out Receipt',
     subtitle: 'BOSTON — Signed acknowledgement of key return',
     label: 'Return receipt',
     ack: RETURN_ACKNOWLEDGEMENT,
@@ -163,7 +163,7 @@ export async function generateCustodyReceipt(d: CustodyReceiptData): Promise<str
         ['Recorded', fmt(d.checkedOutAt)],
         ['Keys held since', d.heldSince ? `${fmtDay(d.heldSince)}  (approximate)` : 'Not stated'],
       ] as [string, string][])
-      : ([['Checked out', fmt(d.checkedOutAt)]] as [string, string][])),
+      : ([['Checked in', fmt(d.checkedOutAt)]] as [string, string][])),
     ...(d.action === 'checkout'
       ? ([['Due back', fmtDay(d.dueAt)]] as [string, string][])
       : d.action === 'checkin'

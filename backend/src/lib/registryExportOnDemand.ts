@@ -302,7 +302,7 @@ function checkedOutSheet(opts: ExportOpts): SheetSpec {
     { header: 'Client', key: 'account_name', width: 34 },
     { header: 'Keys', key: 'keys', width: 36 },
     { header: 'Total Keys', key: 'total_keys', width: 11 },
-    { header: 'Checked Out', key: 'checked_out_at', width: 22 },
+    { header: 'Checked In', key: 'checked_out_at', width: 22 },
     { header: 'Due', key: 'due_at', width: 22 },
     { header: 'Status', key: 'custody_status', width: 12 },
     { header: 'Signature', key: 'signature', width: 26 },
@@ -321,7 +321,7 @@ function checkedOutSheet(opts: ExportOpts): SheetSpec {
     ...signatureCells(a),
     recorded_by: a.recorded_by || '',
   }));
-  return { name: 'Checked Out', columns, rows };
+  return { name: 'Checked In', columns, rows };
 }
 
 function checkedInSheet(opts: ExportOpts): SheetSpec {
@@ -331,7 +331,7 @@ function checkedInSheet(opts: ExportOpts): SheetSpec {
     { header: 'Client', key: 'account_name', width: 34 },
     { header: 'Keys', key: 'keys', width: 36 },
     { header: 'Total Keys', key: 'total_keys', width: 11 },
-    { header: 'Checked Out', key: 'checked_out_at', width: 22 },
+    { header: 'Checked In', key: 'checked_out_at', width: 22 },
     { header: 'Returned', key: 'returned_at', width: 22 },
     { header: 'Condition', key: 'condition_on_return', width: 14 },
     { header: 'Recorded By', key: 'recorded_by', width: 22 },
@@ -347,7 +347,7 @@ function checkedInSheet(opts: ExportOpts): SheetSpec {
     condition_on_return: a.condition_on_return || '',
     recorded_by: a.checkin_recorded_by || a.recorded_by || '',
   }));
-  return { name: 'Checked In', columns, rows };
+  return { name: 'Checked Out', columns, rows };
 }
 
 // Build the sheet(s) for a request. `current` → just the active tab; `all` →

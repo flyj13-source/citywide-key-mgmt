@@ -58,7 +58,7 @@ router.post('/excel', requireAuth, async (req: AuthRequest, res: Response) => {
     { header: 'Account', key: 'account_name', width: 35 },
     { header: 'Assignee', key: 'assignee', width: 25 },
     { header: 'Keys Held', key: 'keys_held', width: 20 },
-    { header: 'Checked Out', key: 'checked_out_at', width: 20 },
+    { header: 'Checked In', key: 'checked_out_at', width: 20 },
     { header: 'Due', key: 'due_at', width: 20 },
     { header: 'Status', key: 'status', width: 12 },
   ];

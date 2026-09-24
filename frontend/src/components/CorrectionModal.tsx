@@ -34,7 +34,7 @@ const COPY: Record<CorrectionAction, {
     title: 'Mark acknowledged without signature',
     lead: 'The record is correct — the signature is not coming.',
     detail:
-      'The keys stay checked out and still count. Only the signature is settled: reminders stop, '
+      'The keys stay checked in and still count. Only the signature is settled: reminders stop, '
       + 'the link is retired, and the record shows as Acknowledged — never as Signed. The audit '
       + 'trail will say plainly that no signature was collected.',
     confirm: 'Mark acknowledged',

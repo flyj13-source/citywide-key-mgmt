@@ -401,7 +401,7 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
        </div>`
     : '';
 
-  const subject = subjectFor('Keys checked out', d.holder, d.client);
+  const subject = subjectFor('Keys checked in', d.holder, d.client);
   const recorded: [string, string] = d.onBehalf
     ? ['Recorded by', `${d.recordedBy} (on behalf of ${d.holder})`]
     : ['Recorded by', d.recordedBy];
@@ -413,8 +413,8 @@ export async function sendCheckoutNotice(d: CheckoutMail): Promise<MailResult> {
     : '';
 
   const html = brandedShell(
-    'Keys checked out',
-    `${d.holder} has keys checked out for ${d.client}.`,
+    'Keys checked in',
+    `${d.holder} has keys checked in for ${d.client}.`,
     `${noEmailBanner}${transferNote}
      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px">
        ${detailRows([

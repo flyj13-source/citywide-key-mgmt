@@ -585,7 +585,7 @@ router.post('/:id/archive', requireAuth, (req: AuthRequest, res: Response) => {
     "SELECT COUNT(*) AS c FROM key_assignments WHERE account_id = ? AND status = 'checked_out'"
   ).get(req.params.id)) as any;
   if (active.c > 0) {
-    return res.status(409).json({ error: 'Return checked-out keys before archiving' });
+    return res.status(409).json({ error: 'Return checked-in keys before archiving' });
   }
 
   db.prepare('UPDATE accounts SET archived = 1, archived_at = CURRENT_TIMESTAMP, archived_by = ? WHERE id = ?')

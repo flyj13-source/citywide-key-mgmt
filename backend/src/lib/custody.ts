@@ -214,10 +214,10 @@ export function checkAvailability(
     if (line.qty > a.available) {
       if (scoped) {
         return `${holder!.name} holds ${a.site_total} ${a.label}${a.site_total === 1 ? '' : 's'} `
-          + `at this client (${a.checked_out} already checked out, ${a.available} available) `
-          + `— cannot check out ${line.qty}.`;
+          + `at this client (${a.checked_out} already checked in, ${a.available} available) `
+          + `— cannot check in ${line.qty}.`;
       }
-      return `Only ${a.available} ${a.label}${a.available === 1 ? '' : 's'} available at this client (${a.site_total} on site, ${a.checked_out} already checked out) — cannot check out ${line.qty}.`;
+      return `Only ${a.available} ${a.label}${a.available === 1 ? '' : 's'} available at this client (${a.site_total} on site, ${a.checked_out} already checked in) — cannot check in ${line.qty}.`;
     }
   }
   return null;

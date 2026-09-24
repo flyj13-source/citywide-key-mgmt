@@ -195,14 +195,14 @@ export default function AccountDetail() {
               <ActionButton
                 weight={checkoutCtx?.can_quick_checkout ? 'secondary' : 'primary'}
                 icon={<IconCheckOut />}
-                label={checkoutCtx?.can_quick_checkout ? 'Check Out…' : 'Check Out'}
+                label={checkoutCtx?.can_quick_checkout ? 'Check In…' : 'Check In'}
                 onClick={() => setCheckOutOpen(true)}
                 title="Change the holder, keys or due date"
               />
               <ActionButton
                 weight={checkinCtx?.can_quick_checkin ? 'secondary' : 'primary'}
                 icon={<IconCheckIn />}
-                label={checkinCtx?.can_quick_checkin ? 'Check In…' : 'Check In'}
+                label={checkinCtx?.can_quick_checkin ? 'Check Out…' : 'Check Out'}
                 onClick={() => setCheckInOpen(true)}
                 title="Return a subset, or change the condition"
               />
@@ -353,7 +353,7 @@ export default function AccountDetail() {
             )}
           </h2>
           {activeAssignments.length === 0 ? (
-            <p className="text-sm text-cw-muted">No keys currently checked out.</p>
+            <p className="text-sm text-cw-muted">No keys currently checked in.</p>
           ) : (
             <div className="space-y-2">
               {activeAssignments.map((a: any) => (
@@ -365,7 +365,7 @@ export default function AccountDetail() {
                   <div className="flex items-center gap-3 text-xs text-cw-muted">
                     <span>Out: {new Date(a.checked_out_at).toLocaleDateString()}</span>
                     {a.due_at && <span>Due: {new Date(a.due_at).toLocaleDateString()}</span>}
-                    <Badge variant="yellow">Checked Out</Badge>
+                    <Badge variant="yellow">Checked In</Badge>
                   </div>
                 </div>
               ))}

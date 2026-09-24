@@ -709,7 +709,7 @@ describe('ARCHIVE / RESTORE / PURGE', () => {
 
     const blocked = await auth(request(app).post(`/api/accounts/${id}/archive`));
     expect(blocked.status).toBe(409);
-    expect(blocked.body.error).toMatch(/Return checked-out keys/i);
+    expect(blocked.body.error).toMatch(/Return checked-in keys/i);
 
     // Still present in the registry
     const list = (await auth(request(app).get('/api/accounts?type=customer&search=HAS CUSTODY&limit=50'))).body;

@@ -61,8 +61,8 @@ export function selectionCapabilities(items: AccountIdItem[]) {
     : {
         ok: false as const,
         reason: n === 0 ? 'Select a customer first'
-          : !allCustomers ? 'Check Out applies to customer sites only'
-          : `Check Out handles one site at a time — ${n} are selected, and key types and quantities differ per site`,
+          : !allCustomers ? 'Check In applies to customer sites only'
+          : `Check In handles one site at a time — ${n} are selected, and key types and quantities differ per site`,
       };
 
   // Reassign moves a manager's book. It only makes sense when every selected
@@ -147,7 +147,7 @@ export default function SelectionToolbar({
         <div className="flex flex-wrap items-center gap-2 justify-end">
           <BarButton icon={<IconExport size={14} />} label="Export selected" onClick={onExport} primary />
           <BarButton
-            icon={<IconCheckOut size={14} />} label="Check Out"
+            icon={<IconCheckOut size={14} />} label="Check In"
             onClick={onCheckOut} disabled={!cap.checkOut.ok} reason={cap.checkOut.reason}
           />
           <BarButton

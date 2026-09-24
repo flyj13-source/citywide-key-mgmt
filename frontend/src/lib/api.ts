@@ -899,6 +899,27 @@ export interface SignatureGaps {
   staff_without_email: number;
 }
 export const getSignatureGaps = () => req<SignatureGaps>('/assignments/signature-gaps');
+
+// Read-only review list: custody entries likely recorded with the buttons
+// reversed. Nothing on the server changes when this is fetched.
+export interface BackwardsAudit {
+  generated_at: string;
+  returns_logged_as_issues: {
+    record_id: number; holder: string; client: string; keys: string; date: string;
+    recorded_by: string | null; status_now: string;
+    already_open: { record_id: number; since: string; keys: string; recorded_by: string | null };
+  }[];
+  holdings_likely_returned: {
+    holder: string; client: string; open_keys: string; role_keys: string | null;
+    excess: string | null; reason: string;
+    records: { record_id: number; date: string; keys: string; recorded_by: string | null }[];
+  }[];
+  first_time_records: {
+    record_id: number; holder: string; client: string; keys: string; date: string; recorded_by: string | null;
+  }[];
+}
+export const getBackwardsAudit = (includeTest = false) =>
+  req<BackwardsAudit>(`/assignments/backwards-audit${includeTest ? '?include_test=1' : ''}`);
 /**
  * Check-in takes two shapes against one endpoint:
  *  • `id` names an OPEN record — the normal return.

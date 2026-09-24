@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import Badge from '../components/Badge';
+import BackwardsAuditCard from '../components/BackwardsAuditCard';
 import { getOverdue, downloadExcel, sendOutlookAlert, sendTeamsAlert } from '../lib/api';
 
 export default function Reports() {
@@ -141,6 +142,8 @@ export default function Reports() {
             disabled={overdue.length === 0}
           />
         </div>
+
+        <BackwardsAuditCard />
 
         <div className="card p-5 bg-gray-50">
           <h3 className="font-semibold text-sm mb-2">OneDrive Sync</h3>

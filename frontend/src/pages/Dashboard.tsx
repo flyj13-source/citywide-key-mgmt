@@ -79,7 +79,7 @@ export default function Dashboard() {
   };
 
   const actionLabel: Record<string, string> = {
-    key_checked_out: 'Key checked out',
+    key_checked_out: 'Key checked in',
     key_checked_in: 'Key returned',
     vault_revealed: 'Vault code revealed',
     account_created: 'Account created',
@@ -277,7 +277,7 @@ export default function Dashboard() {
           <h2 className="font-semibold text-sm mb-3">Quick Actions</h2>
           <div className="flex flex-wrap gap-2">
             <button onClick={() => setShowAddManager(true)} className="btn-primary text-sm">+ Add Manager</button>
-            <Link to="/registry?tab=checkedout" className="btn-primary text-sm">Check Out Keys</Link>
+            <Link to="/registry?tab=checkedout" className="btn-primary text-sm">Check In Keys</Link>
             <Link to="/registry" className="btn-secondary text-sm">View Registry</Link>
             <Link to="/vault" className="btn-secondary text-sm">Open Vault</Link>
             <Link to="/reports" className="btn-secondary text-sm">Export Report</Link>

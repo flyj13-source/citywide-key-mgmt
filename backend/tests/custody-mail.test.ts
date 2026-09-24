@@ -94,7 +94,7 @@ describe('CUSTODY EMAIL SUBJECTS', () => {
       recordedBy: 'Cara Angeloni', onBehalf: true, signoffLink: 'https://keys.test/key-signoff/abc',
     });
     expect(r.ok).toBe(true);
-    expect(sent[0].subject).toBe('Keys checked out — J. Martinez — ACME TOWER');
+    expect(sent[0].subject).toBe('Keys checked in — J. Martinez — ACME TOWER');
   });
 
   it('check-in reads "Keys returned — [Holder] — [Client]"', async () => {

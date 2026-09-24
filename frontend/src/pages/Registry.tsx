@@ -990,7 +990,7 @@ function CWEmployeesTable({
 // opt-in. Respects the active search so "what I see is what I get".
 const EXPORT_TAB_LABEL: Record<string, string> = {
   customer: 'Customers', ic: 'IC Vendors', am: 'Account Managers', ccm: 'Contract Compliance Mgrs',
-  office: 'Office', cwemployees: 'CW Employees', checkedout: 'Checked Out', checkedin: 'Checked In',
+  office: 'Office', cwemployees: 'CW Employees', checkedout: 'Checked In', checkedin: 'Checked Out',
   all: 'All', archived: 'Archived',
 };
 
@@ -1423,8 +1423,8 @@ export default function Registry() {
     { key: 'ccm', label: `Contract Compliance Mgrs (${counts.ccm}${showTest && counts.testCcm ? ` +${counts.testCcm} test` : ''})` },
     { key: 'office', label: `Office (${counts.office})` },
     { key: 'cwemployees', label: `CW Employees (${counts.staff}${showTest && counts.testStaff ? ` +${counts.testStaff} test` : ''})` },
-    { key: 'checkedout', label: `Checked Out (${counts.checkedOut})` },
-    { key: 'checkedin', label: `Checked In (${counts.checkedIn})` },
+    { key: 'checkedout', label: `Checked In (${counts.checkedOut})` },
+    { key: 'checkedin', label: `Checked Out (${counts.checkedIn})` },
     { key: 'keyforms', label: 'Key Forms' },
     { key: 'all', label: `All (${counts.all})` },
     { key: 'archived', label: `Archived (${counts.archived})` },
@@ -1515,7 +1515,7 @@ export default function Registry() {
       const out = res.blocked.filter((b) => b.reason !== 'test_fixture');
       const fixtures = res.blocked.filter((b) => b.reason === 'test_fixture');
       if (out.length) {
-        parts.push(`${out.length} skipped — keys still checked out: ${out.map((b) => b.name).join(', ')}`);
+        parts.push(`${out.length} skipped — keys still checked in: ${out.map((b) => b.name).join(', ')}`);
       }
       if (fixtures.length) {
         parts.push(
@@ -1676,14 +1676,14 @@ export default function Registry() {
               <ActionButton
                 weight={checkoutCtx?.can_quick_checkout ? 'secondary' : 'primary'}
                 icon={<IconCheckOut />}
-                label={checkoutCtx?.can_quick_checkout ? 'Check Out…' : 'Check Out'}
+                label={checkoutCtx?.can_quick_checkout ? 'Check In…' : 'Check In'}
                 onClick={() => setCheckOutOpen(true)}
                 title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name} — change the holder, keys or due date` : 'Check keys out to an employee or IC'}
               />
               <ActionButton
                 weight={checkinCtx?.can_quick_checkin ? 'secondary' : 'primary'}
                 icon={<IconCheckIn />}
-                label={checkinCtx?.can_quick_checkin ? 'Check In…' : 'Check In'}
+                label={checkinCtx?.can_quick_checkin ? 'Check Out…' : 'Check Out'}
                 onClick={() => setCheckInFor({ assignmentId: null, account: selectedSnapshot })}
                 title={selectedSnapshot ? `Pre-filled with ${selectedSnapshot.name} — return a subset or change the condition` : 'Record returned keys'}
               />

@@ -359,7 +359,7 @@ describe('PARTIAL RETURN', () => {
       id: row.id, keys: [{ type: 'card', qty: 5 }],
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Only 2 Key Cards are checked out/);
+    expect(res.body.error).toMatch(/Only 2 Key Cards are checked in/);
   });
 });
 
@@ -383,7 +383,7 @@ describe('CUSTODY EXPORTS', () => {
     expect(res.status).toBe(200);
     const csv = res.text || res.body.toString();
     expect(csv.split('\r\n')[0]).toBe(
-      'Holder,Type,Client,Keys,Total Keys,Checked Out,Due,Status,Signature,Signature Note,Recorded By'
+      'Holder,Type,Client,Keys,Total Keys,Checked In,Due,Status,Signature,Signature Note,Recorded By'
     );
     expect(csv).toContain('Partial Pat');
     expect(csv).toContain('2 × Dispenser Key · 2 × Key Card');
@@ -395,7 +395,7 @@ describe('CUSTODY EXPORTS', () => {
     expect(res.status).toBe(200);
     const csv = res.text || res.body.toString();
     expect(csv.split('\r\n')[0]).toBe(
-      'Holder,Type,Client,Keys,Total Keys,Checked Out,Returned,Condition,Recorded By'
+      'Holder,Type,Client,Keys,Total Keys,Checked In,Returned,Condition,Recorded By'
     );
     expect(csv).toContain('J. Martinez');
   });

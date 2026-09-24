@@ -248,7 +248,7 @@ export default function StaffDetail() {
         {/* Crew key holdings (open check-outs) */}
         {crewHoldings.length > 0 && (
           <div>
-            <h2 className="text-sm font-semibold text-[#1a1a1a] mb-2">Keys Held as Crew <span className="text-cw-muted font-normal">— currently checked out to this person</span></h2>
+            <h2 className="text-sm font-semibold text-[#1a1a1a] mb-2">Keys Held as Crew <span className="text-cw-muted font-normal">— currently checked in to this person</span></h2>
             <div className="card overflow-x-auto max-w-full">
               <table className="w-full text-sm border-collapse">
                 <thead>
@@ -256,7 +256,7 @@ export default function StaffDetail() {
                     <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Account</th>
                     <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Key Type</th>
                     <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Keys</th>
-                    <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Checked Out</th>
+                    <th className="text-left px-3 py-3 font-medium whitespace-nowrap">Checked In</th>
                   </tr>
                 </thead>
                 <tbody>

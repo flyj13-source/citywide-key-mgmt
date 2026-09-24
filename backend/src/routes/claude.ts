@@ -43,7 +43,7 @@ CURRENT KEY REGISTRY (top 50 accounts):
 ${accountSummary}
 
 ACTIVE ASSIGNMENTS (${assignments.length} total):
-${assignments.slice(0, 20).map((a) => `${a.account_name}: ${a.assignee} — checked out ${a.checked_out_at}${a.due_at ? ` due ${a.due_at}` : ''}`).join('\n')}`;
+${assignments.slice(0, 20).map((a) => `${a.account_name}: ${a.assignee} — checked in ${a.checked_out_at}${a.due_at ? ` due ${a.due_at}` : ''}`).join('\n')}`;
 
   const messages = [
     ...history.map((h) => ({ role: h.role, content: h.content })),

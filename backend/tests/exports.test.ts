@@ -173,7 +173,7 @@ describe('FULL REGISTRY EXPORT', () => {
     // Every registry tab, one sheet each, in on-screen order.
     expect(Object.keys(sheets)).toEqual([
       'Customers', 'IC Vendors', 'Account Managers', 'CCM', 'Office', 'CW Employees',
-      'Checked Out', 'Checked In',
+      'Checked In', 'Checked Out',
     ]);
 
     // Customers: 3 rows + header. Column order mirrors the screen.

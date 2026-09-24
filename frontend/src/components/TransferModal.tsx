@@ -277,7 +277,7 @@ export default function TransferModal({
             ) : filteredFrom.length === 0 ? (
               <div className="px-3 py-3 text-sm text-cw-muted">
                 {custody.length === 0
-                  ? 'Nobody currently has keys checked out.'
+                  ? 'Nobody currently has keys checked in.'
                   : `Nobody holding keys matches “${fromQuery.trim()}”`}
               </div>
             ) : filteredFrom.map((h) => {
@@ -414,14 +414,14 @@ export default function TransferModal({
                     resolved server-side and never shown as a choice. */}
                 {site.since && (
                   <p className="text-[11px] text-cw-muted mt-2">
-                    Moving against check-out from {new Date(site.since).toLocaleDateString(undefined, {
+                    Moving against check-in from {new Date(site.since).toLocaleDateString(undefined, {
                       month: 'short', day: 'numeric', year: 'numeric',
                     })}
                   </p>
                 )}
                 {partial && (
                   <p className="text-[11px] text-[#7a5a00] bg-[#fff8e6] border border-[#e8cf8a] rounded px-2 py-1.5 mt-2">
-                    Partial transfer — the unchecked keys stay checked out to {fromHolder}.
+                    Partial transfer — the unchecked keys stay checked in to {fromHolder}.
                   </p>
                 )}
               </>

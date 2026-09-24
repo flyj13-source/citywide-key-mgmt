@@ -34,7 +34,7 @@ const COPY: Record<'checkout' | 'checkin' | 'established', Copy> = {
   checkout: {
     pageTitle: 'Key Receipt Acknowledgement',
     lead: 'please review the keys below and sign to confirm you received them.',
-    detailsTitle: 'Check-out details',
+    detailsTitle: 'Check-in details',
     checkboxLabel: 'I acknowledge receipt of these keys',
     terms: [
       'I will safeguard all keys and access credentials',
@@ -249,7 +249,7 @@ export default function KeySignoff() {
           </dd>
           <dt className="text-cw-muted">Holder</dt>
           <dd className="font-medium">{data?.holder} <span className="text-cw-muted font-normal">({data?.holder_type === 'ic' ? 'Independent Contractor' : 'City Wide Employee'})</span></dd>
-          <dt className="text-cw-muted">{action === 'established' ? 'Recorded' : 'Checked out'}</dt>
+          <dt className="text-cw-muted">{action === 'established' ? 'Recorded' : 'Checked in'}</dt>
           <dd className="font-medium">{fmt(data?.checked_out_at ?? null)}</dd>
           {action === 'established' && (
             <>
